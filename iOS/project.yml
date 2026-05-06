@@ -1,0 +1,119 @@
+name: LakeloomApp
+
+options:
+  bundleIdPrefix: com.databricks.lakeloom
+  deploymentTarget:
+    iOS: "26.0"
+  developmentLanguage: en
+  xcodeVersion: "26.0"
+  groupSortPosition: top
+  generateEmptyDirectories: true
+  createIntermediateGroups: true
+  defaultConfig: Debug
+
+configs:
+  Debug: debug
+  Release-TestFlight: release
+  Release-AppStore: release
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+    GCC_TREAT_WARNINGS_AS_ERRORS: YES
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    ENABLE_HARDENED_RUNTIME: YES
+    CLANG_ENABLE_MODULES: YES
+    SWIFT_EMIT_LOC_STRINGS: YES
+    DEAD_CODE_STRIPPING: YES
+    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    DEVELOPMENT_TEAM: ""
+  configs:
+    Debug:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "DEBUG INTERNAL_TOOLS"
+      SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+      ENABLE_TESTABILITY: YES
+    Release-TestFlight:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "INTERNAL_TOOLS"
+      SWIFT_OPTIMIZATION_LEVEL: "-O"
+    Release-AppStore:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""
+      SWIFT_OPTIMIZATION_LEVEL: "-O"
+
+targets:
+  LakeloomApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        excludes:
+          - "**/.gitkeep"
+    resources:
+      - path: App/Resources/Assets.xcassets
+      - path: App/Resources/PrivacyInfo.xcprivacy
+    settings:
+      base:
+        PRODUCT_NAME: lakeLoom
+        PRODUCT_BUNDLE_IDENTIFIER: com.databricks.lakeloom
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: lakeLoom
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.databricks.lakeloom.dev
+
+  LakeloomAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: AppTests
+        excludes:
+          - "**/.gitkeep"
+    dependencies:
+      - target: LakeloomApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.databricks.lakeloom.tests
+        GENERATE_INFOPLIST_FILE: YES
+
+  LakeloomAppUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: AppUITests
+        excludes:
+          - "**/.gitkeep"
+    dependencies:
+      - target: LakeloomApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.databricks.lakeloom.uitests
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  LakeloomApp:
+    build:
+      targets:
+        LakeloomApp: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      gatherCoverageData: true
+      targets:
+        - LakeloomAppTests
+        - LakeloomAppUITests
+    profile:
+      config: Release-TestFlight
+    analyze:
+      config: Debug
+    archive:
+      config: Release-AppStore
