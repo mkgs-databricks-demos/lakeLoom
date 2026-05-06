@@ -11,6 +11,7 @@
 		01BE896575837ECEAFEE8576 /* LogValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF85026F92C9717BD6EFA84F /* LogValue.swift */; };
 		0255ED0B7C9129FAE5F4C4A8 /* OAuthClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B445B590F613B043D7DD81E /* OAuthClient.swift */; };
 		09440C222B1F3D0542CD4516 /* ProjectMetadataCache+DTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 591E3564492C4623474DCB96 /* ProjectMetadataCache+DTO.swift */; };
+		166164611BC4C9BAFEF953FF /* AppEndpoint.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D6FA2B02AA05E37DC57E338 /* AppEndpoint.swift */; };
 		1E5AB1FF95204BB4DB2153BC /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = AD97C68DA1D4FC5576952926 /* PrivacyInfo.xcprivacy */; };
 		226DC9C1E91557FF3E1E6DC3 /* KeychainStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C65BE391381658CE91DB8E6C /* KeychainStoreTests.swift */; };
 		235F7B51812DE290330532C5 /* ProjectMetadataCache+CoreDataProperties.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68853D01E00364BA32A6B541 /* ProjectMetadataCache+CoreDataProperties.swift */; };
@@ -51,6 +52,7 @@
 		92728B0C08A56C9AA5CC2AF0 /* AuthDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0477B5F44E5E04E54EE0D11B /* AuthDiagnostics.swift */; };
 		92BD9AD4212ABDCB43351167 /* CoreDataStacking.swift in Sources */ = {isa = PBXBuildFile; fileRef = 849EB463DB262C0FBC45058E /* CoreDataStacking.swift */; };
 		9398A33D3539593B310CA2C1 /* PKCETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADBE680354FC9538DF925C93 /* PKCETests.swift */; };
+		94140C3122CCBED13DBD0EC4 /* AppEndpointResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F70ED1CB7BDE8E6AA51000B /* AppEndpointResolver.swift */; };
 		949CAA8D64356BB20EEF2E88 /* StubDatabricksIdentityClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51C517E2EB6C119C41215C9F /* StubDatabricksIdentityClient.swift */; };
 		94E16DB9EFF998376316F8B3 /* ProjectMetadataCache+CoreDataClass.swift in Sources */ = {isa = PBXBuildFile; fileRef = 470124F4A089D30F26044AA8 /* ProjectMetadataCache+CoreDataClass.swift */; };
 		A2306A27ADE61654B3419815 /* DatabricksIdentityClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D82D35B3F8084B212198F1B4 /* DatabricksIdentityClient.swift */; };
@@ -71,6 +73,7 @@
 		D631C6EA26A7B9FA1A14E48B /* OutboxRecord+CoreDataClass.swift in Sources */ = {isa = PBXBuildFile; fileRef = F28EC61996F3DB48FE8C38C6 /* OutboxRecord+CoreDataClass.swift */; };
 		DE43F79EA06860FAEB2ECF1A /* LogEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67293BAFF216A6476EB3AEFD /* LogEntry.swift */; };
 		E2587BA626CBCC8F24E543C6 /* CoreDataStackDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFB4DB7F345D979C4A0260DF /* CoreDataStackDiagnostics.swift */; };
+		E422AE246F5AF9AFDD8F357C /* UUIDv7.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5396E67C33EDA10DF7BF72F4 /* UUIDv7.swift */; };
 		E8D3DC0E3C9EBCBD75F016AA /* PKCE.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE5B84BB695227773264CE59 /* PKCE.swift */; };
 		F332C83944E75B5946D45ECC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 03E8FE79AE4D85C07FAADD0D /* Assets.xcassets */; };
 		F7C3D65F0F2544571FA082B1 /* OutboxStateChange+DTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = B963155E7AFF0A42B5B6F5EE /* OutboxStateChange+DTO.swift */; };
@@ -117,6 +120,7 @@
 		485925FEBBB66662795FB783 /* FakeOAuthClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeOAuthClient.swift; sourceTree = "<group>"; };
 		488CC02E5AC5E5FA53FDFC00 /* LakeloomStore.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = LakeloomStore.xcdatamodel; sourceTree = "<group>"; };
 		51C517E2EB6C119C41215C9F /* StubDatabricksIdentityClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StubDatabricksIdentityClient.swift; sourceTree = "<group>"; };
+		5396E67C33EDA10DF7BF72F4 /* UUIDv7.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UUIDv7.swift; sourceTree = "<group>"; };
 		591E3564492C4623474DCB96 /* ProjectMetadataCache+DTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ProjectMetadataCache+DTO.swift"; sourceTree = "<group>"; };
 		5DE7E999D5CF86A7EB3BD1EE /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		65650403FBD0DA24FB6CB4A4 /* SCIMMeResponseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SCIMMeResponseTests.swift; sourceTree = "<group>"; };
@@ -124,6 +128,7 @@
 		68853D01E00364BA32A6B541 /* ProjectMetadataCache+CoreDataProperties.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ProjectMetadataCache+CoreDataProperties.swift"; sourceTree = "<group>"; };
 		699F2CC223454383A7E2EBA4 /* MetricsCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricsCatalog.swift; sourceTree = "<group>"; };
 		6B758F7AEE4EF559D84891F6 /* OutboxStateChange+CoreDataClass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OutboxStateChange+CoreDataClass.swift"; sourceTree = "<group>"; };
+		6D6FA2B02AA05E37DC57E338 /* AppEndpoint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEndpoint.swift; sourceTree = "<group>"; };
 		717439EFBBBEE8E9C42F0178 /* LakeloomApp.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = LakeloomApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		737AE483CB0A2F0015F564A2 /* WorkspaceMetadataCache+DTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceMetadataCache+DTO.swift"; sourceTree = "<group>"; };
 		76B4F5E4056B61664E585C18 /* SessionRecord+CoreDataClass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionRecord+CoreDataClass.swift"; sourceTree = "<group>"; };
@@ -131,6 +136,7 @@
 		77239E5F929E3C7B6AFC5012 /* SplashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashView.swift; sourceTree = "<group>"; };
 		7B445B590F613B043D7DD81E /* OAuthClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OAuthClient.swift; sourceTree = "<group>"; };
 		7D23CC687F33D45BCFBAC181 /* AuthServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthServiceTests.swift; sourceTree = "<group>"; };
+		7F70ED1CB7BDE8E6AA51000B /* AppEndpointResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEndpointResolver.swift; sourceTree = "<group>"; };
 		838A10E56E396672C3D532CD /* WorkspaceMetadataCache+CoreDataClass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceMetadataCache+CoreDataClass.swift"; sourceTree = "<group>"; };
 		849EB463DB262C0FBC45058E /* CoreDataStacking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreDataStacking.swift; sourceTree = "<group>"; };
 		8581F1979FB579F7246225F4 /* AuthServicing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthServicing.swift; sourceTree = "<group>"; };
@@ -222,6 +228,15 @@
 			path = Entities;
 			sourceTree = "<group>";
 		};
+		059B3777477A8910B740705B /* Common */ = {
+			isa = PBXGroup;
+			children = (
+				6AEBD655B638BB8F1BFF019E /* Networking */,
+				5396E67C33EDA10DF7BF72F4 /* UUIDv7.swift */,
+			);
+			path = Common;
+			sourceTree = "<group>";
+		};
 		0DBF26829977F9318E46E6A5 /* Telemetry */ = {
 			isa = PBXGroup;
 			children = (
@@ -286,6 +301,7 @@
 			isa = PBXGroup;
 			children = (
 				231F2384DB5E42092525EB16 /* Auth */,
+				059B3777477A8910B740705B /* Common */,
 				70B9675BDE3046ECD0CC023E /* Persistence */,
 				FFE6FB7D59D2D3D722AEEEE2 /* Resources */,
 				0DBF26829977F9318E46E6A5 /* Telemetry */,
@@ -331,6 +347,15 @@
 				E460456762EE28767C783583 /* EntityRoundTripTests.swift */,
 			);
 			path = Persistence;
+			sourceTree = "<group>";
+		};
+		6AEBD655B638BB8F1BFF019E /* Networking */ = {
+			isa = PBXGroup;
+			children = (
+				6D6FA2B02AA05E37DC57E338 /* AppEndpoint.swift */,
+				7F70ED1CB7BDE8E6AA51000B /* AppEndpointResolver.swift */,
+			);
+			path = Networking;
 			sourceTree = "<group>";
 		};
 		70B9675BDE3046ECD0CC023E /* Persistence */ = {
@@ -592,6 +617,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				166164611BC4C9BAFEF953FF /* AppEndpoint.swift in Sources */,
+				94140C3122CCBED13DBD0EC4 /* AppEndpointResolver.swift in Sources */,
 				A4DBC939EA5F53B284149480 /* AppLogger.swift in Sources */,
 				316D1E1DA636E951AE9DF2CB /* AppSignposter.swift in Sources */,
 				92728B0C08A56C9AA5CC2AF0 /* AuthDiagnostics.swift in Sources */,
@@ -640,6 +667,7 @@
 				60FEF1758C854B0F77CF3BF9 /* SessionRecord+DTO.swift in Sources */,
 				728FE8E279F7D4A65C1807E1 /* Spacing.swift in Sources */,
 				C3AB16E8A88C42BC928CB271 /* SplashView.swift in Sources */,
+				E422AE246F5AF9AFDD8F357C /* UUIDv7.swift in Sources */,
 				3AA316AF587849BD292711B8 /* WorkspaceMetadataCache+CoreDataClass.swift in Sources */,
 				64D9768D139DC35CFA0659A3 /* WorkspaceMetadataCache+CoreDataProperties.swift in Sources */,
 				C12772FEE68EEDA38DA87746 /* WorkspaceMetadataCache+DTO.swift in Sources */,
