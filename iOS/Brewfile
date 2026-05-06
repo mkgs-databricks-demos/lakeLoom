@@ -1,0 +1,12 @@
+# Tools required to build and develop the lakeLoom iOS app.
+# Run `make setup` (or `brew bundle --file=Brewfile` directly) to install.
+
+# Project generation — produces LakeloomApp.xcodeproj from project.yml.
+brew "xcodegen"
+
+# Linting and formatting.
+brew "swiftlint"
+brew "swift-format"
+
+# Pretty xcodebuild output for `make test` / `make build`.
+brew "xcbeautify"

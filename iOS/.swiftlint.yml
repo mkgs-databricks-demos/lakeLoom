@@ -1,0 +1,77 @@
+# Project-wide SwiftLint config for lakeLoom iOS.
+# Aligned with Module 10 §9.1.
+
+included:
+  - App
+  - AppTests
+  - AppUITests
+
+excluded:
+  - LakeloomApp.xcodeproj
+  - .build
+  - DerivedData
+  - "**/.gitkeep"
+
+opt_in_rules:
+  - empty_count
+  - empty_string
+  - first_where
+  - sorted_imports
+  - explicit_init
+  - prefer_self_type_over_type_of_self
+  - unused_import
+  - convenience_type
+  - closure_spacing
+  - contains_over_filter_count
+  - contains_over_filter_is_empty
+  - contains_over_first_not_nil
+  - fatal_error_message
+  - force_unwrapping
+  - implicit_return
+  - implicitly_unwrapped_optional
+  - last_where
+  - literal_expression_end_indentation
+  - lower_acl_than_parent
+  - modifier_order
+  - multiline_arguments
+  - multiline_function_chains
+  - multiline_literal_brackets
+  - multiline_parameters
+  - operator_usage_whitespace
+  - overridden_super_call
+  - prefer_zero_over_explicit_init
+  - redundant_nil_coalescing
+  - sorted_first_last
+  - toggle_bool
+  - unneeded_parentheses_in_closure_argument
+  - unowned_variable_capture
+
+disabled_rules:
+  # We accept short identifiers like `id`, `ws`, `ms`. Names are kept meaningful in practice.
+  - identifier_name
+  # Line length is governed by swift-format, not SwiftLint, to avoid double-warning noise.
+  - line_length
+  # Trailing-comma noise overlaps with swift-format; let the formatter own it.
+  - trailing_comma
+
+custom_rules:
+  no_print:
+    name: "Avoid print()"
+    regex: '(^|\s)print\('
+    message: "Use AppLogger (Module 09 telemetry), not print()."
+    severity: error
+
+  no_userdefaults_for_tokens:
+    name: "Tokens never go in UserDefaults"
+    regex: 'UserDefaults.*(token|secret|password|refresh)'
+    message: "Tokens belong in Keychain only (per Module 01 AuthService design)."
+    severity: error
+
+  no_force_try:
+    name: "Avoid try!"
+    regex: 'try!'
+    message: "Use typed errors (do/catch). Force-try is forbidden in production code."
+    severity: error
+    excluded:
+      - ".*Tests/.*"
+      - ".*UITests/.*"
