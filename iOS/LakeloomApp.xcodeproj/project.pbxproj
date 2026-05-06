@@ -13,6 +13,7 @@
 		1E5AB1FF95204BB4DB2153BC /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = AD97C68DA1D4FC5576952926 /* PrivacyInfo.xcprivacy */; };
 		226DC9C1E91557FF3E1E6DC3 /* KeychainStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C65BE391381658CE91DB8E6C /* KeychainStoreTests.swift */; };
 		2D10BCFB0F2577F5669F5F0F /* KeychainError.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9587D0287EE479B330FBD7B /* KeychainError.swift */; };
+		316D1E1DA636E951AE9DF2CB /* AppSignposter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95407697C9C8AB8C033F6AB2 /* AppSignposter.swift */; };
 		33AD2A5B5D8D51F25138D826 /* SmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB3582835A2477C2DC086CB5 /* SmokeTests.swift */; };
 		3BB0FB3E21ED6F5C074035EE /* AuthServicing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8581F1979FB579F7246225F4 /* AuthServicing.swift */; };
 		42B7807778F34EC98A695DA4 /* OAuthURLBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24B612E229967473096424F3 /* OAuthURLBuilder.swift */; };
@@ -95,6 +96,7 @@
 		7B445B590F613B043D7DD81E /* OAuthClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OAuthClient.swift; sourceTree = "<group>"; };
 		7D23CC687F33D45BCFBAC181 /* AuthServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthServiceTests.swift; sourceTree = "<group>"; };
 		8581F1979FB579F7246225F4 /* AuthServicing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthServicing.swift; sourceTree = "<group>"; };
+		95407697C9C8AB8C033F6AB2 /* AppSignposter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSignposter.swift; sourceTree = "<group>"; };
 		A9587D0287EE479B330FBD7B /* KeychainError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainError.swift; sourceTree = "<group>"; };
 		AD97C68DA1D4FC5576952926 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		ADBE680354FC9538DF925C93 /* PKCETests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PKCETests.swift; sourceTree = "<group>"; };
@@ -142,6 +144,7 @@
 			isa = PBXGroup;
 			children = (
 				016B2E49CE60BFEEE86A73D8 /* Metrics */,
+				90B0A2023C38F7C580CFC5FA /* Signposts */,
 				3B0C93AF655DF7EFA8E2B60A /* AppLogger.swift */,
 				21872F11682828B39B91DB9C /* LogCategory.swift */,
 				67293BAFF216A6476EB3AEFD /* LogEntry.swift */,
@@ -242,6 +245,14 @@
 				0477B5F44E5E04E54EE0D11B /* AuthDiagnostics.swift */,
 			);
 			path = Diagnostics;
+			sourceTree = "<group>";
+		};
+		90B0A2023C38F7C580CFC5FA /* Signposts */ = {
+			isa = PBXGroup;
+			children = (
+				95407697C9C8AB8C033F6AB2 /* AppSignposter.swift */,
+			);
+			path = Signposts;
 			sourceTree = "<group>";
 		};
 		9814CA7CA1C1E05A8437B5B7 /* Products */ = {
@@ -451,6 +462,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A4DBC939EA5F53B284149480 /* AppLogger.swift in Sources */,
+				316D1E1DA636E951AE9DF2CB /* AppSignposter.swift in Sources */,
 				92728B0C08A56C9AA5CC2AF0 /* AuthDiagnostics.swift in Sources */,
 				5B2E13D2EF848B3A56C001B4 /* AuthService.swift in Sources */,
 				3BB0FB3E21ED6F5C074035EE /* AuthServicing.swift in Sources */,
