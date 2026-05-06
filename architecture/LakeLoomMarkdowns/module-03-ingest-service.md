@@ -1,8 +1,8 @@
-# Module 03 — IngestService + ZeroBus Client
+# Module 03 — IngestService + IngestProxyClient
 
 **Product:** Lakeloom
 **Status:** Design — pre-implementation
-**Last updated:** 2026-05-02
+**Last updated:** 2026-05-06
 **Depends on:** AuthService (bearer tokens), CaptureEngine (event stream), shared `ZeroBusSchema.swift`
 **Depended on by:** AppCoordinator (status surfacing), Settings (diagnostics, manual retry)
 
@@ -13,12 +13,14 @@
 IngestService is the durable, network-aware bridge between CaptureEngine's event stream and Databricks ZeroBus. It owns:
 
 - Subscribing to `CaptureEngine.events` and persisting every event to a local **outbox** before any network call
-- Sending records to ZeroBus over gRPC using OAuth bearer tokens from AuthService
+- Sending records to the Databricks App over **HTTPS POST** using OAuth bearer tokens from AuthService; the App forwards them to ZeroBus via its TypeScript Zerobus SDK
 - Retry, backoff, and dead-letter handling
 - Surviving app termination — pending records are sent on the next launch
 - Surfacing per-session ingest status to the UI
 
-ZeroBusClient is the gRPC transport layer. It knows how to authenticate, how to format a write request, and how to interpret success/failure. It is stateless and replaceable; the durable behavior lives in IngestService.
+IngestProxyClient is the HTTP transport layer. It knows how to authenticate (OAuth bearer in the `Authorization` header), how to construct a JSON batch body, and how to interpret HTTP responses. It is stateless and replaceable; the durable behavior lives in IngestService.
+
+> **Architectural note.** iOS does not speak gRPC to ZeroBus directly. The Databricks App owns the Zerobus SDK call (TypeScript, server-side), exposing a small HTTP endpoint that iOS POSTs JSON batches to. This realizes lakeLoom's single-network-boundary rule: iOS only ever talks HTTPS to the Databricks App. Schema versioning, idempotency keys, and at-least-once semantics still apply end-to-end — they're just expressed over HTTP+JSON on the iOS hop and gRPC on the App→Zerobus hop.
 
 IngestService does **not** own audio uploads (that's StorageService) or session state (that's CaptureEngine). It owns one thing: making sure every captured event lands in ZeroBus eventually, in order, exactly once from the silver pipeline's point of view.
 
@@ -27,15 +29,17 @@ IngestService does **not** own audio uploads (that's StorageService) or session 
 ## 2. Design Principles
 
 1. **Outbox-first.** Every event is persisted to local storage before any network attempt. Memory-only is forbidden — a force-quit during transmission must not lose data.
-2. **At-least-once delivery, deduped server-side.** ZeroBus is at-least-once. The silver pipeline dedupes on `record_uuid`. We never try to achieve exactly-once on the wire.
-3. **Ordering preserved best-effort, not strictly.** Records carry `sequence_number` per session and the silver pipeline orders on it. The wire path is allowed to deliver out of order under retry, but in steady state it sends in order.
-4. **The outbox survives anything short of a wiped device.** Process crash, OS jetsam, app update, reboot — pending records persist and resume.
-5. **Auth is delegated.** IngestService never reads tokens from Keychain or refreshes them. It calls `AuthService.currentToken()` and reacts to typed `AuthError` results.
-6. **Network-aware, not network-dependent.** No connectivity → records accumulate in the outbox. Connectivity returns → drain resumes automatically.
-7. **Bounded retry with explicit dead-letter.** Records that fail permanently move to a dead-letter state, not silently dropped, and surface in Settings.
-8. **One serialized writer.** Exactly one outbox-drain task runs at a time per app process. Concurrency is for buffering, not for parallelism on the wire.
-9. **Failure is observable.** Every attempt is logged with structured fields. A diagnostics surface exposes counters per workspace/session.
-10. **Schema-version-aware on send.** The `schema_version` field is set on every record from a single constant; mismatched server expectations surface as a typed error rather than silent rejection.
+2. **At-least-once delivery, deduped server-side.** Both hops (iOS → App, App → ZeroBus) are at-least-once. The silver pipeline dedupes on `record_uuid`. We never try to achieve exactly-once on the wire.
+3. **Idempotent batches.** Every record carries a client-generated `record_uuid` (UUIDv7). Retrying an entire batch is safe; the App and silver layer dedupe on `(session_id, record_uuid)`.
+4. **Ordering preserved best-effort, not strictly.** Records carry `sequence_number` per session and the silver pipeline orders on it. The wire path is allowed to deliver out of order under retry, but in steady state it sends in order — outbox queries pull batches `(sessionID, sequenceNumber)` ascending.
+5. **The outbox survives anything short of a wiped device.** Process crash, OS jetsam, app update, reboot — pending records persist and resume.
+6. **Auth is delegated.** IngestService never reads tokens from Keychain or refreshes them. It calls `AuthService.currentToken()` and reacts to typed `AuthError` results.
+7. **Network-aware, not network-dependent.** No connectivity → records accumulate in the outbox. Connectivity returns → drain resumes automatically.
+8. **Bounded retry with explicit dead-letter.** Records that fail permanently move to a dead-letter state, not silently dropped, and surface in Settings.
+9. **One serialized writer.** Exactly one outbox-drain task runs at a time per app process. Concurrency is for buffering, not for parallelism on the wire.
+10. **Failure is observable.** Every attempt is logged with structured fields. A diagnostics surface exposes counters per workspace/session.
+11. **Schema-version-aware on send.** The `schema_version` field is set on every record from a single constant; mismatched App-side expectations surface as a typed error (HTTP 400 with a known reason code) rather than silent rejection.
+12. **Single network boundary.** iOS speaks HTTPS to one host: the Databricks App. No direct gRPC to ZeroBus, no direct Postgres to Lakebase. The App fans out to backend services on iOS's behalf.
 
 ---
 
@@ -115,8 +119,9 @@ enum IngestError: Error, Sendable, Equatable {
     case authFailed(reason: String)              // refresh failed; user must re-login
     case rejectedByServer(httpStatus: Int, reason: String)   // 4xx other than 401
     case serverUnavailable(reason: String)        // 5xx
-    case schemaMismatch(reason: String)          // server rejected our schema_version
-    case payloadTooLarge(reason: String)
+    case schemaMismatch(reason: String)          // App rejected our schema_version
+    case payloadTooLarge(reason: String)         // HTTP 413
+    case rateLimited(retryAfter: Duration?)      // HTTP 429
     case timeout
     case unknown(reason: String)
 }
@@ -149,19 +154,25 @@ struct WorkspaceIngestStats: Sendable {
 └─────────────────────────────────────────────────────────────┘
        │                │                │                │
        ▼                ▼                ▼                ▼
-┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌────────────┐
-│  Outbox     │  │  Drainer    │  │ ZeroBusCli- │  │ Network    │
-│  (Core Data │  │  (single    │  │ ent (gRPC,  │  │ Reachabili-│
-│   actor)    │  │   task,     │  │  Sendable)  │  │ ty (NWPath │
-│             │  │   state     │  │             │  │  Monitor)  │
-│             │  │   machine)  │  │             │  │            │
-└─────────────┘  └──────┬──────┘  └──────┬──────┘  └─────┬──────┘
-                        │                │               │
-                        └─ pulls from Outbox             │
-                        └─ awaits Reachability ──────────┘
-                        └─ calls ZeroBusClient.write(...)
+┌─────────────┐  ┌─────────────┐  ┌──────────────┐  ┌────────────┐
+│  Outbox     │  │  Drainer    │  │ IngestProxy- │  │ Network    │
+│  (Core Data │  │  (single    │  │ Client       │  │ Reachabili-│
+│   actor)    │  │   task,     │  │ (URLSession, │  │ ty (NWPath │
+│             │  │   state     │  │  Sendable)   │  │  Monitor)  │
+│             │  │   machine)  │  │              │  │            │
+└─────────────┘  └──────┬──────┘  └──────┬───────┘  └─────┬──────┘
+                        │                │                │
+                        └─ pulls from Outbox              │
+                        └─ awaits Reachability ───────────┘
+                        └─ calls IngestProxyClient.postBatch(...)
                         └─ updates Outbox on success/failure
                         └─ emits IngestStatusEvent
+
+           ┌────────────────────────────────────────────────┐
+           │  Databricks App (TypeScript, server-side)      │
+           │  POST /api/v1/ingest/snippets                  │
+           │  → Zerobus TS SDK → bronze table              │
+           └────────────────────────────────────────────────┘
 ```
 
 ### 4.1 Concurrency Model
@@ -170,7 +181,7 @@ struct WorkspaceIngestStats: Sendable {
 - The **Outbox** is a separate actor wrapping Core Data. All reads/writes are async.
 - The **Drainer** is a long-running `Task` owned by IngestService. There is exactly one drainer task per app process. It runs a state machine loop that pulls work from the outbox, sends it via ZeroBusClient, and updates the outbox.
 - **Reachability** is a small actor wrapping `NWPathMonitor`. It exposes `currentPath: NetworkPath` and `pathChanges: AsyncStream<NetworkPath>`.
-- **ZeroBusClient** is a `Sendable` struct (or final class with no mutable state). Stateless. Each `write` call constructs a fresh gRPC call.
+- **IngestProxyClient** is a `Sendable` struct (or final class with no mutable state). Stateless. Each `postBatch` call constructs a fresh `URLRequest` and uses an injected `URLSession`.
 
 ### 4.2 The Drainer State Machine
 
@@ -370,7 +381,7 @@ private func drainCycle() async -> DrainerState {
 
 ### 6.3 Sending a Batch
 
-ZeroBus accepts records one at a time over a streaming gRPC call. The drainer opens one stream per batch:
+The Databricks App accepts a JSON batch in a single HTTP POST. The drainer issues one POST per batch:
 
 ```swift
 private func sendBatch(_ batch: [OutboxRecord], token: AccessToken) async -> BatchResult {
@@ -383,54 +394,74 @@ private func sendBatch(_ batch: [OutboxRecord], token: AccessToken) async -> Bat
         return .pause(.backingOff(until: Date().addingTimeInterval(30)))
     }
 
+    let body = IngestBatchBody(
+        schemaVersion: SchemaVersion.current,
+        records: batch.map { $0.toJSONRecord() }
+    )
+
     do {
-        try await zerobus.writeStream(endpoint: endpoint, token: token) { writer in
-            for record in batch {
-                try await writer.send(record.toIngestRecord())
-            }
-        }
-        return .success(sentRecordUUIDs: batch.map(\.recordUUID))
-    } catch let error as ZeroBusError {
-        return mapZeroBusError(error, batch: batch)
+        let acks = try await proxy.postBatch(endpoint: endpoint, token: token, body: body)
+        let acceptedUUIDs = Set(acks.accepted)
+        let rejected = acks.rejected
+        return .partialOrFullSuccess(accepted: acceptedUUIDs,
+                                     rejected: rejected,
+                                     batch: batch)
+    } catch let error as IngestProxyError {
+        return mapProxyError(error, batch: batch)
     } catch {
         return .failure(error: .unknown(reason: error.localizedDescription), batch: batch)
     }
 }
 ```
 
+The App's response distinguishes per-record outcomes (`accepted` / `rejected`) so a single bad record in a batch doesn't poison the rest. Rejected records are dead-lettered with their per-record reason; accepted records advance to `sent`.
+
 ### 6.4 Error Mapping and Retry Logic
 
 ```swift
-private func mapZeroBusError(_ error: ZeroBusError, batch: [OutboxRecord]) -> BatchResult {
+private func mapProxyError(_ error: IngestProxyError, batch: [OutboxRecord]) -> BatchResult {
     switch error {
-    case .unauthenticated:
+    case .unauthorized:                           // HTTP 401
         // Try one force-refresh-and-retry inline before declaring auth failure.
         return .retryWithForceRefresh
 
-    case .deadlineExceeded, .unavailable, .resourceExhausted:
+    case .timeout, .serverUnavailable, .badGateway:    // 502/503/504 + URLError timeouts
         // Transient. Back off, retry the same batch.
         return .pause(.backingOff(until: nextBackoffDate()))
 
-    case .invalidArgument(let detail):
-        // Permanent for these records. Dead-letter them.
-        return .deadLetter(reason: "invalid_argument: \(detail)", batch: batch)
+    case .rateLimited(let retryAfter):            // HTTP 429
+        // Honor server-supplied delay, otherwise standard backoff.
+        return .pause(.backingOff(until: retryAfter ?? nextBackoffDate()))
 
-    case .failedPrecondition(let detail) where detail.contains("schema"):
-        // Schema mismatch. App needs an update. Dead-letter and surface loudly.
+    case .badRequest(let detail):                 // HTTP 400
+        // Malformed payload — permanent for these records. Dead-letter.
+        return .deadLetter(reason: "bad_request: \(detail)", batch: batch)
+
+    case .schemaMismatch(let detail):             // HTTP 400 with reason="schema_mismatch"
+        // Schema mismatch. App needs an update or iOS does. Dead-letter and surface loudly.
         return .deadLetter(reason: "schema_mismatch: \(detail)", batch: batch)
 
-    case .permissionDenied:
+    case .forbidden:                              // HTTP 403
         // User's token is valid but lacks ZeroBus write permission for this workspace.
+        // The App returns this when its downstream authorization to ZeroBus / UC fails.
         // Dead-letter; user-actionable through Databricks admin.
-        return .deadLetter(reason: "permission_denied: \(error)", batch: batch)
+        return .deadLetter(reason: "forbidden", batch: batch)
 
-    case .internalError(let detail):
+    case .payloadTooLarge:                        // HTTP 413
+        // Should not happen with our 50-record/256KB-per-record cap, but if it does
+        // we split the batch in half and retry the halves.
+        return .splitAndRetry(batch: batch)
+
+    case .internalServerError(let detail):        // HTTP 500
         // Server bug. Back off harder; retry.
         return .pause(.backingOff(until: nextBackoffDate(multiplier: 2)))
 
     case .canceled:
-        // We canceled (e.g., app backgrounded). Revert to pending.
+        // We canceled (e.g., app backgrounded, drainer stop). Revert to pending.
         return .revert(batch: batch)
+
+    case .networkUnavailable:
+        return .pause(.waitingForNetwork)
     }
 }
 ```
@@ -465,139 +496,214 @@ case .retryWithForceRefresh:
     }
 ```
 
-If the second attempt also gets `.unauthenticated`, we treat it as `waitingForAuth` (genuine refresh failure, user must re-login).
+If the second attempt also gets `.unauthorized`, we treat it as `waitingForAuth` (genuine refresh failure, user must re-login).
 
 ---
 
-## 7. ZeroBusClient Implementation
+## 7. IngestProxyClient — HTTP Implementation
 
-### 7.1 gRPC Choice
+### 7.1 Why HTTP, Not gRPC
 
-Apple's official `grpc-swift` v2 (or v1, depending on minimum iOS version compatibility — v2 is iOS 17+, fine for iOS 26 target). HTTP/2 over TLS, certificate pinning to Databricks roots optional but not required for v1.
+iOS clients do not speak gRPC to ZeroBus directly. The Databricks App owns the Zerobus SDK call (TypeScript, server-side); iOS POSTs JSON to the App. Reasons:
+
+- **Single network boundary on iOS.** The app talks HTTPS to one host (the Databricks App). Easier to reason about auth, certificate trust, network monitoring, and proxy-friendliness on enterprise networks.
+- **Decoupling.** ZeroBus IDL changes server-side without rebuilding the iOS app. Schema additions in the variant fields don't ripple into a generated `.proto` Swift binding.
+- **Tooling cost.** No `grpc-swift` + `swift-protobuf` dependency, no codegen step, no proto file vendoring. Smaller binary, faster builds, simpler tests.
+- **Operational consistency.** The same network primitive (URLSession) handles ingest, audio upload, and project/Lakebase reads.
+
+The iOS-side stack is `URLSession` + `URLRequest` + `JSONEncoder`/`JSONDecoder`. The wire is `Content-Type: application/json` with `Authorization: Bearer <user-OAuth-token>` and a small set of typed request/response shapes.
 
 ### 7.2 Endpoint Resolution
 
-ZeroBus endpoints are workspace-specific. Format (subject to confirmation against Databricks docs):
+The Databricks App's base URL is per-workspace and stable across sessions:
 
 ```
-{workspace_host}/zerobus/v1/streams/{table_path}
+{appBaseURL} = {workspaceURL}/serving-endpoints/lakeloom-app/invocations   // or App-deployment URL
 ```
 
-…or a separate gRPC host like `{workspace_host}` on port 443 with the path encoded in metadata. The exact wire format is one of the open items; the design here is shape-correct regardless.
+Exact URL convention is whatever Genie Code chooses for the App deployment — see `architecture/hi_genie/` for the contract document. For lakeLoom v1 we expect either a `/serving-endpoints/<name>/invocations`-style URL or a Databricks Apps URL (`https://<app-name>-<workspace>.databricksapps.com`).
 
 `EndpointResolver` is a small actor that:
-- Caches the resolved gRPC endpoint per workspace (refresh on workspace credential update or 7-day TTL)
-- On first use, may call a discovery endpoint or compute the URL deterministically from `workspaceURL`
+- Caches the resolved App base URL per `workspaceID` (7-day TTL; refresh on workspace credential update)
+- On first use, derives the URL from a Settings-stored config or workspace-conf lookup (open item; see §16)
+
+The full ingest URL is:
+
+```
+POST {appBaseURL}/api/v1/ingest/snippets
+```
 
 ### 7.3 Authentication
 
-OAuth bearer token in gRPC call metadata:
+OAuth bearer token in the `Authorization` header on every request:
 
 ```swift
-metadata.add(name: "authorization", value: "Bearer \(token.value)")
-metadata.add(name: "x-databricks-workspace-id", value: token.workspaceID)
+request.setValue("Bearer \(token.value)", forHTTPHeaderField: "Authorization")
+request.setValue(token.workspaceID, forHTTPHeaderField: "X-Databricks-Workspace-Id")
+request.setValue(SchemaVersion.current, forHTTPHeaderField: "X-Lakeloom-Schema-Version")
 ```
 
-The workspace-id metadata header may or may not be required by the ZeroBus service — confirm during implementation. Including it is harmless if unused.
+The `X-Databricks-Workspace-Id` header lets the App route the call to the right downstream Zerobus stream when one App instance serves multiple workspaces. The `X-Lakeloom-Schema-Version` header is redundant with the body field but lets the App reject incompatible client versions early (HTTP 400) without parsing the full payload.
 
-### 7.4 Wire Schema
+### 7.4 Wire Schema (JSON)
 
-ZeroBus accepts records into a registered table. The table schema mirrors §3 of the architecture doc. The wire representation in gRPC is a `WriteRecord` message with one field per top-level column plus serialized JSON strings for the variant fields.
+Each record on the wire mirrors the Zerobus columns (§3 of the architecture doc) but as JSON. The `headers` and `payload` VARIANTs are nested JSON objects (the App serializes them to JSON strings before handing to the Zerobus SDK).
 
-Conceptual proto (exact field numbers TBD against ZeroBus IDL):
+**Request body** (`POST /api/v1/ingest/snippets`):
 
-```proto
-message WriteRecord {
-  string record_uuid             = 1;
-  string session_id              = 2;
-  string project_id              = 3;
-  string workspace_id            = 4;
-  string username                = 5;
-  string user_uuid               = 6;
-  google.protobuf.Timestamp device_timestamp = 7;
-  int64  chunk_start_offset_ms   = 8;
-  int64  chunk_end_offset_ms     = 9;
-  string capture_mode            = 10;
-  int32  sequence_number         = 11;
-  string event_type              = 12;
-  string schema_version          = 13;
-  string headers_variant_json    = 14;   // VARIANT serialized as JSON
-  string payload_variant_json    = 15;   // VARIANT serialized as JSON
-}
-
-message WriteRequest {
-  string table = 1;                       // catalog.schema.table
-  WriteRecord record = 2;
-}
-
-message WriteResponse {
-  string record_uuid = 1;
-  google.protobuf.Timestamp ingest_timestamp = 2;
-}
-
-service ZeroBus {
-  rpc Write(stream WriteRequest) returns (stream WriteResponse);
+```json
+{
+  "schema_version": "1.0.0",
+  "records": [
+    {
+      "record_uuid": "01975e4f-3a7c-7890-b1c2-d4e5f6a7b8c9",
+      "session_id": "01975e4f-3a7c-7890-b1c2-d4e5f6a7b8aa",
+      "project_id": "proj_01975e4f3a7c",
+      "workspace_id": "1234567890123456",
+      "username": "jhammond@acme.com",
+      "user_uuid": "1234567890123456",
+      "device_timestamp": "2026-05-06T18:14:22.331Z",
+      "chunk_start_offset_ms": 0,
+      "chunk_end_offset_ms": 6420,
+      "capture_mode": "quick_capture",
+      "sequence_number": 1,
+      "event_type": "transcript_chunk",
+      "headers": { /* variant headers per architecture §3.2 */ },
+      "payload": { /* variant payload per architecture §3.3-3.6 */ }
+    }
+  ]
 }
 ```
 
-### 7.5 Streaming Write API (Swift)
+**Response body** (HTTP 200 / 207):
+
+```json
+{
+  "accepted": ["01975e4f-3a7c-7890-b1c2-d4e5f6a7b8c9"],
+  "rejected": [
+    {
+      "record_uuid": "01975e4f-3a7c-7890-b1c2-d4e5f6a7b8aa",
+      "reason": "duplicate_record_uuid"
+    }
+  ],
+  "ingest_timestamp": "2026-05-06T18:14:23.001Z"
+}
+```
+
+HTTP status codes used:
+- `200` — all records accepted
+- `207 Multi-Status` — partial success; check the body
+- `400` — request malformed or schema mismatch (body has `reason` field)
+- `401` — token invalid/expired
+- `403` — token valid but App rejects (downstream Zerobus permission denied)
+- `413` — batch too large
+- `429` — rate-limited (App returns `Retry-After` header)
+- `500` — App bug
+- `502/503/504` — App or downstream unavailable; transient
+
+### 7.5 Batch POST API (Swift)
 
 ```swift
-struct ZeroBusClient: Sendable {
-    let connection: GRPCChannel
-    let table: String                        // "main.lakeloom.transcript_events"
+struct IngestProxyClient: Sendable {
+    let urlSession: URLSession
+    let encoder: JSONEncoder
+    let decoder: JSONDecoder
 
-    func writeStream(
-        endpoint: ZeroBusEndpoint,
+    func postBatch(
+        endpoint: AppEndpoint,
         token: AccessToken,
-        body: @Sendable (StreamWriter) async throws -> Void
-    ) async throws -> [WriteAck] {
-        let metadata = buildMetadata(token: token)
-        let acks = try await zerobusStub.write(metadata: metadata) { writer in
-            let streamWriter = StreamWriter(grpc: writer, table: table)
-            try await body(streamWriter)
-            try await writer.finish()
-        } onResponse: { response in
-            // Collect acks
+        body: IngestBatchBody
+    ) async throws -> IngestBatchAck {
+        let url = endpoint.url.appendingPathComponent("api/v1/ingest/snippets")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token.value)", forHTTPHeaderField: "Authorization")
+        request.setValue(token.workspaceID, forHTTPHeaderField: "X-Databricks-Workspace-Id")
+        request.setValue(SchemaVersion.current, forHTTPHeaderField: "X-Lakeloom-Schema-Version")
+        request.timeoutInterval = 30
+        request.httpBody = try encoder.encode(body)
+
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw IngestProxyError.unknown("non-HTTP response")
         }
-        return acks
+
+        switch http.statusCode {
+        case 200, 207:
+            return try decoder.decode(IngestBatchAck.self, from: data)
+        case 400:
+            let detail = decodeReason(data) ?? "bad_request"
+            if detail.contains("schema") {
+                throw IngestProxyError.schemaMismatch(detail)
+            }
+            throw IngestProxyError.badRequest(detail)
+        case 401: throw IngestProxyError.unauthorized
+        case 403: throw IngestProxyError.forbidden
+        case 413: throw IngestProxyError.payloadTooLarge
+        case 429: throw IngestProxyError.rateLimited(retryAfter: parseRetryAfter(http))
+        case 500: throw IngestProxyError.internalServerError(decodeReason(data) ?? "")
+        case 502, 503, 504: throw IngestProxyError.serverUnavailable
+        default:
+            throw IngestProxyError.unknown("http_\(http.statusCode)")
+        }
     }
 }
 
-actor StreamWriter {
-    func send(_ record: WriteRecord) async throws { /* ... */ }
+struct IngestBatchBody: Sendable, Codable {
+    let schemaVersion: String
+    let records: [IngestRecordJSON]
+}
+
+struct IngestBatchAck: Sendable, Codable {
+    let accepted: [String]                    // record_uuids
+    let rejected: [RejectedRecord]
+    let ingestTimestamp: Date?
+
+    struct RejectedRecord: Sendable, Codable {
+        let recordUUID: String
+        let reason: String
+    }
 }
 ```
 
-The streaming model means:
-- A whole batch goes over a single gRPC call
-- Acks come back as a stream — we collect them and validate `record_uuid` matches what we sent
-- A single connection error fails the whole batch; records revert to pending and retry
+The HTTP model means:
+- A whole batch goes over a single POST. No streaming — Zerobus's streaming nature is hidden inside the App.
+- Per-record acks are returned synchronously in the response body. Partial accept is the common case under high concurrency; the drainer handles it natively.
+- A connection error fails the whole batch; records revert to pending and retry.
+- A `cancel` from the OS (app backgrounded mid-flight) propagates as a `CancellationError`, which the drainer maps to `.canceled` and reverts the batch.
 
-### 7.6 ZeroBus Error Type
+### 7.6 IngestProxyError Type
 
 ```swift
-enum ZeroBusError: Error, Sendable {
-    case unauthenticated                       // 401 / UNAUTHENTICATED
-    case permissionDenied                      // PERMISSION_DENIED
-    case invalidArgument(String)               // INVALID_ARGUMENT (schema/payload error)
-    case failedPrecondition(String)            // FAILED_PRECONDITION (schema mismatch, etc.)
-    case resourceExhausted                     // throttling
-    case deadlineExceeded                      // timeout
-    case unavailable                           // 5xx-equivalent
-    case internalError(String)                 // server bug
-    case canceled
+enum IngestProxyError: Error, Sendable, Equatable {
+    case unauthorized                          // HTTP 401
+    case forbidden                             // HTTP 403
+    case badRequest(String)                    // HTTP 400
+    case schemaMismatch(String)                // HTTP 400 with schema reason
+    case payloadTooLarge                       // HTTP 413
+    case rateLimited(retryAfter: Date?)        // HTTP 429
+    case internalServerError(String)           // HTTP 500
+    case serverUnavailable                     // HTTP 502/503/504
+    case timeout                               // URLError.timedOut
+    case badGateway                            // HTTP 502 specifically
+    case networkUnavailable                    // URLError.notConnectedToInternet
+    case canceled                              // CancellationError or URLError.cancelled
     case unknown(String)
 }
 ```
 
-Standard gRPC status codes map to these one-to-one via a small helper.
+Mapping from `URLError` and HTTP status codes is a single helper — kept inside `LiveIngestProxyClient` so tests can scriptably return any of these cases.
 
-### 7.7 Timeouts
+### 7.7 Timeouts and Limits
 
-- Per-record send: 10 seconds
-- Whole-batch deadline: 60 seconds
+- Per-batch request timeout: 30 seconds (URLSession `timeoutIntervalForRequest`)
+- Per-batch resource timeout: 60 seconds (URLSession `timeoutIntervalForResource`)
 - Batch size: 50 records (tunable; small enough to retry cheaply, large enough to amortize connection cost)
+- Per-record body size cap: 256 KB (enforced client-side; over-sized records are dead-lettered before send)
+- Per-batch body size cap: 5 MB (defensive; in practice batches are tens of KB)
+
+URLSession is configured once at IngestService startup with `URLSessionConfiguration.default`, `httpMaximumConnectionsPerHost = 4`, `waitsForConnectivity = true`, and default cookie policy disabled (we authenticate per-request via header).
 
 ---
 
@@ -786,29 +892,29 @@ The outbox is a single actor. All writes serialize through it. CaptureEngine emi
 - **OutboxStore:** enqueue/snapshot round trip; nextBatch ordering and batching; markInflight → markSent atomicity; markPendingForRetry semantics; concurrent writes
 - **Drainer state machine:** transitions for each event type (network change, auth event, outbox change, backoff timer); idempotent state publishing
 - **Backoff calculation:** monotonic growth, cap, jitter bounds
-- **ZeroBus error mapping:** every `ZeroBusError` case maps to expected `BatchResult`
+- **IngestProxy error mapping:** every `IngestProxyError` case maps to expected `BatchResult`; HTTP status code → error case lookup is exhaustive
 - **Auth force-refresh inline retry:** second 401 → `.waitingForAuth`; second success → records sent
 - **`audio_uploaded` enqueue:** sequence number assignment is strictly greater than all prior records in session
 
 ### 13.2 Integration Tests
 
-- **End-to-end with mock ZeroBus server:** real Core Data, mock gRPC server scripted to return success / 401 / 503; verify records reach `sent` and counts match
+- **End-to-end with mock App server:** real Core Data, a local HTTP test server scripted to return 200 / 207 / 401 / 503 / 429; verify records reach `sent` and counts match. Partial accept in 207 → some records `sent`, others dead-lettered.
 - **Crash recovery:** kill the test process mid-batch (force-fault inside ZeroBusClient mock); on restart, verify inflight records revert to pending and are re-sent
 - **Network flap:** toggle reachability mid-drain; drainer pauses on disconnect, resumes on reconnect, no duplicate sends within the same generation
-- **Schema mismatch:** mock server returns FAILED_PRECONDITION; verify dead-letter and UI surfaces it
+- **Schema mismatch:** mock server returns HTTP 400 with `reason: "schema_mismatch"`; verify dead-letter and UI surfaces it
 - **Auth expiry mid-drain:** access token expires between batches; AuthService refreshes silently; drainer continues without state hop
 
 ### 13.3 Test Seams
 
 ```swift
 protocol OutboxStoring: Sendable { /* ... */ }
-protocol ZeroBusClienting: Sendable { /* ... */ }
+protocol IngestProxyClienting: Sendable { /* ... */ }
 protocol Reachable: Sendable { /* ... */ }
 protocol AuthServicing: Sendable { /* already defined in Module 01 */ }
 protocol CaptureEventSource: Sendable { var events: AsyncStream<CaptureEvent> { get } }
 ```
 
-Production: live implementations. Test: `InMemoryOutboxStore`, `ScriptedZeroBusClient`, `ManualReachability` (test-driven path changes), `MockAuthService`, `ScriptedCaptureSource`.
+Production: live implementations. Test: `InMemoryOutboxStore`, `ScriptedIngestProxyClient`, `ManualReachability` (test-driven path changes), `MockAuthService`, `ScriptedCaptureSource`.
 
 ---
 
@@ -843,15 +949,15 @@ Production: live implementations. Test: `InMemoryOutboxStore`, `ScriptedZeroBusC
 
 | # | Item | Resolution Path |
 |---|---|---|
-| 1 | Exact ZeroBus gRPC IDL — proto field numbers, service definition, streaming semantics | Get Databricks ZeroBus proto file; align this design |
-| 2 | Whether ZeroBus accepts streaming or unary writes for our volume | Likely streaming for batched throughput; confirm |
-| 3 | Endpoint URL pattern for ZeroBus per workspace | Either deterministic from workspace host or discovery call; verify |
-| 4 | The target table identifier (catalog.schema.table) and whether it's per-workspace or shared | Decide with the silver-pipeline team |
-| 5 | Schema registration — does ZeroBus require pre-registering our top-level columns and accept variant freely? | Confirm; impacts whether `schemaVersion` gates evolution server-side |
-| 6 | Whether `permission_denied` from ZeroBus should pause the whole workspace's ingest until the user signs out and back in | Default v1: pause + notify; refine after seeing real failure modes |
-| 7 | Maximum allowed payload size (per-record + per-stream) | Confirm with ZeroBus docs; set conservative client-side cap (e.g., 256 KB per record) |
-| 8 | Retention default for `sent` outbox records (24h proposed) | Validate against typical user behavior; may extend to 7 days for diagnostic value |
-| 9 | Whether to forward `CaptureEvent.warning` and `.error` to a separate Databricks telemetry table | Decide after Module 06 (telemetry) is designed |
+| 1 | Exact App ingest endpoint URL pattern — `/serving-endpoints/<name>/invocations` vs `https://<app>-<workspace>.databricksapps.com` | Decide with Genie Code on the App deployment shape; document in `architecture/hi_genie/` |
+| 2 | App's response shape on partial accept — exact field names for `accepted` / `rejected` and per-record `reason` enum values | Lock the JSON contract in `architecture/hi_genie/`; add fixture to test suite |
+| 3 | The target table identifier (catalog.schema.table) — encoded into the App's config, not the iOS client | Coordinate with the silver-pipeline team |
+| 4 | Whether the App returns a server-side ingest timestamp per-record or per-batch | v1: per-batch is sufficient (silver pipeline doesn't need per-record receipt time) |
+| 5 | Whether `403` from the App should pause the whole workspace's ingest until the user signs out and back in | Default v1: pause + notify; refine after seeing real failure modes |
+| 6 | Maximum allowed body size (per-batch) at the App layer | Confirm with App team; client-side cap stays at 5 MB per batch / 256 KB per record |
+| 7 | Retention default for `sent` outbox records (24h proposed) | Validate against typical user behavior; may extend to 7 days for diagnostic value |
+| 8 | Whether to forward `CaptureEvent.warning` and `.error` to a separate Databricks telemetry table | Decide after Module 09 (telemetry) is designed |
+| 9 | TLS cert pinning for the App endpoint | Default v1: standard system trust; revisit if customer security teams require it |
 
 ---
 
@@ -876,15 +982,15 @@ App/Ingest/
 │   ├── BatchResult.swift
 │   ├── BackoffPolicy.swift
 │   └── MergedEvents.swift
-├── ZeroBusClient/
-│   ├── ZeroBusClient.swift                  // protocol
-│   ├── LiveZeroBusClient.swift              // grpc-swift implementation
-│   ├── ZeroBusError.swift
-│   ├── ZeroBusEndpoint.swift
+├── IngestProxy/
+│   ├── IngestProxyClient.swift              // protocol
+│   ├── LiveIngestProxyClient.swift          // URLSession + JSONEncoder/Decoder
+│   ├── IngestProxyError.swift
+│   ├── AppEndpoint.swift
 │   ├── EndpointResolver.swift
-│   ├── WriteRecord+Codable.swift            // OutboxRecord → WriteRecord mapping
-│   └── proto/
-│       └── zerobus.proto                    // generated Swift bindings
+│   ├── IngestBatchBody.swift                // Codable request body
+│   ├── IngestBatchAck.swift                 // Codable response body
+│   └── OutboxRecord+JSONRecord.swift        // OutboxRecord → wire JSON mapping
 ├── Reachability/
 │   ├── Reachability.swift                   // protocol
 │   ├── LiveReachability.swift               // NWPathMonitor
