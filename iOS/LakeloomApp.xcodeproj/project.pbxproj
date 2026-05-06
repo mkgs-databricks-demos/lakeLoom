@@ -16,6 +16,7 @@
 		316D1E1DA636E951AE9DF2CB /* AppSignposter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95407697C9C8AB8C033F6AB2 /* AppSignposter.swift */; };
 		33AD2A5B5D8D51F25138D826 /* SmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB3582835A2477C2DC086CB5 /* SmokeTests.swift */; };
 		3BB0FB3E21ED6F5C074035EE /* AuthServicing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8581F1979FB579F7246225F4 /* AuthServicing.swift */; };
+		3F27BA877646636082C36878 /* LakeloomStore.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = 7B44A498493B99C3E705EEAC /* LakeloomStore.xcdatamodeld */; };
 		42B7807778F34EC98A695DA4 /* OAuthURLBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24B612E229967473096424F3 /* OAuthURLBuilder.swift */; };
 		46F4D19390B9B659DD9AD089 /* LogEntryCollector.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED274F0332B5F785BDEB359C /* LogEntryCollector.swift */; };
 		479AD18807A976C852153403 /* LiveOAuthClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC83A2DFC5EDFB9179E66647 /* LiveOAuthClient.swift */; };
@@ -91,6 +92,7 @@
 		3BC55D0FDD9717CF3C669840 /* LakeloomAppTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = LakeloomAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		410B72AB8D0E7370FE3022AF /* OAuthURLBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OAuthURLBuilderTests.swift; sourceTree = "<group>"; };
 		485925FEBBB66662795FB783 /* FakeOAuthClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeOAuthClient.swift; sourceTree = "<group>"; };
+		488CC02E5AC5E5FA53FDFC00 /* LakeloomStore.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = LakeloomStore.xcdatamodel; sourceTree = "<group>"; };
 		51C517E2EB6C119C41215C9F /* StubDatabricksIdentityClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StubDatabricksIdentityClient.swift; sourceTree = "<group>"; };
 		5DE7E999D5CF86A7EB3BD1EE /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		65650403FBD0DA24FB6CB4A4 /* SCIMMeResponseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SCIMMeResponseTests.swift; sourceTree = "<group>"; };
@@ -256,6 +258,7 @@
 		70B9675BDE3046ECD0CC023E /* Persistence */ = {
 			isa = PBXGroup;
 			children = (
+				CE118C04F0386ABB38DE7DFD /* Model */,
 				DFB4DB7F345D979C4A0260DF /* CoreDataStackDiagnostics.swift */,
 				D207B9E27F125EDEB5FB4D0B /* CoreDataStackError.swift */,
 				849EB463DB262C0FBC45058E /* CoreDataStacking.swift */,
@@ -318,6 +321,14 @@
 				FE5B84BB695227773264CE59 /* PKCE.swift */,
 			);
 			path = OAuth;
+			sourceTree = "<group>";
+		};
+		CE118C04F0386ABB38DE7DFD /* Model */ = {
+			isa = PBXGroup;
+			children = (
+				7B44A498493B99C3E705EEAC /* LakeloomStore.xcdatamodeld */,
+			);
+			path = Model;
 			sourceTree = "<group>";
 		};
 		D8D2CD6ABFE5DA02EEDD781D /* Views */ = {
@@ -513,6 +524,7 @@
 				2D10BCFB0F2577F5669F5F0F /* KeychainError.swift in Sources */,
 				BE06638BDEBB28D462DA36BE /* KeychainStore.swift in Sources */,
 				6BB78C6B0AB21679812F20A7 /* LakeloomApp.swift in Sources */,
+				3F27BA877646636082C36878 /* LakeloomStore.xcdatamodeld in Sources */,
 				804658AF3C901EBEF86AFD59 /* LiveKeychainStore.swift in Sources */,
 				479AD18807A976C852153403 /* LiveOAuthClient.swift in Sources */,
 				544BEB42F050C69CDC17EAD7 /* LogCategory.swift in Sources */,
@@ -997,6 +1009,19 @@
 			productName = DequeModule;
 		};
 /* End XCSwiftPackageProductDependency section */
+
+/* Begin XCVersionGroup section */
+		7B44A498493B99C3E705EEAC /* LakeloomStore.xcdatamodeld */ = {
+			isa = XCVersionGroup;
+			children = (
+				488CC02E5AC5E5FA53FDFC00 /* LakeloomStore.xcdatamodel */,
+			);
+			currentVersion = 488CC02E5AC5E5FA53FDFC00 /* LakeloomStore.xcdatamodel */;
+			path = LakeloomStore.xcdatamodeld;
+			sourceTree = "<group>";
+			versionGroupType = wrapper.xcdatamodel;
+		};
+/* End XCVersionGroup section */
 	};
 	rootObject = 4F7CB9676744622BA7D3C696 /* Project object */;
 }
