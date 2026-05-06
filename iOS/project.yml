@@ -5,7 +5,9 @@ options:
   deploymentTarget:
     iOS: "26.0"
   developmentLanguage: en
-  xcodeVersion: "26.0"
+  # Set to 26.2 — matches the LastUpgradeCheck Xcode 26.2 wants to write.
+  # Bump when we move to a newer Xcode and accept its recommendations.
+  xcodeVersion: "26.2"
   groupSortPosition: top
   generateEmptyDirectories: true
   createIntermediateGroups: true
@@ -30,6 +32,12 @@ settings:
     IPHONEOS_DEPLOYMENT_TARGET: "26.0"
     TARGETED_DEVICE_FAMILY: "1,2"
     DEVELOPMENT_TEAM: ""
+    # Xcode 26.2 recommended settings — accepted on the Module 09 branch.
+    # Generates Swift symbol extensions for the asset catalog (e.g.
+    # `.AccentColor` accessors) so we don't string-key Assets.xcassets.
+    ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
+    # Generates Swift symbols for String Catalogs once we localize.
+    STRING_CATALOG_GENERATE_SYMBOLS: YES
   configs:
     Debug:
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: "DEBUG INTERNAL_TOOLS"
