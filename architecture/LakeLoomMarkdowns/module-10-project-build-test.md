@@ -2,7 +2,7 @@
 
 **Product:** Lakeloom
 **Status:** Design — pre-implementation
-**Last updated:** 2026-05-02
+**Last updated:** 2026-05-06
 **Depends on:** All prior modules (this one defines how they're assembled)
 **Depended on by:** Every developer working on the app
 
@@ -79,7 +79,6 @@ lakeloom-ios/
 │   └── ...
 │
 ├── BuildScripts/
-│   ├── generate-proto.sh                   # Generates Swift bindings from ZeroBus IDL
 │   ├── lint.sh                             # SwiftLint, format check
 │   ├── build-debug.sh
 │   ├── build-release.sh
@@ -155,22 +154,24 @@ All from the iOS SDK:
 
 | Package | Version | Purpose |
 |---|---|---|
-| `grpc-swift` (Apple) | 2.x | gRPC for ZeroBus client (Module 03) |
-| `swift-protobuf` (Apple) | 1.x | Required by grpc-swift |
 | `swift-async-algorithms` (Apple) | 1.x | `merge` / `combineLatest` for async sequences |
 | `swift-collections` (Apple) | 1.x | `Deque`, `OrderedSet` for log collector and other ordered structures |
 | `libopus` (vendored) | 1.4+ | Opus encoding for audio (Module 02) |
 
 We deliberately keep this list short. Every third-party dependency is a future migration cost, a security review surface, and a build-time hit.
 
+> **Note on transport.** Earlier drafts of Module 03 used `grpc-swift` + `swift-protobuf` for a direct gRPC connection to ZeroBus. Those dependencies are no longer needed: iOS POSTs JSON to the Databricks App, which owns the Zerobus TS SDK call server-side. `URLSession` + `JSONEncoder`/`JSONDecoder` from the standard library cover the entire ingest, projects, and sync transport.
+
 ### 4.3 What We Are NOT Using
 
+- **gRPC tooling on iOS** (`grpc-swift`, `swift-protobuf`) — iOS speaks HTTPS to the Databricks App; the App owns the Zerobus gRPC client server-side
 - **Combine** as a primary tool — AsyncStream replaces it
 - **PromiseKit / RxSwift / similar** — Swift Concurrency replaces these
 - **Alamofire** — `URLSession` is enough
 - **Realm** — Core Data is enough
 - **Sentry / Crashlytics / Bugsnag** — v1 uses Apple's built-in crash reporter (Module 09)
 - **CocoaPods, Carthage** — SPM only
+- **PostgresNIO or any direct Postgres client** — Lakebase access goes through the Databricks App's REST API (Module 06, Module 11)
 
 ### 4.4 Dependency Audit
 

@@ -1,15 +1,17 @@
 # Lakeloom iOS App — Architecture Document
 
 **Product:** Lakeloom
-**Version:** 1.0
+**Version:** 1.1
 **Status:** Design — pre-implementation
-**Last updated:** 2026-05-02
+**Last updated:** 2026-05-06
 
 ---
 
 ## 1. Project Overview
 
-Lakeloom is an iOS application that captures spoken input — either from the user directly via a button tap, or eventually from ambient conversation — transcribes it on-device, and streams the resulting text to Databricks ZeroBus for downstream processing. A Spark Declarative Pipeline lands the data in silver and gold tables, where an Agent uses it to generate requirements, reference architectures, and Genie Code session plans for phased Databricks build engagements.
+Lakeloom is an iOS application that captures spoken input — either from the user directly via a button tap, or eventually from ambient conversation — transcribes it on-device, and ships the resulting text to a **Databricks App** which forwards it to ZeroBus on the iPhone's behalf. A Spark Declarative Pipeline lands the data in silver and gold tables, where an Agent uses it to generate requirements, reference architectures, and Genie Code session plans for phased Databricks build engagements.
+
+The iOS client speaks HTTPS to exactly one host: the Databricks App. The App is the network-boundary aggregator — it owns the ZeroBus TS SDK call, the Lakebase Postgres connection, and any other downstream Databricks integration. iOS does not speak gRPC to ZeroBus, does not connect directly to Lakebase, and does not call Databricks SQL Statement Execution. This single-network-boundary rule keeps iOS releases decoupled from server-side schema and backend choices, and constrains the iOS app's network/auth surface to a single OAuth-bearer-on-HTTPS pattern.
 
 The name reflects the work the app does: pulling raw conversational threads (the *loom*) into structured material that flows into a Databricks lakehouse (the *lake*). Lakeloom is built primarily for Databricks Forward Deployed Engineers (FDEs) doing requirements gathering and rapid prototyping with customers in the field.
 
@@ -36,22 +38,27 @@ A summary of the decisions locked in during design review:
 | 2 | Optional later re-transcription with WhisperKit (large model) | Higher fidelity for technical jargon; runs on uploaded audio in Databricks side or via background job |
 | 3 | Chunking: layered triggers (silence ≥ 1.2s, speaker turn, 30s ceiling) | Maximizes downstream LLM reasoning quality; designed for Meeting Mode, applied trivially in Quick Capture |
 | 4 | Quick Capture chunk = full press-and-hold duration (`trigger_reason: user_release`) | Simplest model for v1; same payload shape as Meeting Mode chunks |
-| 5 | Transcript streamed live to ZeroBus; audio uploaded post-session over Wi-Fi only | Matches ZeroBus' design for events; audio handled as files via Volumes |
+| 5 | Transcript POSTed live as JSON to the Databricks App (which forwards to ZeroBus); audio uploaded post-session over Wi-Fi only directly to UC Volume Files API | Matches ZeroBus' event-stream design while preserving the single-network-boundary rule for iOS; audio bytes are large enough that a direct PUT is justified |
 | 6 | Minimum iOS version: **iOS 26+** | Access to `SpeechAnalyzer` for native long-form transcription; eliminates restart-loop complexity |
 | 7 | Capture modes: Quick Capture (v1) and Meeting Mode (v1.x); no wake word | Explicit user action keeps consent crisp; two clear modes cover both use cases |
 | 8 | Identity: Databricks workspace OAuth U2M — workspace identity *is* the user identity | Single auth flow; same identity across devices; native joins to Databricks audit and Unity Catalog |
-| 9 | Auth for ZeroBus + audio upload: same OAuth U2M token | Single auth flow, no PAT pasting, refresh tokens for silent renewal |
+| 9 | Auth for App ingest endpoint + UC Volume audio upload: same OAuth U2M token | Single auth flow, no PAT pasting, refresh tokens for silent renewal |
 | 10 | OAuth client: single published Databricks OAuth app, client_id baked into the iOS app, PKCE required | Standard mobile OAuth pattern |
-| 11 | Projects: stored in a Unity Catalog Delta table; app can list existing or create new | Visible in Databricks for analytics and grants; created in-app for fast iteration |
+| 11 | Projects: served by the Databricks App's REST API; iOS calls `GET/POST /api/v1/projects`. App owns whether storage is Lakebase or Delta | Decouples iOS releases from server-side schema; aligns with Lakebase rule of thumb |
 | 12 | `project_id` is **NOT NULL** on every record | Forces project association at session start; enables per-project agent processing |
 | 13 | Workspace details captured per session and selectable in app settings | Multi-workspace support (e.g., dev/prod, multi-customer consultants) |
-| 14 | ZeroBus payload uses VARIANT for headers and payload, with key fields promoted to typed top-level columns | Balance between query performance and schema flexibility |
+| 14 | Records on the wire: JSON with VARIANT-shaped `headers` and `payload` nested objects; App serializes them to JSON strings before handing to the Zerobus TS SDK | Lets us add fields to headers/payload without iOS App Store updates while keeping Zerobus's bronze table contract stable |
+| 15 | **Single network boundary on iOS**: HTTPS to the Databricks App for ingest, projects, and sync; HTTPS to UC Files API only for audio upload | One TLS surface to validate, one cookie/auth model, no gRPC tooling, no Postgres client on iOS |
+| 16 | **Lakebase access via the App's REST API only** — never directly from iOS | Server owns Postgres connection management, credential rotation, and schema migrations; iOS sees only a versioned JSON contract |
+| 17 | App-side Brickster edits surface back to iOS via a cursor-based polling endpoint (Module 11) | Polling in v1; APNs nudges + WebSocket in v1.x without changing the consumer contract |
 
 ---
 
-## 3. ZeroBus Data Contract
+## 3. Ingest Data Contract
 
-The contract between the iOS app and Databricks. The app emits records of three event types: `transcript_chunk`, `session_start`, `session_end`, and `audio_uploaded`.
+The contract between the iOS app and the Databricks App's ingest endpoint. iOS POSTs records as JSON to the App; the App forwards them to ZeroBus, which lands them in the bronze table. The schema below is the iOS-visible shape, intentionally aligned with the bronze table's columns so the App's translation is mechanical.
+
+The app emits records of four event types: `transcript_chunk`, `session_start`, `session_end`, and `audio_uploaded`.
 
 ### 3.1 Top-Level Columns (typed)
 
@@ -287,7 +294,7 @@ Sub-component of CaptureEngine. Where the chunking rules live.
 
 #### IngestService
 - Consumes the chunk stream from CaptureEngine
-- Calls the ZeroBus write endpoint with the OAuth token from AuthService
+- POSTs batches to the Databricks App's ingest endpoint with the OAuth token from AuthService; the App forwards to ZeroBus
 - Maintains a local **outbox** (Core Data table) — every chunk is persisted first, then sent
 - Send success → marked sent; send failure → exponential backoff retry
 - Network-aware: pauses sending on no-connectivity, resumes when network returns
@@ -298,15 +305,14 @@ Sub-component of CaptureEngine. Where the chunking rules live.
 - Tracks upload state per session in Core Data: `pending`, `wifi_waiting`, `uploading`, `uploaded`, `failed`
 - Watches `NWPathMonitor` for Wi-Fi availability; when Wi-Fi appears and there's pending audio, kicks off uploads
 - Uses background `URLSession` with `isDiscretionary = true`, `allowsCellularAccess = false` so iOS handles queuing
-- After successful upload + ZeroBus `audio_uploaded` event sent, deletes local audio (configurable grace period; default 7 days)
-- Owns the project list cache (5-min TTL) and project create/list calls via SQL Statement Execution API
+- After successful upload + `audio_uploaded` event sent (via the App's ingest endpoint), deletes local audio (configurable grace period; default 7 days)
 
 ### 4.3 Concurrency Model
 
 Swift 6 strict concurrency throughout.
 - CaptureEngine, IngestService, StorageService are `@MainActor`-isolated coordinators that delegate to nonisolated background actors for hot-path work
 - Audio tap callbacks → custom `AudioProcessingActor`
-- ZeroBus writes → `IngestActor`
+- HTTP ingest writes → `IngestActor` (Module 03)
 - All cross-actor communication via `AsyncStream` / `AsyncChannel`
 
 ---
@@ -324,27 +330,27 @@ Walking through a single press-and-hold capture from button-down to ingested.
 - `CaptureEngine.startSession(mode: .quickCapture)` called
 - New `session_id` (UUIDv7) generated
 - Audio session activated
-- `SessionLifecycleEvent.sessionStart` emitted → IngestService persists + sends to ZeroBus
+- `SessionLifecycleEvent.sessionStart` emitted → IngestService persists + POSTs to the Databricks App's ingest endpoint
 - Audio file opened: `<AppSupport>/sessions/<session_id>.opus`
 - SpeechTranscriber stream started
 - Visual feedback: button pulses, transcript starts appearing live on screen
 
 ### 5.3 While held
 - Audio buffers flow continuously to both the file writer and SpeechTranscriber
-- Partial transcript results render live for user feedback (not sent to ZeroBus — only finals)
+- Partial transcript results render live for user feedback (not POSTed to the App — only finals)
 - Energy floor and duration tracked in real time
 
 ### 5.4 Button up
 - ChunkAssembler finalizes the chunk: text, timing, energy floor, `trigger_reason: .userRelease`
-- `Chunk` emitted → IngestService persists in outbox → POSTs to ZeroBus
+- `Chunk` emitted → IngestService persists in outbox → POSTs to the Databricks App's ingest endpoint
 - Audio file finalized and closed
 - `SessionLifecycleEvent.sessionEnd` emitted with `audio_upload_intent: .pending`
 - StorageService marks the audio file as `wifi_waiting`
 - Capture engine tears down audio session
 
 ### 5.5 Async, after Wi-Fi appears
-- StorageService detects Wi-Fi, requests presigned URL or computes a Volume path, uploads via background URLSession
-- On completion: `SessionLifecycleEvent.audioUploaded` event sent to ZeroBus with audio URI, sha256, size
+- StorageService detects Wi-Fi, computes the deterministic Volume path, uploads directly to UC Files API via background URLSession
+- On completion: `SessionLifecycleEvent.audioUploaded` is enqueued in IngestService's outbox; the drainer POSTs it to the Databricks App's ingest endpoint with audio URI, sha256, size
 - Local audio file scheduled for deletion after grace period
 
 ---
@@ -358,7 +364,7 @@ Walking through a single press-and-hold capture from button-down to ingested.
 3. **OAuth login** via `ASWebAuthenticationSession` (PKCE)
 4. App exchanges authorization code for access token + refresh token
 5. App fetches identity from `/api/2.0/preview/scim/v2/Me` and caches user details
-6. **Project picker** — lists existing projects from `main.lakeloom.projects` table for that workspace + "Create New" option; user must select before reaching the capture screen
+6. **Project picker** — lists existing projects via `GET {appBaseURL}/api/v1/projects?workspace_id=...` for that workspace + "Create New" option; user must select before reaching the capture screen
 7. **Microphone permission** prompt (deferred to here so the user understands context)
 8. **Home screen** — Quick Capture button, current project chip, current workspace chip
 
@@ -382,40 +388,45 @@ Users may have multiple workspaces (dev/prod, multiple customer engagements for 
 
 ### 7.1 Storage
 
-Projects live in a Unity Catalog Delta table:
+Projects are served by the **Databricks App's REST API**. The App owns the underlying storage — Lakebase Postgres is the default per lakeLoom's "Lakebase as the rule of thumb" preference. iOS sees only the JSON contract; storage migrations server-side don't require iOS releases. Full design is in Module 06 (`module-06-project-service.md`).
 
-```sql
-CREATE TABLE main.lakeloom.projects (
-  project_id          STRING NOT NULL,        -- UUIDv7
-  project_name        STRING NOT NULL,
-  project_description STRING,
-  workspace_id        STRING NOT NULL,
-  created_by_user_id  STRING NOT NULL,        -- SCIM user id
-  created_by_username STRING NOT NULL,
-  created_at          TIMESTAMP NOT NULL,
-  updated_at          TIMESTAMP NOT NULL,
-  archived            BOOLEAN NOT NULL DEFAULT false,
-  metadata            VARIANT
-)
-USING DELTA;
+The iOS-visible `ProjectMetadata` shape:
+
+```swift
+struct ProjectMetadata: Sendable, Equatable, Identifiable, Codable {
+    let id: String                     // UUIDv7
+    let name: String
+    let description: String?
+    let workspaceID: String
+    let createdByUserID: String
+    let createdByUsername: String
+    let createdAt: Date
+    let updatedAt: Date
+    let archived: Bool
+}
 ```
 
 ### 7.2 Access Pattern
 
-The app reads/writes via the **SQL Statement Execution API** (`/api/2.0/sql/statements`):
-- Works directly with the OAuth U2M token — no extra auth
-- Respects Unity Catalog grants natively (a user only sees projects they have permission on)
-- Uses the user's default warehouse or a designated one
+The iOS app calls the Databricks App's REST endpoints directly with the user's OAuth U2M token:
+
+- `GET    /api/v1/projects?workspace_id={ws}&q={query}&limit=200`
+- `GET    /api/v1/projects/{project_id}?workspace_id={ws}`
+- `POST   /api/v1/projects` (with `client_generated_id` UUIDv7 for idempotency)
+- `PATCH  /api/v1/projects/{project_id}/archive`
+- `PATCH  /api/v1/projects/{project_id}/restore`
+
+The App is the security boundary — it validates the OAuth token, applies workspace-scoped authorization, and persists to its backing store. iOS never sees Postgres credentials, never issues SQL, never resolves a SQL warehouse.
 
 ### 7.3 App Project Flow
 
-- **Session start:** App fetches projects via `SELECT project_id, project_name FROM main.lakeloom.projects WHERE archived = false AND workspace_id = ? ORDER BY updated_at DESC LIMIT 50`
-- **Create new:** Modal collects name + description, INSERTs a new row, returns immediately ready to use
-- **Cache:** Project list cached locally with 5-minute TTL so the picker is instant most of the time
+- **Session start:** ProjectService calls `GET /api/v1/projects?workspace_id=...` and renders the result. Cache: 5-minute TTL with stale-while-revalidate so the picker is instant most of the time.
+- **Create new:** Modal collects name + description; iOS generates a UUIDv7 `client_generated_id` and POSTs. The App treats `(workspace_id, client_generated_id)` as the idempotency key, so retries are safe.
+- **Duplicate name handling:** atomic on the App side — HTTP 409 with `existing_project_id` in the response body.
 
 ### 7.4 Default Visibility
 
-For v1: all projects in a workspace are visible to all workspace users. Solutions architects collaborating on a customer engagement see each other's projects. Per-user filtering and row-level security can be added later via Unity Catalog without schema change.
+For v1: all projects in a workspace are visible to all workspace users. The App enforces workspace scoping using the OAuth identity from the bearer token. Per-user filtering and row-level security can be added later server-side without iOS changes — that's the decoupling benefit of the REST API approach.
 
 ---
 
@@ -460,14 +471,20 @@ Projects are **not** persisted long-term — they're cached in memory with a 5-m
 
 ---
 
-## 9. ZeroBus Client Implementation
+## 9. Ingest Client Implementation
 
-- Uses **gRPC-Swift** (Apple's official gRPC implementation)
-- Authenticates via OAuth bearer token in metadata: `authorization: Bearer <token>`
-- Targets the workspace's ZeroBus endpoint (derived from workspace URL)
-- Each chunk → one `IngestRecord` write; the request carries the typed top-level fields and serialized variant headers/payload
-- Variant serialization: serialize headers and payload as JSON strings client-side, send as VARIANT-typed columns
-- Strict outbox pattern — no chunk is ever held only in memory
+iOS does **not** speak gRPC to ZeroBus directly. The ingest client (`IngestProxyClient`, see Module 03) is a thin `URLSession` wrapper that POSTs JSON batches to the Databricks App. The App owns the ZeroBus TS SDK call.
+
+- **Transport:** HTTPS POST with `application/json` body
+- **Endpoint:** `POST {appBaseURL}/api/v1/ingest/snippets`
+- **Auth:** OAuth bearer in the `Authorization` header (`Bearer <token>`); `X-Databricks-Workspace-Id` for routing; `X-Lakeloom-Schema-Version` for fast-fail on incompatible client versions
+- **Batch shape:** `{ schema_version, records: [...] }`. Each record carries the typed top-level fields and *nested JSON objects* (not strings) for `headers` and `payload`. The App serializes them to JSON strings before handing to the Zerobus SDK.
+- **Response:** synchronous per-record acks — `{ accepted: [...], rejected: [{record_uuid, reason}], ingest_timestamp }`. HTTP 207 for partial accept, 200 for full accept.
+- **Outbox:** strict — no record is ever held only in memory; persisted to Core Data before the network call
+- **Retry:** exponential backoff with jitter; HTTP 401 → force-refresh + single retry; HTTP 429 honors `Retry-After`
+- **Idempotency:** `record_uuid` (UUIDv7, client-generated) is the dedup key; the App and silver layer dedupe on `(session_id, record_uuid)` so retrying an entire batch is always safe
+
+The full design lives in Module 03. Earlier drafts called this `ZeroBusClient` and used gRPC-Swift directly; that has been replaced by the proxy approach above to satisfy lakeLoom's single-network-boundary rule for iOS.
 
 ---
 
@@ -570,7 +587,7 @@ Linear flow on first launch:
 
 - Onboarding (consent → workspace → OAuth → project)
 - Quick Capture button with live transcript preview
-- Background ZeroBus ingest with outbox + retry
+- Background ingest via the Databricks App's REST endpoint with outbox + retry
 - Wi-Fi-only audio upload with status visibility and manual override
 - Settings (account, workspaces, projects, storage)
 - Sessions list with upload status
@@ -602,7 +619,7 @@ Items intentionally left for later, with the decisions that remain to be made:
 | # | Topic | Notes |
 |---|---|---|
 | 1 | Project visibility model | Default v1: all-workspace. Decide whether to add per-user / per-team filtering later. |
-| 2 | OAuth scope narrowing | v1 uses `all-apis`. Narrow to ZeroBus + specific UC catalog + Volume write later. |
+| 2 | OAuth scope narrowing | v1 uses `all-apis`. Narrow to App invocation scope + Volume write later. |
 | 3 | Username editability | Source of truth is SCIM. If user updates display name in Databricks, when does the app refresh? Decide on TTL. |
 | 4 | Audio retention default | Default 7 days. Make configurable in Settings; possibly tied to per-workspace policy. |
 | 5 | Telemetry | App-side metrics (crashes, capture failures, ingest latency). Not designed yet. |
