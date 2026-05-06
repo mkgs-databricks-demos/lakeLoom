@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="23000" systemVersion="26C72" minimumToolsVersion="Automatic" sourceLanguage="Swift" userDefinedModelVersionIdentifier="V1">
+    <entity name="OutboxRecord" representedClassName="OutboxRecord" syncable="YES">
+        <attribute name="captureMode" optional="NO" attributeType="String"/>
+        <attribute name="chunkEndOffsetMs" optional="NO" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="chunkStartOffsetMs" optional="NO" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="createdAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="deadLetteredAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="deviceTimestamp" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="eventType" optional="NO" attributeType="String"/>
+        <attribute name="headersJSON" optional="NO" attributeType="String"/>
+        <attribute name="lastAttemptedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="lastError" optional="YES" attributeType="String"/>
+        <attribute name="nextEligibleAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="payloadJSON" optional="NO" attributeType="String"/>
+        <attribute name="projectID" optional="NO" attributeType="String"/>
+        <attribute name="recordUUID" optional="NO" attributeType="String"/>
+        <attribute name="retryCount" optional="NO" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="schemaVersion" optional="NO" attributeType="String"/>
+        <attribute name="sentAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="sequenceNumber" optional="NO" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="sessionID" optional="NO" attributeType="String"/>
+        <attribute name="state" optional="NO" attributeType="String"/>
+        <attribute name="workspaceID" optional="NO" attributeType="String"/>
+        <fetchIndex name="byRecordUUID">
+            <fetchIndexElement property="recordUUID" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <fetchIndex name="byStateAndNextEligibleAt">
+            <fetchIndexElement property="state" type="Binary" order="ascending"/>
+            <fetchIndexElement property="nextEligibleAt" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <fetchIndex name="bySessionAndSequence">
+            <fetchIndexElement property="sessionID" type="Binary" order="ascending"/>
+            <fetchIndexElement property="sequenceNumber" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <fetchIndex name="byWorkspaceAndState">
+            <fetchIndexElement property="workspaceID" type="Binary" order="ascending"/>
+            <fetchIndexElement property="state" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <fetchIndex name="byEventType">
+            <fetchIndexElement property="eventType" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <uniquenessConstraints>
+            <uniquenessConstraint>
+                <constraint value="recordUUID"/>
+            </uniquenessConstraint>
+        </uniquenessConstraints>
+    </entity>
+    <entity name="OutboxStateChange" representedClassName="OutboxStateChange" syncable="YES">
+        <attribute name="at" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="fromState" optional="NO" attributeType="String"/>
+        <attribute name="id" optional="NO" attributeType="String"/>
+        <attribute name="reason" optional="YES" attributeType="String"/>
+        <attribute name="recordUUID" optional="NO" attributeType="String"/>
+        <attribute name="toState" optional="NO" attributeType="String"/>
+        <fetchIndex name="byID">
+            <fetchIndexElement property="id" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <fetchIndex name="byRecordUUID">
+            <fetchIndexElement property="recordUUID" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <fetchIndex name="byAt">
+            <fetchIndexElement property="at" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <uniquenessConstraints>
+            <uniquenessConstraint>
+                <constraint value="id"/>
+            </uniquenessConstraint>
+        </uniquenessConstraints>
+    </entity>
+    <entity name="ProjectMetadataCache" representedClassName="ProjectMetadataCache" syncable="YES">
+        <attribute name="archived" optional="NO" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="projectDescription" optional="YES" attributeType="String"/>
+        <attribute name="name" optional="NO" attributeType="String"/>
+        <attribute name="projectID" optional="NO" attributeType="String"/>
+        <attribute name="updatedAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="workspaceID" optional="NO" attributeType="String"/>
+        <fetchIndex name="byProjectID">
+            <fetchIndexElement property="projectID" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <fetchIndex name="byWorkspaceID">
+            <fetchIndexElement property="workspaceID" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <uniquenessConstraints>
+            <uniquenessConstraint>
+                <constraint value="projectID"/>
+            </uniquenessConstraint>
+        </uniquenessConstraints>
+    </entity>
+    <entity name="SessionRecord" representedClassName="SessionRecord" syncable="YES">
+        <attribute name="audioBitrate" optional="YES" attributeType="Integer 32" usesScalarValueType="NO"/>
+        <attribute name="audioDurationMs" optional="YES" attributeType="Integer 64" usesScalarValueType="NO"/>
+        <attribute name="audioFormat" optional="YES" attributeType="String"/>
+        <attribute name="audioLocalRelativePath" optional="YES" attributeType="String"/>
+        <attribute name="audioSampleRate" optional="YES" attributeType="Integer 32" usesScalarValueType="NO"/>
+        <attribute name="audioSha256" optional="YES" attributeType="String"/>
+        <attribute name="audioSizeBytes" optional="YES" attributeType="Integer 64" usesScalarValueType="NO"/>
+        <attribute name="captureMode" optional="NO" attributeType="String"/>
+        <attribute name="chunkCount" optional="NO" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="deadLetteredAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="deleteAfter" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="endedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="projectID" optional="NO" attributeType="String"/>
+        <attribute name="purgedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="remoteVolumePath" optional="YES" attributeType="String"/>
+        <attribute name="sessionID" optional="NO" attributeType="String"/>
+        <attribute name="startedAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="uploadAttemptCount" optional="NO" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="uploadBytesSent" optional="NO" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="uploadLastAttemptedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="uploadLastError" optional="YES" attributeType="String"/>
+        <attribute name="uploadStartedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="uploadState" optional="NO" attributeType="String"/>
+        <attribute name="uploadTaskIdentifier" optional="YES" attributeType="Integer 64" usesScalarValueType="NO"/>
+        <attribute name="uploadedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="userUUID" optional="NO" attributeType="String"/>
+        <attribute name="username" optional="NO" attributeType="String"/>
+        <attribute name="workspaceID" optional="NO" attributeType="String"/>
+        <fetchIndex name="bySessionID">
+            <fetchIndexElement property="sessionID" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <fetchIndex name="byUploadStateAndStartedAt">
+            <fetchIndexElement property="uploadState" type="Binary" order="ascending"/>
+            <fetchIndexElement property="startedAt" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <fetchIndex name="byWorkspaceAndUploadState">
+            <fetchIndexElement property="workspaceID" type="Binary" order="ascending"/>
+            <fetchIndexElement property="uploadState" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <fetchIndex name="byProjectID">
+            <fetchIndexElement property="projectID" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <fetchIndex name="byDeleteAfter">
+            <fetchIndexElement property="deleteAfter" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <uniquenessConstraints>
+            <uniquenessConstraint>
+                <constraint value="sessionID"/>
+            </uniquenessConstraint>
+        </uniquenessConstraints>
+    </entity>
+    <entity name="WorkspaceMetadataCache" representedClassName="WorkspaceMetadataCache" syncable="YES">
+        <attribute name="cloud" optional="NO" attributeType="String"/>
+        <attribute name="region" optional="YES" attributeType="String"/>
+        <attribute name="updatedAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="workspaceID" optional="NO" attributeType="String"/>
+        <attribute name="workspaceName" optional="NO" attributeType="String"/>
+        <attribute name="workspaceURL" optional="NO" attributeType="String"/>
+        <fetchIndex name="byWorkspaceID">
+            <fetchIndexElement property="workspaceID" type="Binary" order="ascending"/>
+        </fetchIndex>
+        <uniquenessConstraints>
+            <uniquenessConstraint>
+                <constraint value="workspaceID"/>
+            </uniquenessConstraint>
+        </uniquenessConstraints>
+    </entity>
+</model>
