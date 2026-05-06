@@ -63,7 +63,7 @@ struct AuthServiceTests {
         identity.enqueue(.success(successMe()))
 
         let presenter = TestPresentationProvider()
-        let stream = service.events
+        let stream = await service.events
         var iterator = stream.makeAsyncIterator()
         async let firstEvent = iterator.next()
 

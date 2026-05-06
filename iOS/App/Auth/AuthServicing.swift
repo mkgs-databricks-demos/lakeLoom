@@ -22,7 +22,12 @@ public protocol AuthServicing: Sendable {
     /// Stream of identity-relevant changes (sign-in, sign-out, workspace switch,
     /// identity refresh). Multicast — multiple subscribers (e.g. AppCoordinator,
     /// IngestService) can listen in parallel.
-    var events: AsyncStream<AuthEvent> { get }
+    ///
+    /// `get async` because subscription registration runs on the actor.
+    /// By the time `await service.events` returns, the subscriber's
+    /// continuation is already in the broadcast set — any event fired
+    /// after the await reaches this subscriber.
+    var events: AsyncStream<AuthEvent> { get async }
 
     /// Returns a valid bearer token for the active workspace.
     ///

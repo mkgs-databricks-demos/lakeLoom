@@ -52,14 +52,20 @@ public actor ProjectService: ProjectServicing {
         started = true
     }
 
-    public nonisolated var changes: AsyncStream<ProjectChangeEvent> {
-        AsyncStream { continuation in
+    public var changes: AsyncStream<ProjectChangeEvent> {
+        get async {
+            let (stream, continuation) = AsyncStream<ProjectChangeEvent>.makeStream()
             let id = UUID()
-            Task { await self.subscribe(id: id, continuation: continuation) }
+            // Synchronous registration: by the time `await service.changes`
+            // returns the subscriber is already in the broadcast set, so
+            // immediately-following events (e.g. from a `create` that
+            // happens right after) reach this subscriber.
+            eventContinuations[id] = continuation
             continuation.onTermination = { [weak self] _ in
                 guard let self else { return }
                 Task { await self.unsubscribe(id: id) }
             }
+            return stream
         }
     }
 
@@ -393,10 +399,6 @@ public actor ProjectService: ProjectServicing {
     }
 
     // MARK: Events
-
-    private func subscribe(id: UUID, continuation: AsyncStream<ProjectChangeEvent>.Continuation) {
-        eventContinuations[id] = continuation
-    }
 
     private func unsubscribe(id: UUID) {
         eventContinuations.removeValue(forKey: id)

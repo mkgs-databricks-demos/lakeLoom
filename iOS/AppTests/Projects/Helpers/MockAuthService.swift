@@ -51,8 +51,12 @@ public actor MockAuthService: AuthServicing {
         activeID.flatMap { id in workspacesCache.first(where: { $0.id == id }) }
     }
 
-    public nonisolated var events: AsyncStream<AuthEvent> {
-        AsyncStream { _ in /* tests don't subscribe */ }
+    public var events: AsyncStream<AuthEvent> {
+        get async {
+            // Tests for ProjectService don't subscribe; return a stream
+            // whose continuation is never yielded to.
+            AsyncStream { _ in }
+        }
     }
 
     public func currentToken(forceRefresh: Bool) async throws -> AccessToken {

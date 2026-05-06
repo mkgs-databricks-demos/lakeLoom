@@ -194,12 +194,15 @@ struct ProjectServiceCreateTests {
 
         let (service, _) = await makeService(api: api)
 
-        // Subscribe before triggering the events. Spawn a Task that
-        // collects the first two events; Task is Sendable so the
-        // non-Sendable AsyncIterator stays inside it.
+        // Subscribe FIRST, synchronously: `await service.changes` registers
+        // the continuation in the actor before returning, so events fired
+        // by the subsequent list / create reach this subscriber. The
+        // collection then runs in a Task because the iterator isn't
+        // Sendable across async-let boundaries.
+        let stream = await service.changes
         let collector = Task<[ProjectChangeEvent], Never> {
             var collected: [ProjectChangeEvent] = []
-            for await event in service.changes {
+            for await event in stream {
                 collected.append(event)
                 if collected.count == 2 { break }
             }

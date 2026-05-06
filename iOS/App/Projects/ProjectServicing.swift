@@ -54,7 +54,12 @@ public protocol ProjectServicing: Sendable {
     /// Stream of changes to the project list for any workspace. Sessions
     /// list view-models subscribe to keep rows fresh as the user creates
     /// or archives projects elsewhere.
-    var changes: AsyncStream<ProjectChangeEvent> { get }
+    ///
+    /// `get async` because subscription registration runs on the actor.
+    /// By the time `await service.changes` returns, the subscriber's
+    /// continuation is already in the broadcast set — any event fired
+    /// after the await reaches this subscriber.
+    var changes: AsyncStream<ProjectChangeEvent> { get async }
 
     /// Snapshot of internal counters for the diagnostics screen.
     func diagnostics() async -> ProjectServiceDiagnostics
