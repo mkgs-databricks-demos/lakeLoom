@@ -83,6 +83,7 @@
 		CE39B173CF5AABAE62965160 /* ProjectCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2DA8A081BE6AB6915EEB0B1 /* ProjectCache.swift */; };
 		D5D1B7CA8399CCEED871E460 /* LogEntryCollectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 980201A3451EC115F3E5ED90 /* LogEntryCollectorTests.swift */; };
 		D631C6EA26A7B9FA1A14E48B /* OutboxRecord+CoreDataClass.swift in Sources */ = {isa = PBXBuildFile; fileRef = F28EC61996F3DB48FE8C38C6 /* OutboxRecord+CoreDataClass.swift */; };
+		D92B1466AF9B01BE8803FE73 /* ProjectService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11755E3CE824D928B6E822F3 /* ProjectService.swift */; };
 		DE43F79EA06860FAEB2ECF1A /* LogEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67293BAFF216A6476EB3AEFD /* LogEntry.swift */; };
 		E22BFD653DC8F97C22FC2F84 /* ProjectErrorMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BCD4ACCF9BD2ED7814369D6 /* ProjectErrorMapper.swift */; };
 		E2587BA626CBCC8F24E543C6 /* CoreDataStackDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFB4DB7F345D979C4A0260DF /* CoreDataStackDiagnostics.swift */; };
@@ -122,6 +123,7 @@
 		0597EA047F5BEBE6CBB7DDAA /* LiveProjectAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveProjectAPIClient.swift; sourceTree = "<group>"; };
 		0A546B2BD23A8DF605795514 /* LogLevel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogLevel.swift; sourceTree = "<group>"; };
 		0CC61D9CA56AD0C8BAD771C4 /* MetricsRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricsRegistry.swift; sourceTree = "<group>"; };
+		11755E3CE824D928B6E822F3 /* ProjectService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectService.swift; sourceTree = "<group>"; };
 		1344166B3CFBC0C986FDE091 /* OutboxStateChange+CoreDataProperties.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OutboxStateChange+CoreDataProperties.swift"; sourceTree = "<group>"; };
 		15EFD60FCE74FF0FBC489CB9 /* WorkspaceMetadataCache+CoreDataProperties.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceMetadataCache+CoreDataProperties.swift"; sourceTree = "<group>"; };
 		1784E01F6AF104A30241AEE0 /* AuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthService.swift; sourceTree = "<group>"; };
@@ -439,6 +441,7 @@
 				C4C1F0F742E686377CE95118 /* ProjectChangeEvent.swift */,
 				AF294D3325EFA8D1AE5C13D8 /* ProjectError.swift */,
 				6ACBE51806B478BD3E7FECF7 /* ProjectMetadata.swift */,
+				11755E3CE824D928B6E822F3 /* ProjectService.swift */,
 				EE50805663FBD0A8ECE51BE6 /* ProjectServiceDiagnostics.swift */,
 				D29C74DADD6B4754210F03D1 /* ProjectServicing.swift */,
 				C61981D00D8A1431929D75A6 /* ProjectValidator.swift */,
@@ -757,6 +760,7 @@
 				94E16DB9EFF998376316F8B3 /* ProjectMetadataCache+CoreDataClass.swift in Sources */,
 				235F7B51812DE290330532C5 /* ProjectMetadataCache+CoreDataProperties.swift in Sources */,
 				09440C222B1F3D0542CD4516 /* ProjectMetadataCache+DTO.swift in Sources */,
+				D92B1466AF9B01BE8803FE73 /* ProjectService.swift in Sources */,
 				9B73CE02744EF97ED7DB236A /* ProjectServiceDiagnostics.swift in Sources */,
 				B99C9065FC88829994026275 /* ProjectServicing.swift in Sources */,
 				8D7537D8135CE0A10B89C594 /* ProjectValidator.swift in Sources */,
