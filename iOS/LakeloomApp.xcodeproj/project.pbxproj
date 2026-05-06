@@ -24,6 +24,7 @@
 		544BEB42F050C69CDC17EAD7 /* LogCategory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21872F11682828B39B91DB9C /* LogCategory.swift */; };
 		58D9FFD12F4D3FC8E9E71E8D /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DE7E999D5CF86A7EB3BD1EE /* RootView.swift */; };
 		5B2E13D2EF848B3A56C001B4 /* AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1784E01F6AF104A30241AEE0 /* AuthService.swift */; };
+		5C58580EE1781F024921BCE0 /* CoreDataStackError.swift in Sources */ = {isa = PBXBuildFile; fileRef = D207B9E27F125EDEB5FB4D0B /* CoreDataStackError.swift */; };
 		60842B2BD7C5A5BEC475FF61 /* SCIMMeResponse.swift in Sources */ = {isa = PBXBuildFile; fileRef = C46455F306301F4D2B5B1975 /* SCIMMeResponse.swift */; };
 		66B121FBE5DB4DD286961945 /* LogMetadata.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EBA8B1CEC9FF9EFB8FCE1B0 /* LogMetadata.swift */; };
 		6BB78C6B0AB21679812F20A7 /* LakeloomApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD573DAB2799C24220D8300E /* LakeloomApp.swift */; };
@@ -35,6 +36,7 @@
 		804658AF3C901EBEF86AFD59 /* LiveKeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 270FFCA7D7430385AAF3235E /* LiveKeychainStore.swift */; };
 		89DACF879A4F35AAFEB1E3D4 /* HistogramSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01362864628D304B870FC1B0 /* HistogramSnapshot.swift */; };
 		92728B0C08A56C9AA5CC2AF0 /* AuthDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0477B5F44E5E04E54EE0D11B /* AuthDiagnostics.swift */; };
+		92BD9AD4212ABDCB43351167 /* CoreDataStacking.swift in Sources */ = {isa = PBXBuildFile; fileRef = 849EB463DB262C0FBC45058E /* CoreDataStacking.swift */; };
 		9398A33D3539593B310CA2C1 /* PKCETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADBE680354FC9538DF925C93 /* PKCETests.swift */; };
 		949CAA8D64356BB20EEF2E88 /* StubDatabricksIdentityClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51C517E2EB6C119C41215C9F /* StubDatabricksIdentityClient.swift */; };
 		A2306A27ADE61654B3419815 /* DatabricksIdentityClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D82D35B3F8084B212198F1B4 /* DatabricksIdentityClient.swift */; };
@@ -50,6 +52,7 @@
 		CD9A19905DD3B843525B6FD4 /* OAuthTokenResponseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF6B053B824BDC7BE1CDF8D5 /* OAuthTokenResponseTests.swift */; };
 		D5D1B7CA8399CCEED871E460 /* LogEntryCollectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 980201A3451EC115F3E5ED90 /* LogEntryCollectorTests.swift */; };
 		DE43F79EA06860FAEB2ECF1A /* LogEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67293BAFF216A6476EB3AEFD /* LogEntry.swift */; };
+		E2587BA626CBCC8F24E543C6 /* CoreDataStackDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFB4DB7F345D979C4A0260DF /* CoreDataStackDiagnostics.swift */; };
 		E8D3DC0E3C9EBCBD75F016AA /* PKCE.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE5B84BB695227773264CE59 /* PKCE.swift */; };
 		F332C83944E75B5946D45ECC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 03E8FE79AE4D85C07FAADD0D /* Assets.xcassets */; };
 		FA4AFA8D795FA37B6460D518 /* DequeModule in Frameworks */ = {isa = PBXBuildFile; productRef = 992FDED7B6812F812EC0E0B1 /* DequeModule */; };
@@ -98,6 +101,7 @@
 		77239E5F929E3C7B6AFC5012 /* SplashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashView.swift; sourceTree = "<group>"; };
 		7B445B590F613B043D7DD81E /* OAuthClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OAuthClient.swift; sourceTree = "<group>"; };
 		7D23CC687F33D45BCFBAC181 /* AuthServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthServiceTests.swift; sourceTree = "<group>"; };
+		849EB463DB262C0FBC45058E /* CoreDataStacking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreDataStacking.swift; sourceTree = "<group>"; };
 		8581F1979FB579F7246225F4 /* AuthServicing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthServicing.swift; sourceTree = "<group>"; };
 		95407697C9C8AB8C033F6AB2 /* AppSignposter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSignposter.swift; sourceTree = "<group>"; };
 		980201A3451EC115F3E5ED90 /* LogEntryCollectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogEntryCollectorTests.swift; sourceTree = "<group>"; };
@@ -112,8 +116,10 @@
 		CB3582835A2477C2DC086CB5 /* SmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmokeTests.swift; sourceTree = "<group>"; };
 		CF6B053B824BDC7BE1CDF8D5 /* OAuthTokenResponseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OAuthTokenResponseTests.swift; sourceTree = "<group>"; };
 		CF85026F92C9717BD6EFA84F /* LogValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogValue.swift; sourceTree = "<group>"; };
+		D207B9E27F125EDEB5FB4D0B /* CoreDataStackError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreDataStackError.swift; sourceTree = "<group>"; };
 		D82D35B3F8084B212198F1B4 /* DatabricksIdentityClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatabricksIdentityClient.swift; sourceTree = "<group>"; };
 		DC83A2DFC5EDFB9179E66647 /* LiveOAuthClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveOAuthClient.swift; sourceTree = "<group>"; };
+		DFB4DB7F345D979C4A0260DF /* CoreDataStackDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreDataStackDiagnostics.swift; sourceTree = "<group>"; };
 		E337675AB414570486D793E7 /* LogValueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogValueTests.swift; sourceTree = "<group>"; };
 		E92DBDEAD48EBCB3407E2056 /* LaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchTests.swift; sourceTree = "<group>"; };
 		ED274F0332B5F785BDEB359C /* LogEntryCollector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogEntryCollector.swift; sourceTree = "<group>"; };
@@ -210,6 +216,7 @@
 			isa = PBXGroup;
 			children = (
 				231F2384DB5E42092525EB16 /* Auth */,
+				70B9675BDE3046ECD0CC023E /* Persistence */,
 				FFE6FB7D59D2D3D722AEEEE2 /* Resources */,
 				0DBF26829977F9318E46E6A5 /* Telemetry */,
 				D8D2CD6ABFE5DA02EEDD781D /* Views */,
@@ -244,6 +251,16 @@
 				0DD275052D398B4A8D806D85 /* AppUITests */,
 				9814CA7CA1C1E05A8437B5B7 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		70B9675BDE3046ECD0CC023E /* Persistence */ = {
+			isa = PBXGroup;
+			children = (
+				DFB4DB7F345D979C4A0260DF /* CoreDataStackDiagnostics.swift */,
+				D207B9E27F125EDEB5FB4D0B /* CoreDataStackError.swift */,
+				849EB463DB262C0FBC45058E /* CoreDataStacking.swift */,
+			);
+			path = Persistence;
 			sourceTree = "<group>";
 		};
 		8659B853BECD190B50D125FC /* Diagnostics */ = {
@@ -486,6 +503,9 @@
 				92728B0C08A56C9AA5CC2AF0 /* AuthDiagnostics.swift in Sources */,
 				5B2E13D2EF848B3A56C001B4 /* AuthService.swift in Sources */,
 				3BB0FB3E21ED6F5C074035EE /* AuthServicing.swift in Sources */,
+				E2587BA626CBCC8F24E543C6 /* CoreDataStackDiagnostics.swift in Sources */,
+				5C58580EE1781F024921BCE0 /* CoreDataStackError.swift in Sources */,
+				92BD9AD4212ABDCB43351167 /* CoreDataStacking.swift in Sources */,
 				C5DD8637B69CD8FBE623F099 /* CounterKey.swift in Sources */,
 				A2306A27ADE61654B3419815 /* DatabricksIdentityClient.swift in Sources */,
 				89DACF879A4F35AAFEB1E3D4 /* HistogramSnapshot.swift in Sources */,
