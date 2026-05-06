@@ -34,7 +34,9 @@ public protocol CoreDataStacking: Sendable {
     /// Vend a fresh background context for one unit of write work. Each
     /// task should create its own; do not share across tasks. Production
     /// implementations return a `.privateQueueConcurrencyType` context.
-    func newBackgroundContext() -> NSManagedObjectContext
+    /// Most callers should prefer ``performWrite(_:)`` — this is the
+    /// escape hatch for advanced fetch / batched insert patterns.
+    func newBackgroundContext() async throws -> NSManagedObjectContext
 
     /// Convenience: perform a write on a background context, save if there
     /// are changes, and return the result. The block runs on the context's
