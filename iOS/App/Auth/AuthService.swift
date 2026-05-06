@@ -1,6 +1,5 @@
 import AuthenticationServices
 import Foundation
-import OSLog
 
 /// Configuration baked into the app binary.
 ///
@@ -36,7 +35,7 @@ public actor AuthService: AuthServicing {
     private let keychain: KeychainStore
     private let identity: DatabricksIdentityClient
     private let nowProvider: @Sendable () -> Date
-    private let logger = Logger(subsystem: "com.databricks.lakeloom", category: "auth")
+    private let logger: AppLogger
 
     // MARK: State
 
@@ -70,12 +69,14 @@ public actor AuthService: AuthServicing {
         oauth: OAuthClient,
         keychain: KeychainStore,
         identity: DatabricksIdentityClient,
+        logger: AppLogger = AppLogger(category: .auth),
         nowProvider: @Sendable @escaping () -> Date = Date.init
     ) {
         self.config = config
         self.oauth = oauth
         self.keychain = keychain
         self.identity = identity
+        self.logger = logger
         self.nowProvider = nowProvider
     }
 
@@ -94,7 +95,13 @@ public actor AuthService: AuthServicing {
                     let credential = try await keychain.loadCredential(workspaceID: id)
                     loaded.append(credential)
                 } catch {
-                    logger.warning("auth.start: dropping unreadable credential for workspace; reason=\(String(describing: error), privacy: .public)")
+                    await logger.warning(
+                        "dropping unreadable credential",
+                        metadata: [
+                            "workspace_id": .uuidPrefix(id),
+                            "reason": .errorCode(String(describing: type(of: error)))
+                        ]
+                    )
                 }
             }
             workspacesCache = loaded
@@ -111,7 +118,10 @@ public actor AuthService: AuthServicing {
                 }
             }
         } catch {
-            logger.error("auth.start: failed to load persisted state; reason=\(String(describing: error), privacy: .public)")
+            await logger.error(
+                "failed to load persisted state",
+                metadata: ["reason": .errorCode(String(describing: type(of: error)))]
+            )
         }
     }
 
