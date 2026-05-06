@@ -13,11 +13,13 @@
 		3BB0FB3E21ED6F5C074035EE /* AuthServicing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8581F1979FB579F7246225F4 /* AuthServicing.swift */; };
 		42B7807778F34EC98A695DA4 /* OAuthURLBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24B612E229967473096424F3 /* OAuthURLBuilder.swift */; };
 		58D9FFD12F4D3FC8E9E71E8D /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DE7E999D5CF86A7EB3BD1EE /* RootView.swift */; };
+		60842B2BD7C5A5BEC475FF61 /* SCIMMeResponse.swift in Sources */ = {isa = PBXBuildFile; fileRef = C46455F306301F4D2B5B1975 /* SCIMMeResponse.swift */; };
 		6BB78C6B0AB21679812F20A7 /* LakeloomApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD573DAB2799C24220D8300E /* LakeloomApp.swift */; };
 		728FE8E279F7D4A65C1807E1 /* Spacing.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB390E143DB0511F80869D10 /* Spacing.swift */; };
 		72D4802210B0B07301D5FE1C /* OAuthTokenResponse.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED5E36043651209A5E8D6198 /* OAuthTokenResponse.swift */; };
 		790F685BE0B1502E1BF5D6CB /* InMemoryKeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3430D5ECDB96A6DB0C04B988 /* InMemoryKeychainStore.swift */; };
 		804658AF3C901EBEF86AFD59 /* LiveKeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 270FFCA7D7430385AAF3235E /* LiveKeychainStore.swift */; };
+		A2306A27ADE61654B3419815 /* DatabricksIdentityClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D82D35B3F8084B212198F1B4 /* DatabricksIdentityClient.swift */; };
 		A9A9B6E5D73E098BF63ED456 /* LaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E92DBDEAD48EBCB3407E2056 /* LaunchTests.swift */; };
 		BE06638BDEBB28D462DA36BE /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76EC9B52C55E27F72A2A5811 /* KeychainStore.swift */; };
 		C3AB16E8A88C42BC928CB271 /* SplashView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77239E5F929E3C7B6AFC5012 /* SplashView.swift */; };
@@ -56,7 +58,9 @@
 		A9587D0287EE479B330FBD7B /* KeychainError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainError.swift; sourceTree = "<group>"; };
 		AD97C68DA1D4FC5576952926 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		B510973AA4634C1A10C91680 /* LakeloomAppUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = LakeloomAppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		C46455F306301F4D2B5B1975 /* SCIMMeResponse.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SCIMMeResponse.swift; sourceTree = "<group>"; };
 		CB3582835A2477C2DC086CB5 /* SmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmokeTests.swift; sourceTree = "<group>"; };
+		D82D35B3F8084B212198F1B4 /* DatabricksIdentityClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatabricksIdentityClient.swift; sourceTree = "<group>"; };
 		E92DBDEAD48EBCB3407E2056 /* LaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchTests.swift; sourceTree = "<group>"; };
 		ED5E36043651209A5E8D6198 /* OAuthTokenResponse.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OAuthTokenResponse.swift; sourceTree = "<group>"; };
 		FB390E143DB0511F80869D10 /* Spacing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Spacing.swift; sourceTree = "<group>"; };
@@ -76,11 +80,21 @@
 		231F2384DB5E42092525EB16 /* Auth */ = {
 			isa = PBXGroup;
 			children = (
+				3012159D561D96ED7AFAD0D9 /* Identity */,
 				F14F83386A4520D736716314 /* Keychain */,
 				C9ED793EC6407B3C6F7892E7 /* OAuth */,
 				8581F1979FB579F7246225F4 /* AuthServicing.swift */,
 			);
 			path = Auth;
+			sourceTree = "<group>";
+		};
+		3012159D561D96ED7AFAD0D9 /* Identity */ = {
+			isa = PBXGroup;
+			children = (
+				D82D35B3F8084B212198F1B4 /* DatabricksIdentityClient.swift */,
+				C46455F306301F4D2B5B1975 /* SCIMMeResponse.swift */,
+			);
+			path = Identity;
 			sourceTree = "<group>";
 		};
 		3DA071C4C69DD8B184F1C53D /* App */ = {
@@ -303,6 +317,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				3BB0FB3E21ED6F5C074035EE /* AuthServicing.swift in Sources */,
+				A2306A27ADE61654B3419815 /* DatabricksIdentityClient.swift in Sources */,
 				790F685BE0B1502E1BF5D6CB /* InMemoryKeychainStore.swift in Sources */,
 				2D10BCFB0F2577F5669F5F0F /* KeychainError.swift in Sources */,
 				BE06638BDEBB28D462DA36BE /* KeychainStore.swift in Sources */,
@@ -312,6 +327,7 @@
 				42B7807778F34EC98A695DA4 /* OAuthURLBuilder.swift in Sources */,
 				E8D3DC0E3C9EBCBD75F016AA /* PKCE.swift in Sources */,
 				58D9FFD12F4D3FC8E9E71E8D /* RootView.swift in Sources */,
+				60842B2BD7C5A5BEC475FF61 /* SCIMMeResponse.swift in Sources */,
 				728FE8E279F7D4A65C1807E1 /* Spacing.swift in Sources */,
 				C3AB16E8A88C42BC928CB271 /* SplashView.swift in Sources */,
 			);
