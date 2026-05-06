@@ -67,6 +67,7 @@
 		B37F69C8902758965FD093B1 /* SessionRecord+CoreDataProperties.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBE7480D4A2F1A24A1DD51D1 /* SessionRecord+CoreDataProperties.swift */; };
 		B3DB9694585016D260636697 /* AuthServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D23CC687F33D45BCFBAC181 /* AuthServiceTests.swift */; };
 		B4A7BEB0114B8C09F9DDDC76 /* MetricsRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9803CE79226C45FB0CA23696 /* MetricsRegistryTests.swift */; };
+		B928D67951491C12D5BF828F /* LiveProjectAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0597EA047F5BEBE6CBB7DDAA /* LiveProjectAPIClient.swift */; };
 		B99C9065FC88829994026275 /* ProjectServicing.swift in Sources */ = {isa = PBXBuildFile; fileRef = D29C74DADD6B4754210F03D1 /* ProjectServicing.swift */; };
 		BE06638BDEBB28D462DA36BE /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76EC9B52C55E27F72A2A5811 /* KeychainStore.swift */; };
 		C036E864978471EFD652FC74 /* MetricsRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CC61D9CA56AD0C8BAD771C4 /* MetricsRegistry.swift */; };
@@ -112,6 +113,7 @@
 		01362864628D304B870FC1B0 /* HistogramSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistogramSnapshot.swift; sourceTree = "<group>"; };
 		03E8FE79AE4D85C07FAADD0D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		0477B5F44E5E04E54EE0D11B /* AuthDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthDiagnostics.swift; sourceTree = "<group>"; };
+		0597EA047F5BEBE6CBB7DDAA /* LiveProjectAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveProjectAPIClient.swift; sourceTree = "<group>"; };
 		0A546B2BD23A8DF605795514 /* LogLevel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogLevel.swift; sourceTree = "<group>"; };
 		0CC61D9CA56AD0C8BAD771C4 /* MetricsRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricsRegistry.swift; sourceTree = "<group>"; };
 		1344166B3CFBC0C986FDE091 /* OutboxStateChange+CoreDataProperties.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OutboxStateChange+CoreDataProperties.swift"; sourceTree = "<group>"; };
@@ -374,6 +376,7 @@
 			isa = PBXGroup;
 			children = (
 				B6F40820AD837CECA73569C2 /* CreateProjectPayload.swift */,
+				0597EA047F5BEBE6CBB7DDAA /* LiveProjectAPIClient.swift */,
 				82EBB7D69CBE9AEE2FDB27BE /* ProjectAPIClient.swift */,
 				9BCD4ACCF9BD2ED7814369D6 /* ProjectErrorMapper.swift */,
 				52465957FFBDB53389D2EA63 /* ProjectErrorResponse.swift */,
@@ -686,6 +689,7 @@
 				3F27BA877646636082C36878 /* LakeloomStore.xcdatamodeld in Sources */,
 				804658AF3C901EBEF86AFD59 /* LiveKeychainStore.swift in Sources */,
 				479AD18807A976C852153403 /* LiveOAuthClient.swift in Sources */,
+				B928D67951491C12D5BF828F /* LiveProjectAPIClient.swift in Sources */,
 				544BEB42F050C69CDC17EAD7 /* LogCategory.swift in Sources */,
 				DE43F79EA06860FAEB2ECF1A /* LogEntry.swift in Sources */,
 				46F4D19390B9B659DD9AD089 /* LogEntryCollector.swift in Sources */,
