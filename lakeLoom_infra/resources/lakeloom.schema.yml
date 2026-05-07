@@ -1,0 +1,86 @@
+# Unity Catalog schema for lakeLoom captured session data and downstream
+# processing tables (bronze ZeroBus target, silver/gold pipeline outputs).
+#
+# This is the ONLY resource file that should reference ${var.catalog} and
+# ${var.schema} directly. All other resources in this bundle (and in the
+# companion lakeLoom_app bundle) must reference the schema through
+# deployed-resource substitutions:
+#
+#   Catalog name:  ${resources.schemas.lakeloom_schema.catalog_name}
+#   Schema name:   ${resources.schemas.lakeloom_schema.name}
+#   Schema ID:     ${resources.schemas.lakeloom_schema.id}
+#   Full name:     ${resources.schemas.lakeloom_schema.catalog_name}.${resources.schemas.lakeloom_schema.name}
+#
+# This ensures the schema identity is always derived from the actual
+# deployed object, not from a loosely-coupled variable.
+#
+# NOTE: ZeroBus SPN access (USE_SCHEMA, SELECT, MODIFY) is applied
+# dynamically by the DDL notebook (target-table-ddl), not declared here.
+# Only admin, deploy SP, and user group access is declared below.
+
+resources:
+  schemas:
+    lakeloom_schema:
+      name: ${var.schema}
+      catalog_name: ${var.catalog}
+      comment: >
+        Unity Catalog schema for the lakeLoom rapid-MVP capture tool.
+        Stores the ZeroBus bronze target table (transcript_events_raw),
+        silver/gold pipeline outputs (session transcripts, project knowledge),
+        and Agent-generated build artifacts. Audio files are stored in
+        managed volumes within this schema.
+
+      lifecycle:
+        prevent_destroy: true
+
+      grants:
+        - principal: account users
+          privileges:
+            - USE_SCHEMA
+
+# ---------------------------------------------------------------------------
+# Per-target grant overrides
+# (ZeroBus SPN access is handled by the DDL notebook)
+# ---------------------------------------------------------------------------
+targets:
+
+  dev:
+    resources:
+      schemas:
+        lakeloom_schema:
+          grants:
+            - principal: account users
+              privileges:
+                - USE_SCHEMA
+            - principal: ${var.run_as_user}
+              privileges:
+                - ALL_PRIVILEGES
+
+  hls_fde:
+    resources:
+      schemas:
+        lakeloom_schema:
+          grants:
+            - principal: ${var.higher_level_service_principal}
+              privileges:
+                - ALL_PRIVILEGES
+            - principal: matthew.giglia@databricks.com
+              privileges:
+                - ALL_PRIVILEGES
+            - principal: account users
+              privileges:
+                - USE_SCHEMA
+                - SELECT
+
+  prod:
+    resources:
+      schemas:
+        lakeloom_schema:
+          grants:
+            - principal: matthew.giglia@databricks.com
+              privileges:
+                - ALL_PRIVILEGES
+            - principal: account users
+              privileges:
+                - USE_SCHEMA
+                - SELECT
