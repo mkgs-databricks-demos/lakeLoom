@@ -18,21 +18,25 @@ import SwiftUI
 public final class AppCoordinator {
 
     // MARK: Top-level state
+    //
+    // External readers see these as read-only. Module-internal writes
+    // (including same-module extensions like AppCoordinator+Onboarding)
+    // can mutate them. SwiftUI re-renders observers on every change.
 
-    public private(set) var phase: AppPhase = .coldStart
-    public private(set) var activeContext: ActiveContext?
-    public private(set) var onboarding: OnboardingState?
-    public private(set) var rootRoute: RootRoute?
-    public private(set) var transitioning: TransitionKind?
-    public private(set) var lastError: AppError?
+    public internal(set) var phase: AppPhase = .coldStart
+    public internal(set) var activeContext: ActiveContext?
+    public internal(set) var onboarding: OnboardingState?
+    public internal(set) var rootRoute: RootRoute?
+    public internal(set) var transitioning: TransitionKind?
+    public internal(set) var lastError: AppError?
 
     // MARK: Dependencies
 
-    private let auth: any AuthServicing
-    private let projects: any ProjectServicing
-    private let coreDataStack: any CoreDataStacking
-    private let logger: AppLogger
-    private let nowProvider: @Sendable () -> Date
+    let auth: any AuthServicing
+    let projects: any ProjectServicing
+    let coreDataStack: any CoreDataStacking
+    let logger: AppLogger
+    let nowProvider: @Sendable () -> Date
 
     // MARK: Long-running observation tasks
 
