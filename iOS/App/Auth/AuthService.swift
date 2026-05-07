@@ -136,14 +136,19 @@ public actor AuthService: AuthServicing {
         return workspacesCache.first(where: { $0.id == id })
     }
 
-    public nonisolated var events: AsyncStream<AuthEvent> {
-        AsyncStream { continuation in
+    public var events: AsyncStream<AuthEvent> {
+        get async {
+            let (stream, continuation) = AsyncStream<AuthEvent>.makeStream()
             let id = UUID()
-            Task { await self.subscribe(id: id, continuation: continuation) }
+            // Synchronous registration: by the time `await service.events`
+            // returns the subscriber is already in the broadcast set, so
+            // immediately-following events reach this subscriber.
+            eventContinuations[id] = continuation
             continuation.onTermination = { [weak self] _ in
                 guard let self else { return }
                 Task { await self.unsubscribe(id: id) }
             }
+            return stream
         }
     }
 
@@ -335,10 +340,6 @@ public actor AuthService: AuthServicing {
     }
 
     // MARK: - Private
-
-    private func subscribe(id: UUID, continuation: AsyncStream<AuthEvent>.Continuation) {
-        eventContinuations[id] = continuation
-    }
 
     private func unsubscribe(id: UUID) {
         eventContinuations.removeValue(forKey: id)
