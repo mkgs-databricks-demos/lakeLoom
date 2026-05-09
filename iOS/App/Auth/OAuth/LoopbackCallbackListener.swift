@@ -26,6 +26,14 @@ public actor LoopbackCallbackListener {
     /// `http://localhost:<port>/callback`.
     public static let callbackPath = "/callback"
 
+    /// The port the published Databricks `databricks-cli` U2M client
+    /// is registered against. The OAuth U2M docs prescribe
+    /// `http://localhost:8020` specifically; ephemeral ports are
+    /// rejected at `/authorize` even though RFC 8252 says they
+    /// should be allowed. Matching the documented port keeps
+    /// behaviour aligned with `databricks auth login` on the desktop.
+    public static let port: UInt16 = 8020
+
     /// HTML body served back to the browser once the callback is captured.
     /// The user sees this in the system browser sheet for the brief moment
     /// before we programmatically cancel the ASWebAuthenticationSession.
@@ -54,22 +62,19 @@ public actor LoopbackCallbackListener {
 
     // MARK: Lifecycle
 
-    /// Bind to `127.0.0.1` on an OS-chosen port. Returns the bound port
-    /// so the caller can compose the `redirect_uri`.
-    ///
-    /// Implementation note: `NWListener.parameters.requiredLocalEndpoint`
-    /// pins the bind to loopback so we can't accidentally accept
-    /// connections from the wider network. NWListener picks a free
-    /// ephemeral port when none is supplied.
+    /// Bind to `127.0.0.1:8020` (the port the published `databricks-cli`
+    /// U2M client is registered against). Returns the bound port so the
+    /// caller can compose the `redirect_uri`.
     public func start() async throws -> UInt16 {
         let parameters = NWParameters.tcp
+        // Pin to the IPv4 loopback interface so we can't accidentally
+        // accept connections from the wider network. IPv6 is excluded
+        // because Databricks' redirect uses the literal `localhost`,
+        // which we want resolved to `127.0.0.1`.
         parameters.requiredLocalEndpoint = NWEndpoint.hostPort(
             host: .ipv4(.loopback),
-            port: .any
+            port: NWEndpoint.Port(rawValue: Self.port) ?? .any
         )
-        // Disable IPv6 — Databricks' OAuth server only redirects to the
-        // exact `redirect_uri` we send, and we want that to be a v4
-        // localhost so DNS / browser routing is deterministic.
         parameters.requiredInterfaceType = .loopback
 
         let listener: NWListener
