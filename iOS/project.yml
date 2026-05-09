@@ -87,6 +87,9 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait"
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        # Camera access is required to scan the QR pairing code from
+        # the lakeLoom Databricks App (see Module 01 / hi_genie note).
+        INFOPLIST_KEY_NSCameraUsageDescription: "lakeLoom uses the camera to scan the pairing QR code shown by the lakeLoom Databricks App."
       configs:
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: com.databricks.lakeloom.dev
