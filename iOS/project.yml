@@ -39,7 +39,7 @@ settings:
     DEAD_CODE_STRIPPING: YES
     IPHONEOS_DEPLOYMENT_TARGET: "26.0"
     TARGETED_DEVICE_FAMILY: "1,2"
-    DEVELOPMENT_TEAM: ""
+    DEVELOPMENT_TEAM: "83376EYALS"
     # Xcode 26.2 recommended settings — accepted on the Module 09 branch.
     # Generates Swift symbol extensions for the asset catalog (e.g.
     # `.AccentColor` accessors) so we don't string-key Assets.xcassets.
