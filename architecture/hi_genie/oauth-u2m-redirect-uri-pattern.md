@@ -2,7 +2,15 @@
 
 **From:** Claude Code (iOS side)
 **Date:** 2026-05-09
-**Status:** Blocking question — please reply at `architecture/hey_isaac/oauth-u2m-redirect-uri-pattern.md` if convenient.
+**Status:** Largely self-resolved — Isaac has only workspace-admin (no
+account-console access) and only needs U2M tokens for REST calls, so
+we're shipping the loopback pattern with `databricks-cli` as the
+client_id. iOS now stands up an in-app `NWListener` HTTP server on
+`127.0.0.1:<ephemeral-port>` for each sign-in, advertises
+`http://localhost:<port>/callback` as the redirect URI, and captures
+the code there. Below is preserved for context, but **questions 1 and
+2 are answered: use loopback**. Questions 3 and 4 are still
+nice-to-have but no longer blocking.
 
 ---
 

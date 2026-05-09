@@ -10,6 +10,7 @@
 		00AD123FDEA275A1CFF90E77 /* SCIMMeResponseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65650403FBD0DA24FB6CB4A4 /* SCIMMeResponseTests.swift */; };
 		01BE896575837ECEAFEE8576 /* LogValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF85026F92C9717BD6EFA84F /* LogValue.swift */; };
 		0255ED0B7C9129FAE5F4C4A8 /* OAuthClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B445B590F613B043D7DD81E /* OAuthClient.swift */; };
+		06DAF4789D41613978786BCA /* LoopbackCallbackListener.swift in Sources */ = {isa = PBXBuildFile; fileRef = 501DB5AAD3F9241B14C422BA /* LoopbackCallbackListener.swift */; };
 		09440C222B1F3D0542CD4516 /* ProjectMetadataCache+DTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = 591E3564492C4623474DCB96 /* ProjectMetadataCache+DTO.swift */; };
 		0DAB4586DA0FE14F9324028B /* AppPhase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DD1C0206CBD038592374E49 /* AppPhase.swift */; };
 		0E66FFDCC185E50457F59BB2 /* ProjectPickerStepView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 782BC395A1685999029E4A5E /* ProjectPickerStepView.swift */; };
@@ -172,6 +173,7 @@
 		488CC02E5AC5E5FA53FDFC00 /* LakeloomStore.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = LakeloomStore.xcdatamodel; sourceTree = "<group>"; };
 		4B7AF7DBFDC7ED33B0461C83 /* IdentityConfirmationStepView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdentityConfirmationStepView.swift; sourceTree = "<group>"; };
 		4E06278EEEA7B8DD88A0B662 /* ProjectCreateStepView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectCreateStepView.swift; sourceTree = "<group>"; };
+		501DB5AAD3F9241B14C422BA /* LoopbackCallbackListener.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopbackCallbackListener.swift; sourceTree = "<group>"; };
 		51C517E2EB6C119C41215C9F /* StubDatabricksIdentityClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StubDatabricksIdentityClient.swift; sourceTree = "<group>"; };
 		52465957FFBDB53389D2EA63 /* ProjectErrorResponse.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectErrorResponse.swift; sourceTree = "<group>"; };
 		5396E67C33EDA10DF7BF72F4 /* UUIDv7.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UUIDv7.swift; sourceTree = "<group>"; };
@@ -600,6 +602,7 @@
 			isa = PBXGroup;
 			children = (
 				DC83A2DFC5EDFB9179E66647 /* LiveOAuthClient.swift */,
+				501DB5AAD3F9241B14C422BA /* LoopbackCallbackListener.swift */,
 				7B445B590F613B043D7DD81E /* OAuthClient.swift */,
 				ED5E36043651209A5E8D6198 /* OAuthTokenResponse.swift */,
 				24B612E229967473096424F3 /* OAuthURLBuilder.swift */,
@@ -869,6 +872,7 @@
 				CA3E14B7A7B82CB82CE1527C /* LogLevel.swift in Sources */,
 				66B121FBE5DB4DD286961945 /* LogMetadata.swift in Sources */,
 				01BE896575837ECEAFEE8576 /* LogValue.swift in Sources */,
+				06DAF4789D41613978786BCA /* LoopbackCallbackListener.swift in Sources */,
 				76992E0A33D8B44852978440 /* MetricsCatalog.swift in Sources */,
 				C036E864978471EFD652FC74 /* MetricsRegistry.swift in Sources */,
 				0255ED0B7C9129FAE5F4C4A8 /* OAuthClient.swift in Sources */,

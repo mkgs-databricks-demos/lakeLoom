@@ -12,13 +12,15 @@ public protocol OAuthClient: Sendable {
     /// endpoint. Returns the discovered authorization + token endpoints.
     func discoverEndpoints(workspaceURL: URL) async throws -> OAuthDiscoveryDocument
 
-    /// Performs the full OAuth code-for-token exchange using
-    /// `ASWebAuthenticationSession` to present the authorization URL.
+    /// Performs the full OAuth code-for-token exchange. The implementation
+    /// chooses the redirect URI strategy — production uses an in-app
+    /// loopback HTTP listener (Databricks U2M's `databricks-cli` client
+    /// is registered with `http://localhost` redirects only). Tests stub
+    /// the whole flow.
     @MainActor
     func performAuthorizationCodeFlow(
         workspaceURL: URL,
         clientID: String,
-        redirectURI: URL,
         scopes: [String],
         presenting: ASWebAuthenticationPresentationContextProviding
     ) async throws -> OAuthTokenResponse

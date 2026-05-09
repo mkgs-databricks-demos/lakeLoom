@@ -22,10 +22,7 @@ struct LakeloomApp: App {
         }
 
         let auth = AuthService(
-            config: AuthConfig(
-                clientID: AppConfig.oauthClientID,
-                redirectURI: AppConfig.redirectURI
-            ),
+            config: AuthConfig(clientID: AppConfig.oauthClientID),
             oauth: LiveOAuthClient(),
             keychain: LiveKeychainStore(),
             identity: LiveDatabricksIdentityClient()
@@ -55,13 +52,10 @@ struct LakeloomApp: App {
 
 /// App-level configuration baked at build time.
 enum AppConfig {
-    /// Published Databricks OAuth client ID. Replace before TestFlight
-    /// — pulled from a build-config setting per Module 10 §5.4.
-    /// Empty string here keeps the coordinator wired without committing
-    /// a real client ID to the repo.
-    static let oauthClientID: String = ""
-
-    /// Custom URL scheme registered in Info.plist for the OAuth
-    /// callback. Matches the value the published OAuth app expects.
-    static let redirectURI: URL = URL(string: "lakeloom://oauth/callback") ?? URL(fileURLWithPath: "/")
+    /// Published Databricks OAuth client ID for U2M flows. The
+    /// `databricks-cli` client is registered with `http://localhost`
+    /// loopback redirects only, which is why we run an in-app
+    /// `LoopbackCallbackListener` instead of a custom URL scheme.
+    /// See Module 01 §11 for the redirect URI strategy.
+    static let oauthClientID: String = "databricks-cli"
 }

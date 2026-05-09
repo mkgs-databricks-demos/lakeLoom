@@ -4,16 +4,15 @@ import Foundation
 /// Configuration baked into the app binary.
 ///
 /// `clientID` is the published Databricks OAuth client ID. PKCE replaces
-/// the client_secret; `clientID` is not a secret. `redirectURI` matches
-/// the URL scheme registered in `Info.plist` (Module 01 §11.1).
+/// the client_secret; `clientID` is not a secret. The redirect URI is
+/// composed at runtime against the in-app loopback HTTP listener, so
+/// it isn't part of the static config.
 public struct AuthConfig: Sendable {
     public let clientID: String
-    public let redirectURI: URL
     public let scopes: [String]
 
-    public init(clientID: String, redirectURI: URL, scopes: [String] = ["all-apis", "offline_access"]) {
+    public init(clientID: String, scopes: [String] = ["all-apis", "offline_access"]) {
         self.clientID = clientID
-        self.redirectURI = redirectURI
         self.scopes = scopes
     }
 }
@@ -228,7 +227,6 @@ public actor AuthService: AuthServicing {
             tokens = try await oauth.performAuthorizationCodeFlow(
                 workspaceURL: normalizedURL,
                 clientID: config.clientID,
-                redirectURI: config.redirectURI,
                 scopes: config.scopes,
                 presenting: presenting
             )
