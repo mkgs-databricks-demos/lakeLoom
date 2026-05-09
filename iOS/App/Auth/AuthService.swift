@@ -197,12 +197,27 @@ public actor AuthService: AuthServicing {
         workspaceURL: URL,
         presenting: ASWebAuthenticationPresentationContextProviding
     ) async throws -> WorkspaceCredential {
+        await logger.info(
+            "signin.start",
+            metadata: ["workspace_host": .string(workspaceURL.host ?? "<no-host>")]
+        )
+
         let normalizedURL: URL
         do {
             normalizedURL = try Self.normalize(workspaceURL: workspaceURL)
         } catch let error as AuthError {
+            await logger.error(
+                "signin.url_normalize_failed",
+                metadata: ["raw_url": .string(workspaceURL.absoluteString)],
+                errorCode: "invalid_workspace_url"
+            )
             throw error
         } catch {
+            await logger.error(
+                "signin.url_normalize_failed",
+                metadata: ["raw_url": .string(workspaceURL.absoluteString)],
+                errorCode: "invalid_workspace_url"
+            )
             throw AuthError.invalidWorkspaceURL(workspaceURL.absoluteString)
         }
 
@@ -219,11 +234,22 @@ public actor AuthService: AuthServicing {
             )
         } catch let error as OAuthError {
             await self.recordSignInOutcome(error: error)
+            await logger.error(
+                "signin.oauth_failed",
+                metadata: ["reason": .string(String(describing: error))],
+                errorCode: String(describing: error).split(separator: "(").first.map(String.init) ?? "oauth_failed"
+            )
             throw mapAuthError(error)
         } catch {
             await self.recordSignInOutcome(error: nil)
+            await logger.error(
+                "signin.oauth_unexpected",
+                metadata: ["reason": .string(error.localizedDescription)],
+                errorCode: "oauth_failed"
+            )
             throw AuthError.oauthFailed(reason: error.localizedDescription)
         }
+        await logger.info("signin.oauth_ok")
 
         // Fetch identity using the freshly-issued bearer.
         let me: SCIMMeResponse
@@ -231,17 +257,35 @@ public actor AuthService: AuthServicing {
             me = try await identity.fetchMe(workspaceURL: normalizedURL, bearerToken: tokens.accessToken)
         } catch let error as IdentityClientError {
             await self.recordSignInOutcome(error: nil)
+            await logger.error(
+                "signin.identity_failed",
+                metadata: ["reason": .string(String(describing: error))],
+                errorCode: "identity_fetch_failed"
+            )
             throw mapAuthError(error)
         } catch {
             await self.recordSignInOutcome(error: nil)
+            await logger.error(
+                "signin.identity_unexpected",
+                metadata: ["reason": .string(error.localizedDescription)],
+                errorCode: "identity_fetch_failed"
+            )
             throw AuthError.identityFetchFailed(reason: error.localizedDescription)
         }
+        await logger.info("signin.identity_ok")
 
         // Hop into actor isolation to persist + activate.
         let credential = try await self.persistNewSignIn(
             normalizedURL: normalizedURL,
             user: me.toUserIdentity(),
             tokens: tokens
+        )
+        await logger.info(
+            "signin.persisted",
+            metadata: [
+                "workspace_id": .uuidPrefix(credential.id),
+                "user_id": .uuidPrefix(credential.user.userID)
+            ]
         )
         return credential
     }
