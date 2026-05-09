@@ -88,28 +88,36 @@ public actor LoopbackCallbackListener {
             Task { await self?.handle(connection: connection) }
         }
 
-        // Wait for the listener to be `.ready`.
+        // Wait for the listener to be `.ready`. The state handler can
+        // fire multiple times during the listener's lifetime (notably,
+        // again with `.cancelled` when stop() runs), so gate on a
+        // one-shot flag to avoid double-resuming the continuation. The
+        // handler is invoked on our serial `queue`, so plain mutable
+        // state without a lock is safe.
+        let oneShot = ContinuationOneShot()
         let bound: UInt16 = try await withCheckedThrowingContinuation { continuation in
-            // `weak self` would mean the actor could be gone before the
-            // listener finishes its state walk, but state-update callbacks
-            // are queue-bound so capture as `unowned-actor` via Task.
             listener.stateUpdateHandler = { state in
+                guard !oneShot.fired else { return }
                 switch state {
                 case .ready:
                     if let port = listener.port {
+                        oneShot.fired = true
                         continuation.resume(returning: port.rawValue)
                     } else {
+                        oneShot.fired = true
                         continuation.resume(throwing: OAuthError.authorizationFailed(
                             reason: "loopback listener ready without port"
                         ))
                     }
                 case .failed(let error):
+                    oneShot.fired = true
                     continuation.resume(throwing: OAuthError.authorizationFailed(
                         reason: "loopback listener failed: \(error.localizedDescription)"
                     ))
                 case .cancelled:
-                    // Only relevant if cancelled BEFORE ready; cleanup path
-                    // handles post-ready cancellation through stop().
+                    // Only relevant if cancelled BEFORE ready; cleanup
+                    // path handles post-ready cancellation through stop().
+                    oneShot.fired = true
                     continuation.resume(throwing: CancellationError())
                 default:
                     break
@@ -173,6 +181,7 @@ public actor LoopbackCallbackListener {
     }
 
     private func handle(connection: NWConnection) {
+        Task { await self.logger.debug("oauth.loopback.connection_received") }
         connection.start(queue: queue)
         connection.receive(minimumIncompleteLength: 1, maximumLength: 8_192) { [weak self] data, _, _, error in
             guard let self else { return }
@@ -213,6 +222,10 @@ public actor LoopbackCallbackListener {
             return
         }
         let path = String(parts[1])
+        await logger.debug(
+            "oauth.loopback.request",
+            metadata: ["path_prefix": .string(String(path.prefix(64)))]
+        )
 
         // Reject anything that isn't /callback.
         guard path.hasPrefix(Self.callbackPath) else {
@@ -277,4 +290,12 @@ public actor LoopbackCallbackListener {
             connection.cancel()
         })
     }
+}
+
+/// One-shot mutable flag for guarding a `CheckedContinuation` against
+/// double-resume across multiple `stateUpdateHandler` invocations on
+/// a serial queue. Marked `@unchecked Sendable` because the only
+/// access is queue-bound.
+private final class ContinuationOneShot: @unchecked Sendable {
+    var fired = false
 }
