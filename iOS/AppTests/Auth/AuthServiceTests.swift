@@ -11,7 +11,6 @@ struct AuthServiceTests {
 
     private static let workspaceURL = URL(string: "https://acme.cloud.databricks.com")!
     private static let clientID = "lakeloom-test-client"
-    private static let redirectURI = URL(string: "lakeloom://oauth/callback")!
 
     private func makeService(
         oauth: FakeOAuthClient = FakeOAuthClient(),
@@ -19,7 +18,7 @@ struct AuthServiceTests {
         identity: StubDatabricksIdentityClient = StubDatabricksIdentityClient(),
         now: Date = Date(timeIntervalSince1970: 1_700_000_000)
     ) -> (AuthService, FakeOAuthClient, InMemoryKeychainStore, StubDatabricksIdentityClient) {
-        let config = AuthConfig(clientID: Self.clientID, redirectURI: Self.redirectURI)
+        let config = AuthConfig(clientID: Self.clientID)
         let service = AuthService(
             config: config,
             oauth: oauth,
