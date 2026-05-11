@@ -1,3 +1,4 @@
+-- Databricks notebook source
 -- Create the ZeroBus target table used by lakeLoom transcript/event ingestion.
 --
 -- This task is intentionally idempotent so the platform bootstrap job can be

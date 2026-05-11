@@ -24,6 +24,19 @@ def print_header(title: str) -> None:
     print("=" * 72)
 
 
+def set_task_value(key: str, value: str) -> None:
+    try:
+        from pyspark.dbutils import DBUtils
+        from pyspark.sql import SparkSession
+
+        spark = SparkSession.getActiveSession() or SparkSession.builder.getOrCreate()
+        dbutils = DBUtils(spark)
+        dbutils.jobs.taskValues.set(key=key, value=value)
+        print(f"Set task value {key} = {value}")
+    except Exception as exc:
+        print(f"Could not set task value {key}: {exc}")
+
+
 def get_workspace_id(client: WorkspaceClient) -> Optional[str]:
     candidates = []
 
@@ -154,6 +167,7 @@ print(f"Display name:            {spn_display_name}")
 print(f"Application ID:          {spn_application_id}")
 print(f"Workspace object ID:     {spn.id}")
 print(f"Created this run:        {is_new_spn}")
+set_task_value("spn_application_id", spn_application_id)
 
 print_header("Secret Scope Provisioning")
 secrets_to_store = {

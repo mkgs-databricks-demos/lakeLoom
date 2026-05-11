@@ -29,6 +29,11 @@ Project-local durable context for `lakeLoom_infra` when global instructions are 
 * Bundle summary showed resources tracked but not yet deployed at the time of review.
 * `resources/uc_setup.job.yml` is still empty and remains the primary blocker to operational deployment.
 * Existing bundle resources already include a UC schema, session audio volume, secret scope, SQL warehouse, and Lakebase project.
+* `resources/platform_bootstrap.job.yml` now runs all bootstrap steps as notebook tasks: the Python task uses `../src/platform_bootstrap/ensure-service-principal.ipynb`, and the SQL warehouse tasks use `../src/platform_bootstrap/transcript-events-raw-ddl.sql` and `../src/platform_bootstrap/validate-platform.sql`.
+* The bootstrap job continues to use serverless environment version `${var.serverless_environment_version}` and currently validates successfully with `bundle validate --strict --target dev`.
+* `src/platform_bootstrap/ensure-service-principal.ipynb` is a thin notebook wrapper that forwards job parameters into the adjacent reusable Python file `ensure-service-principal.py`, preserving Python classes/functions in a `.py` file.
+* `src/platform_bootstrap/transcript-events-raw-ddl.sql` and `src/platform_bootstrap/validate-platform.sql` were converted into SQL source notebooks by adding the Databricks source header.
+* Attempted direct edits to persist Unity Catalog `GRANT` statements in `src/platform_bootstrap/transcript-events-raw-ddl.sql` were safety-blocked because permission-changing SQL file writes are restricted in this editor; the intended logic remains to resolve the SPN via `:spn_application_id` with `try_secret(:secret_scope_name, :client_id_dbs_key)` fallback and apply dynamic backtick-quoted `GRANT USE CATALOG`, `GRANT USE SCHEMA`, `GRANT SELECT`, and `GRANT MODIFY` statements.
 
 ## hi_genie Findings That Change Infra Planning
 

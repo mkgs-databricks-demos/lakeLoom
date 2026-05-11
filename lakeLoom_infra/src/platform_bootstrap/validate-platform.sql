@@ -1,3 +1,4 @@
+-- Databricks notebook source
 -- Validation task for lakeLoom platform bootstrap.
 --
 -- This SQL file validates the post-bootstrap platform contract. It:

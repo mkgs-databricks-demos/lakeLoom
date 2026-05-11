@@ -52,44 +52,40 @@ resources:
 
       tasks:
         - task_key: ensure_service_principal
-          spark_python_task:
-            python_file: ../src/platform_bootstrap/ensure-service-principal.py
-            parameters:
-              - --catalog_use
-              - "{{job.parameters.catalog_use}}"
-              - --schema_use
-              - "{{job.parameters.schema_use}}"
-              - --secret_scope_name
-              - "{{job.parameters.secret_scope_name}}"
-              - --client_id_dbs_key
-              - "{{job.parameters.client_id_dbs_key}}"
-              - --client_secret_dbs_key
-              - "{{job.parameters.client_secret_dbs_key}}"
-              - --zerobus_stream_pool_size
-              - "{{job.parameters.zerobus_stream_pool_size}}"
+          notebook_task:
+            notebook_path: ../src/platform_bootstrap/ensure-service-principal.ipynb
+            source: WORKSPACE
+            base_parameters:
+              catalog_use: "{{job.parameters.catalog_use}}"
+              schema_use: "{{job.parameters.schema_use}}"
+              secret_scope_name: "{{job.parameters.secret_scope_name}}"
+              client_id_dbs_key: "{{job.parameters.client_id_dbs_key}}"
+              client_secret_dbs_key: "{{job.parameters.client_secret_dbs_key}}"
+              zerobus_stream_pool_size: "{{job.parameters.zerobus_stream_pool_size}}"
           environment_key: default
 
         - task_key: create_transcript_events_raw_table
           depends_on:
             - task_key: ensure_service_principal
-          sql_task:
-            file:
-              path: ../src/platform_bootstrap/transcript-events-raw-ddl.sql
-              source: WORKSPACE
+          notebook_task:
+            notebook_path: ../src/platform_bootstrap/transcript-events-raw-ddl.sql
+            source: WORKSPACE
             warehouse_id: ${resources.sql_warehouses.infra_warehouse.id}
-            parameters:
+            base_parameters:
               catalog_use: "{{job.parameters.catalog_use}}"
               schema_use: "{{job.parameters.schema_use}}"
+              secret_scope_name: "{{job.parameters.secret_scope_name}}"
+              client_id_dbs_key: "{{job.parameters.client_id_dbs_key}}"
+              spn_application_id: "{{tasks.ensure_service_principal.values.spn_application_id}}"
 
         - task_key: validate_platform
           depends_on:
             - task_key: create_transcript_events_raw_table
-          sql_task:
-            file:
-              path: ../src/platform_bootstrap/validate-platform.sql
-              source: WORKSPACE
+          notebook_task:
+            notebook_path: ../src/platform_bootstrap/validate-platform.sql
+            source: WORKSPACE
             warehouse_id: ${resources.sql_warehouses.infra_warehouse.id}
-            parameters:
+            base_parameters:
               catalog_use: "{{job.parameters.catalog_use}}"
               schema_use: "{{job.parameters.schema_use}}"
               secret_scope_name: "{{job.parameters.secret_scope_name}}"
