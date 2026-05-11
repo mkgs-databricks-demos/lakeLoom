@@ -68,7 +68,7 @@ resources:
           depends_on:
             - task_key: ensure_service_principal
           notebook_task:
-            notebook_path: ../src/platform_bootstrap/transcript-events-raw-ddl.sql
+            notebook_path: ../src/platform_bootstrap/transcript-events-raw-ddl-notebook.ipynb
             source: WORKSPACE
             warehouse_id: ${resources.sql_warehouses.infra_warehouse.id}
             base_parameters:
