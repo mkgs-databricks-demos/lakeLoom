@@ -1,0 +1,130 @@
+# Lakebase Autoscaling — lakeLoom OLTP Database
+#
+# PostgreSQL-compatible database for the lakeLoom Databricks App.
+# Provides low-latency OLTP storage for the AppKit application layer —
+# projects, sessions, sync state, user preferences, and Agent-generated
+# build artifacts (requirements docs, architecture diagrams, session plans).
+#
+# Resource hierarchy:
+#   postgres_project → postgres_branch (auto-created with project)
+#
+# The project creates a Lakebase Autoscaling instance with a default
+# "production" branch and a read-write endpoint. Autoscaling limits are
+# controlled via default_endpoint_settings on the project — the endpoint
+# itself is NOT declared as a bundle resource because the project
+# auto-provisions it and only one READ_WRITE endpoint is allowed per branch.
+#
+# Connection model:
+#   AppKit's Lakebase plugin connects via direct Postgres wire protocol
+#   (port 5432) using OAuth token rotation — NOT the Data API. The platform
+#   injects PGHOST, PGPORT, PGDATABASE, PGUSER env vars into the app
+#   automatically when a database resource is configured.
+#
+# NOTE: Deploying this resource starts the Lakebase instance and incurs
+#       cost immediately. The endpoint uses autoscaling with scale-to-zero
+#       capability (min 0.5 CU) to minimize idle cost.
+#
+# ── Post-deploy manual steps ─────────────────────────────────────────────
+#
+# These integrations have no DAB resource type or API — they require
+# manual configuration in the Lakebase App UI after the first deploy.
+#
+#   1. Enable the Data API (optional — for external REST clients)
+#      Lakebase App → project → Data API → "Enable Data API"
+#      NOT required for AppKit — the Lakebase plugin uses direct Postgres
+#      wire protocol.
+#
+#   2. Register in Unity Catalog (optional)
+#      Catalog Explorer → Create catalog → type "Lakebase Autoscaling"
+#      → select project / production branch / databricks_postgres database.
+#      Enables SQL warehouse queries, cross-source joins, and governance.
+#
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Requires Databricks CLI >= 0.287.0
+
+resources:
+
+  # -------------------------------------------------------------------------
+  # Project — top-level Lakebase Autoscaling container
+  # -------------------------------------------------------------------------
+  postgres_projects:
+    lakeloom_lakebase:
+      project_id: ${var.lakebase_project_id}
+      display_name: lakeLoom — Lakebase
+      pg_version: 17
+
+      # Retain 7 days of history for point-in-time recovery (default)
+      history_retention_duration: "604800s"
+
+      # Controls the auto-created read-write endpoint on the production branch.
+      # Per-target overrides below adjust max CU for each environment.
+      default_endpoint_settings:
+        autoscaling_limit_min_cu: 0.5
+        autoscaling_limit_max_cu: 2
+
+      # Prevent accidental deletion — this project holds operational data
+      lifecycle:
+        prevent_destroy: true
+
+  # -------------------------------------------------------------------------
+  # Branch — production (auto-created, not managed as a bundle resource)
+  #
+  # The project auto-creates a protected "production" branch with a
+  # read-write endpoint at creation time. Like the endpoint, the branch
+  # is NOT declared as a bundle resource because:
+  #   1. It already exists when the project is created
+  #   2. Terraform cannot import pre-existing branches without state surgery
+  #   3. Protection and expiry are correct by default
+  #
+  # Auto-created resource identifiers (query via CLI or REST API):
+  #   Branch:   projects/{project_id}/branches/production  (branch_id: production)
+  #   Database: projects/{project_id}/branches/production/databases/{auto-generated-id}
+  #             (postgres_database name: databricks_postgres — NOT the resource ID)
+  #   Endpoint: projects/{project_id}/branches/production/endpoints/primary
+  #             (endpoint_id: primary — READ_WRITE, autoscaling)
+  #
+  # The project_id is set via ${var.lakebase_project_id} — target-specific
+  # to ensure dev and production have isolated OLTP databases:
+  #   dev:     dev-matthew-giglia-lakeloom
+  #   hls_fde: lakeloom-hls-fde
+  #
+  # After first deploy of a new project, discover the database ID:
+  #   databricks postgres list-databases projects/{project_id}/branches/production
+  #
+  # To modify branch settings, use the Lakebase UI or CLI directly.
+  # -------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Target-specific overrides
+# ---------------------------------------------------------------------------
+targets:
+
+  dev:
+    resources:
+      postgres_projects:
+        lakeloom_lakebase:
+          display_name: lakeLoom — Lakebase [${bundle.target}]
+          # Minimal compute for development
+          default_endpoint_settings:
+            autoscaling_limit_min_cu: 0.5
+            autoscaling_limit_max_cu: 2
+
+  hls_fde:
+    resources:
+      postgres_projects:
+        lakeloom_lakebase:
+          display_name: lakeLoom — Lakebase
+          # Higher ceiling for production workloads
+          default_endpoint_settings:
+            autoscaling_limit_min_cu: 0.5
+            autoscaling_limit_max_cu: 4
+
+  prod:
+    resources:
+      postgres_projects:
+        lakeloom_lakebase:
+          display_name: lakeLoom — Lakebase
+          default_endpoint_settings:
+            autoscaling_limit_min_cu: 0.5
+            autoscaling_limit_max_cu: 4
