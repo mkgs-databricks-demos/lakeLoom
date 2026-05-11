@@ -35,31 +35,31 @@ public struct AppLogger: Sendable {
 
     // MARK: Public level entry points
 
-    public func trace(_ message: @autoclosure () -> String, metadata: LogMetadata = [:]) async {
+    public func trace(_ message: @autoclosure @Sendable () -> String, metadata: LogMetadata = [:]) async {
         #if DEBUG
         await emit(.trace, message: message(), metadata: metadata)
         #endif
     }
 
-    public func debug(_ message: @autoclosure () -> String, metadata: LogMetadata = [:]) async {
+    public func debug(_ message: @autoclosure @Sendable () -> String, metadata: LogMetadata = [:]) async {
         #if DEBUG
         await emit(.debug, message: message(), metadata: metadata)
         #endif
     }
 
-    public func info(_ message: @autoclosure () -> String, metadata: LogMetadata = [:]) async {
+    public func info(_ message: @autoclosure @Sendable () -> String, metadata: LogMetadata = [:]) async {
         await emit(.info, message: message(), metadata: metadata)
     }
 
-    public func notice(_ message: @autoclosure () -> String, metadata: LogMetadata = [:]) async {
+    public func notice(_ message: @autoclosure @Sendable () -> String, metadata: LogMetadata = [:]) async {
         await emit(.notice, message: message(), metadata: metadata)
     }
 
-    public func warning(_ message: @autoclosure () -> String, metadata: LogMetadata = [:]) async {
+    public func warning(_ message: @autoclosure @Sendable () -> String, metadata: LogMetadata = [:]) async {
         await emit(.warning, message: message(), metadata: metadata)
     }
 
-    public func error(_ message: @autoclosure () -> String, metadata: LogMetadata = [:], errorCode: String? = nil) async {
+    public func error(_ message: @autoclosure @Sendable () -> String, metadata: LogMetadata = [:], errorCode: String? = nil) async {
         var combined = metadata
         if let errorCode {
             combined = LogMetadata(metadata.entries.map { ($0.key, $0.value) } + [("error_code", .errorCode(errorCode))])
@@ -67,7 +67,7 @@ public struct AppLogger: Sendable {
         await emit(.error, message: message(), metadata: combined, errorCode: errorCode)
     }
 
-    public func fault(_ message: @autoclosure () -> String, metadata: LogMetadata = [:]) async {
+    public func fault(_ message: @autoclosure @Sendable () -> String, metadata: LogMetadata = [:]) async {
         await emit(.fault, message: message(), metadata: metadata)
     }
 

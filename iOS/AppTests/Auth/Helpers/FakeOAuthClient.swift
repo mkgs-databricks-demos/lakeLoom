@@ -74,7 +74,6 @@ public final class FakeOAuthClient: OAuthClient {
     public func performAuthorizationCodeFlow(
         workspaceURL: URL,
         clientID: String,
-        redirectURI: URL,
         scopes: [String],
         presenting: ASWebAuthenticationPresentationContextProviding
     ) async throws -> OAuthTokenResponse {

@@ -191,18 +191,22 @@ Calls `GET /api/2.0/preview/scim/v2/Me` with a bearer token. Returns `UserIdenti
 
 ```swift
 enum OAuthConfig {
-    /// Public client_id of the registered Databricks OAuth app.
-    /// Baked into the app binary; not a secret (PKCE replaces client_secret).
-    static let clientID = "<published-databricks-oauth-client-id>"
-
-    /// Custom URL scheme registered in Info.plist.
-    static let redirectURI = URL(string: "lakeloom://oauth/callback")!
+    /// Published Databricks OAuth U2M client_id. Registered with
+    /// `http://localhost` redirects only — see §11 for why this drives
+    /// an in-app loopback HTTP listener instead of a custom URL scheme.
+    /// Not a secret (PKCE replaces client_secret).
+    static let clientID = "databricks-cli"
 
     /// Scopes requested on every login. v1 uses `all-apis offline_access`.
     /// `offline_access` is required to receive a refresh token.
     static let scopes = ["all-apis", "offline_access"]
 }
 ```
+
+The redirect URI is **not** a static constant. The `LiveOAuthClient`
+stands up an in-app HTTP listener on `127.0.0.1:<ephemeral-port>` for
+each sign-in attempt and composes
+`http://localhost:<port>/callback` on the fly. See §5.4 and §11.
 
 ### 5.2 Step 1 — Workspace URL Validation
 
@@ -228,15 +232,18 @@ func generatePKCE() -> (verifier: String, challenge: String) {
 }
 ```
 
-### 5.4 Step 3 — Authorization Request
+### 5.4 Step 3 — Stand up loopback listener and build authorize URL
 
-Constructs URL:
+Before composing the authorize URL, `LiveOAuthClient` creates a
+`LoopbackCallbackListener` (a small `NWListener`-backed HTTP server
+bound to `127.0.0.1` on an OS-chosen ephemeral port) and asks it to
+start. The bound port is then baked into the redirect URI.
 
 ```
 {authorization_endpoint}?
-  client_id={clientID}
+  client_id=databricks-cli
   &response_type=code
-  &redirect_uri=lakeloom://oauth/callback
+  &redirect_uri=http://localhost:{port}/callback
   &scope=all-apis+offline_access
   &code_challenge={challenge}
   &code_challenge_method=S256
@@ -245,45 +252,76 @@ Constructs URL:
 
 State is verified on callback to defend against CSRF.
 
-### 5.5 Step 4 — Present ASWebAuthenticationSession
+Why loopback and not a custom URL scheme: the `databricks-cli` U2M
+client registered by Databricks accepts redirects to `http://localhost`
+only. iOS does not let `ASWebAuthenticationSession` capture an
+`http://` callback via `callbackURLScheme:` (that API is custom-scheme
+only), so the app captures the redirect itself by running an HTTP
+listener inside the process.
+
+### 5.5 Step 4 — Present ASWebAuthenticationSession (browser only)
+
+`ASWebAuthenticationSession` is reduced to a browser presenter; the
+authorization code is captured by `LoopbackCallbackListener.captureCallback()`,
+not by ASWAS's completion handler.
 
 ```swift
 @MainActor
-func presentLogin(authorizationURL: URL,
-                  presenting: ASWebAuthenticationPresentationContextProviding) async throws -> URL {
-    try await withCheckedThrowingContinuation { continuation in
-        let session = ASWebAuthenticationSession(
-            url: authorizationURL,
-            callbackURLScheme: "lakeloom"
-        ) { callbackURL, error in
-            if let error = error as? ASWebAuthenticationSessionError, error.code == .canceledLogin {
-                continuation.resume(throwing: AuthError.userCancelled)
-            } else if let error {
-                continuation.resume(throwing: AuthError.oauthFailed(reason: error.localizedDescription))
-            } else if let url = callbackURL {
-                continuation.resume(returning: url)
-            } else {
-                continuation.resume(throwing: AuthError.unexpectedResponse(reason: "no callback URL"))
-            }
+func presentBrowserAndCaptureViaLoopback(
+    authorizationURL: URL,
+    listener: LoopbackCallbackListener,
+    presenting: ASWebAuthenticationPresentationContextProviding
+) async throws -> URL {
+    let captureTask: Task<URL, any Error> = Task {
+        try await listener.captureCallback()
+    }
+    let session = ASWebAuthenticationSession(
+        url: authorizationURL,
+        callbackURLScheme: nil
+    ) { _, error in
+        // Fires on user dismiss (canceledLogin) or our own session.cancel()
+        // after capture; cancel the listener task so the caller surfaces
+        // userCancelled, or no-ops if capture already won.
+        if error != nil { captureTask.cancel() }
+    }
+    session.presentationContextProvider = presenting
+    session.prefersEphemeralWebBrowserSession = false  // share cookies for SSO/passkey
+    guard session.start() else {
+        captureTask.cancel()
+        throw OAuthError.authorizationFailed(reason: "ASWAS failed to start")
+    }
+    return try await withTaskCancellationHandler {
+        do {
+            let url = try await captureTask.value
+            session.cancel()  // dismiss the browser sheet
+            return url
+        } catch is CancellationError {
+            session.cancel()
+            throw OAuthError.userCancelled
         }
-        session.presentationContextProvider = presenting
-        session.prefersEphemeralWebBrowserSession = false  // share cookies for SSO/passkey
-        session.start()
+    } onCancel: {
+        captureTask.cancel()
     }
 }
 ```
 
-`prefersEphemeralWebBrowserSession = false` is a deliberate choice. Setting it to true would force users to re-enter SSO credentials every time. The shared cookie jar makes passkey/biometric Databricks logins feel native.
+`prefersEphemeralWebBrowserSession = false` is a deliberate choice.
+Setting it to true would force users to re-enter SSO credentials every
+time. The shared cookie jar makes passkey/biometric Databricks logins
+feel native.
 
 ### 5.6 Step 5 — Validate Callback and Exchange Code
 
-The callback URL is `lakeloom://oauth/callback?code=...&state=...`. Verify:
+The captured URL is `http://localhost/{path}?code=...&state=...` (the
+listener reconstructs an absolute URL so `URLComponents` can parse the
+query items uniformly). Verify:
 
 - `state` matches the value sent
 - `code` is present
 - No `error` query param (if present, surface as `AuthError.oauthFailed(reason:)`)
 
-Then POST to the token endpoint:
+Then POST to the token endpoint, echoing the **same** redirect URI
+that was sent on `/authorize` (the OAuth spec requires it):
 
 ```
 POST {token_endpoint}
@@ -291,8 +329,8 @@ Content-Type: application/x-www-form-urlencoded
 
 grant_type=authorization_code
 &code={code}
-&redirect_uri=lakeloom://oauth/callback
-&client_id={clientID}
+&redirect_uri=http://localhost:{port}/callback
+&client_id=databricks-cli
 &code_verifier={verifier}
 ```
 
@@ -565,32 +603,47 @@ If the UI somehow triggers two simultaneous `signIn(workspaceURL:)` calls for th
 
 ---
 
-## 11. Info.plist and URL Handling
+## 11. Loopback Redirect URI Strategy
 
-### 11.1 Info.plist Entries
+### 11.1 Why loopback (and not a custom URL scheme)
 
-```xml
-<key>CFBundleURLTypes</key>
-<array>
-  <dict>
-    <key>CFBundleURLName</key>
-    <string>com.<your-org>.lakeloom.oauth</string>
-    <key>CFBundleURLSchemes</key>
-    <array>
-      <string>lakeloom</string>
-    </array>
-  </dict>
-</array>
-```
+Databricks' published U2M client (`databricks-cli`) is registered with
+`http://localhost` redirects only. Custom URL schemes
+(`lakeloom://oauth/callback`) are not accepted at the OAuth layer.
+That removes `CFBundleURLTypes` registration and `Info.plist`-based
+URL handling from this module entirely.
 
-`ASWebAuthenticationSession` with `callbackURLScheme: "lakeloom"` does not require this entry to function (the system handles the callback directly), but registering it is best practice and required if you later add universal-link variants.
+### 11.2 In-app loopback HTTP listener
 
-### 11.2 Privacy Manifest
+`LoopbackCallbackListener` (in `iOS/App/Auth/OAuth/LoopbackCallbackListener.swift`)
+is an actor wrapping `Network.NWListener`:
 
-The OAuth flow requires the Speech framework only indirectly (no Speech APIs are called by AuthService), but the privacy manifest (`PrivacyInfo.xcprivacy`) must declare:
+- Binds to `127.0.0.1` (`requiredInterfaceType = .loopback`) on an OS-chosen
+  ephemeral port (`NWEndpoint.Port.any`). The bound port is only known
+  after the listener reaches `.ready`.
+- Returns `UInt16` so the OAuth client can compose
+  `http://localhost:<port>/callback`.
+- Accepts a single GET on `/callback`, parses the path+query, and
+  responds with a small "you may close this tab" HTML page before the
+  in-app code programmatically dismisses ASWAS.
+- One listener per sign-in attempt; `stop()` is idempotent and is
+  invoked in both success and failure paths.
+- Uses `withTaskCancellationHandler` so a parent-task cancellation
+  (e.g. user navigates away from the SignIn screen) propagates
+  cleanly: the listener's pending continuation is resumed with
+  `CancellationError` and `LiveOAuthClient` translates that to
+  `OAuthError.userCancelled`.
 
-- `NSPrivacyAccessedAPICategoryUserDefaults` if any settings end up there (we avoid this; AuthService uses only Keychain)
-- Network calls to Databricks domains — covered by the app's general manifest
+### 11.3 Privacy Manifest
+
+The OAuth flow requires the Speech framework only indirectly (no
+Speech APIs are called by AuthService), but the privacy manifest
+(`PrivacyInfo.xcprivacy`) must declare:
+
+- `NSPrivacyAccessedAPICategoryUserDefaults` if any settings end up there
+  (we avoid this; AuthService uses only Keychain)
+- Network calls to Databricks domains — covered by the app's general
+  manifest
 
 No new entries strictly required for AuthService.
 
@@ -673,6 +726,7 @@ App/Auth/
 ├── OAuth/
 │   ├── OAuthClient.swift              // protocol
 │   ├── LiveOAuthClient.swift
+│   ├── LoopbackCallbackListener.swift // NWListener-backed http://localhost capture
 │   ├── PKCE.swift
 │   ├── OAuthURLBuilder.swift
 │   └── OAuthTokenResponse.swift
