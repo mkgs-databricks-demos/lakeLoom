@@ -12,28 +12,134 @@ Project-local durable context for `lakeLoom_infra` when global instructions are 
 * Always read `hi_genie/` for relevant project context before substantive work.
 * Never write to `hi_genie/`, any subfolder inside it, or any file within it.
 * Reply to Isaac, share progress, or record decisions in a sibling `hey_isaac/` folder at the same project root if present.
-* Genie is the source of truth for Databricks-related decisions; Isaac is useful for non-Databricks domains such as Xcode and Apple-platform development.
+* Genie is the source of truth for Databricks-related decisions; Isaac = non-Databricks domains (Xcode, Apple platforms).
 
 ## Project Structure
 
-* Major roots reviewed: `iOS/`, `architecture/LakeLoomMarkdowns/`, and `lakeLoom_infra/`.
-* `architecture/hi_genie/` contains read-only design and implementation context from Isaac.
-* Current `hi_genie/` inventory contains one file: `architecture/hi_genie/qr-pair-auth-model.md`.
-* Recent merged app-side changes center on QR-pair onboarding, session management, auth flows, and coordinator-based navigation.
+```
+lakeLoom_infra/
+├── databricks.yml              # Bundle config, variables, targets
+├── PROJECT_MEMORY.md           # This file
+├── README.md
+├── .gitignore
+├── resources/
+│   ├── lakeloom.schema.yml
+│   ├── session_audio.volume.yml
+│   ├── lakeloom.secret_scope.yml
+│   ├── infra_warehouse.sql_warehouse.yml
+│   ├── lakeloom.lakebase.yml
+│   └── platform_bootstrap.job.yml
+├── src/
+│   ├── lib/                        # Reusable Python modules
+│   │   ├── __init__.py
+│   │   ├── workspace_metadata.py   # get_workspace_id(), get_region(), get_zerobus_endpoint()
+│   │   ├── service_principal.py    # get_or_create_service_principal(), verify_client_credentials()
+│   │   └── secret_scope.py         # put_secret(), list_secret_keys(), try_get_secret_value()
+│   ├── platform_bootstrap/         # NOTEBOOK objects (no raw .sql/.py files)
+│   │   ├── ensure-service-principal # Python default, 12 cells
+│   │   ├── stt-0bus-target-table-ddl # SQL default, 14 cells
+│   │   └── validate-platform       # SQL default, 7 cells
+│   └── admin_actions/              # Manual admin notebooks
+│       ├── set-databricks-secrets  # Generic secret provisioning
+│       └── update-secrets-acls     # Secret scope ACL management
+└── fixtures/
+    ├── sessions/                   # Session summaries (YYYY-MM-DD_desc.md)
+    └── Genie Session Starter       # Notebook fixture
+```
 
 ## Current Infra Status
 
-* Bundle project name: `lakeLoom_infra`.
-* Bundle root: `/Workspace/Users/matthew.giglia@databricks.com/lakeLoom/lakeLoom_infra`.
-* `bundle validate --strict --target dev` passed previously.
-* Bundle summary showed resources tracked but not yet deployed at the time of review.
-* `resources/uc_setup.job.yml` is still empty and remains the primary blocker to operational deployment.
-* Existing bundle resources already include a UC schema, session audio volume, secret scope, SQL warehouse, and Lakebase project.
-* `resources/platform_bootstrap.job.yml` now runs all bootstrap steps as notebook tasks: the Python task uses `../src/platform_bootstrap/ensure-service-principal.ipynb`, and the SQL warehouse tasks use `../src/platform_bootstrap/transcript-events-raw-ddl.sql` and `../src/platform_bootstrap/validate-platform.sql`.
-* The bootstrap job continues to use serverless environment version `${var.serverless_environment_version}` and currently validates successfully with `bundle validate --strict --target dev`.
-* `src/platform_bootstrap/ensure-service-principal.ipynb` is a thin notebook wrapper that forwards job parameters into the adjacent reusable Python file `ensure-service-principal.py`, preserving Python classes/functions in a `.py` file.
-* `src/platform_bootstrap/transcript-events-raw-ddl.sql` and `src/platform_bootstrap/validate-platform.sql` were converted into SQL source notebooks by adding the Databricks source header.
-* Attempted direct edits to persist Unity Catalog `GRANT` statements in `src/platform_bootstrap/transcript-events-raw-ddl.sql` were safety-blocked because permission-changing SQL file writes are restricted in this editor; the intended logic remains to resolve the SPN via `:spn_application_id` with `try_secret(:secret_scope_name, :client_id_dbs_key)` fallback and apply dynamic backtick-quoted `GRANT USE CATALOG`, `GRANT USE SCHEMA`, `GRANT SELECT`, and `GRANT MODIFY` statements.
+* Bundle fully deployed to **dev** target and `platform_bootstrap` job runs successfully (all 3 tasks pass).
+* `resources/uc_setup.job.yml` was **deleted** (empty legacy file, superseded by `platform_bootstrap.job.yml`).
+* Source code reorganized: all task logic lives in NOTEBOOK objects; reusable functions in `src/lib/`.
+* **No plain `.sql` files** outside of SDP. SQL logic lives in SQL-default NOTEBOOK objects.
+* NOTEBOOK objects are always referenced as `.ipynb` in job YAML. The `warehouse_id` field determines SQL compute routing, not the file extension.
+* `src/lib/secret_scope.py` — named to avoid collision with Python stdlib `secrets` module.
+
+## Resolved Target Variables (dev)
+
+| Variable | Resolved Value |
+| --- | --- |
+| `catalog` | `hls_fde_dev` |
+| `schema` | `lakeloom` |
+| `secret_scope_name` | `lakeloom_credentials` (default) |
+| `client_id_dbs_key` | `client_id_dev_matthew_giglia_lakeloom` |
+| `client_secret_dbs_key` | `client_secret_dev_matthew_giglia_lakeloom` |
+| `xcode_client_id_dbs_key` | `xcode_client_id_dev_matthew_giglia_lakeloom` |
+| `xcode_client_secret_dbs_key` | `xcode_client_secret_dev_matthew_giglia_lakeloom` |
+| `lakebase_project_id` | `dev-matthew-giglia-lakeloom` |
+| `zerobus_stream_pool_size` | `16` |
+| `run_as_user` | `matthew.giglia@databricks.com` |
+
+## Resolved Target Variables (hls_fde)
+
+| Variable | Resolved Value |
+| --- | --- |
+| `catalog` | `hls_fde` |
+| `schema` | `lakeloom` |
+| `secret_scope_name` | `lakeloom_credentials` (default) |
+| `client_id_dbs_key` | `client_id_lakeloom` |
+| `client_secret_dbs_key` | `client_secret_lakeloom` |
+| `xcode_client_id_dbs_key` | `xcode_client_id_lakeloom` |
+| `xcode_client_secret_dbs_key` | `xcode_client_secret_lakeloom` |
+| `lakebase_project_id` | `lakeloom-hls-fde` |
+| `run_as_user` | `acf021b4-87c6-44ff-b3d7-45c59d63fe4d` (higher-level SPN) |
+
+## Service Principals
+
+### ZeroBus SPN (`lakeloom-{schema}`)
+
+* **Purpose:** Streams data from the AppKit server to the bronze `transcript_events_raw` table via ZeroBus SDK.
+* **Permissions:** USE CATALOG, USE SCHEMA, MODIFY + SELECT on `transcript_events_raw` (granted by DDL task).
+* **Secret scope:** Does NOT have READ on the scope. Its `client_id` is stored BY the bootstrap job; `client_secret` is admin-provisioned.
+* **Dev display name:** `lakeloom-dev_matthew_giglia_lakeloom`
+
+### Xcode SPN (`lakeloom-xcode-{schema}`)
+
+* **Purpose:** Authenticates iOS/iPadOS/macOS app to the Databricks App API endpoints before QR-pair onboarding completes.
+* **Permissions:** CAN_USE on the Databricks App resource only (granted by App bundle). NO data-plane permissions.
+* **Secret scope:** Does NOT have READ on the scope. Its `client_id` is stored BY the bootstrap job; `client_secret` is admin-provisioned.
+* **Dev display name:** `lakeloom-xcode-dev_matthew_giglia_lakeloom`
+
+### App SPN (auto-provisioned)
+
+* **Purpose:** The Databricks App's runtime identity. Reads secrets at startup to configure ZeroBus SDK and build QR payloads.
+* **Permissions:** READ on `lakeloom_credentials` secret scope (granted via `admin_actions/update-secrets-acls` or App bundle bootstrap).
+* **Provisioned by:** Databricks App deployment (auto-created, not managed by this infra bundle).
+
+## Secret Scope Contract (`lakeloom_credentials`)
+
+### Auto-provisioned by platform bootstrap job:
+
+| Key | Value Source |
+| --- | --- |
+| `{client_id_dbs_key}` | ZeroBus SPN `application_id` |
+| `{xcode_client_id_dbs_key}` | Xcode SPN `application_id` |
+| `workspace_url` | Workspace host URL |
+| `zerobus_endpoint` | `https://{workspace_id}.zerobus.{region}.cloud.databricks.com` |
+| `target_table_name` | `{catalog}.{schema}.transcript_events_raw` |
+| `zerobus_stream_pool_size` | Job parameter (default: 16) |
+
+### Admin-provisioned (manual after first deploy):
+
+| Key | How to provision |
+| --- | --- |
+| `{client_secret_dbs_key}` | Generate secret for ZeroBus SPN in workspace UI, store via `admin_actions/set-databricks-secrets` |
+| `{xcode_client_secret_dbs_key}` | Generate secret for Xcode SPN in workspace UI, store via `admin_actions/set-databricks-secrets` |
+
+### Secret Scope ACL Design Decision
+
+* **Neither** the ZeroBus SPN nor the Xcode SPN gets READ on the scope.
+* The **App's auto-provisioned SPN** gets READ — it reads all values at runtime.
+* This is managed by the companion `lakeLoom_app` bundle or via `admin_actions/update-secrets-acls`.
+
+## Platform Bootstrap Job (3 tasks)
+
+1. **ensure_service_principal** (Python, serverless) — Creates/finds both SPNs, provisions secrets, verifies M2M token flow if `client_secret` is available.
+2. **create_transcript_events_raw_table** (SQL, warehouse) — Idempotent DDL for the bronze table + dynamic GRANTs (USE CATALOG, USE SCHEMA, MODIFY+SELECT) to the ZeroBus SPN.
+3. **validate_platform** (SQL, warehouse) — Assertion-based checks: schema exists, `session_audio` volume is MANAGED, `transcript_events_raw` table exists.
+
+Job is idempotent and safe to re-run.
 
 ## hi_genie Findings That Change Infra Planning
 
@@ -59,58 +165,26 @@ Project-local durable context for `lakeLoom_infra` when global instructions are 
 * QR payload contents include `workspace.url`, `workspace.id`, `workspace.cloud`, user identity fields, SPN credentials, session token metadata, and App base URL.
 * Current working assumption: the App can safely self-migrate the Lakebase schema it needs before pairing traffic depends on it.
 
-## Recommended Job Naming
+## Infra Bundle Plan Status
 
-* `uc_setup` is now too narrow for the job's expected responsibilities.
-* Recommended new name: `platform_bootstrap`.
-* Reason: the job now needs to cover Unity Catalog setup, shared SPN bootstrap, secret initialization, permission wiring, and platform readiness for QR pairing.
-* Recommended file name if renamed: `resources/platform_bootstrap.job.yml`.
-* Keep `uc_setup` only for notebook names or task names that are strictly limited to schema / grants work.
+| Phase | Status | Notes |
+| --- | --- | --- |
+| 1. Finalize bootstrap scope | **DONE** | Infra owns SPNs, secrets, UC grants, volumes. App owns Lakebase migrations. |
+| 2. Define secret/identity contract | **DONE** | Schema-qualified keys, two SPNs, scope ACL design decided. |
+| 3. Author the bootstrap job | **DONE** | 3-task job deployed and running on dev. |
+| 4. Verify permissions and runtime | **DONE** | M2M verification implemented. ACL design: SPNs don't need scope READ. |
+| 5. Validate deployment readiness | **DONE** | Dev deployed, job succeeds. Manual steps: provision client_secrets. |
 
-## Infra Bundle Plan
+## Remaining Manual Steps (per environment)
 
-### Phase 1 — Finalize bootstrap scope
+1. Generate OAuth secret for ZeroBus SPN → store as `{client_secret_dbs_key}` in `lakeloom_credentials`.
+2. Generate OAuth secret for Xcode SPN → store as `{xcode_client_secret_dbs_key}` in `lakeloom_credentials`.
+3. After App bundle deploys: grant App SPN READ on `lakeloom_credentials` scope.
+4. Deploy to `hls_fde` target when ready for production.
 
-* Decide what belongs in the infra bundle bootstrap job versus a separate App bootstrap step.
-* Strong default split: infra bundle owns shared SPN creation, secret scope initialization, UC grants, volume readiness, and environment metadata; App bootstrap owns application tables and API-level migrations.
-* Current decision: `paired_sessions` should be created by the App startup/migration path, not by infra bootstrap, unless later testing proves the App cannot reliably enforce schema readiness before serving pairing endpoints.
+## Next Steps (post-infra)
 
-### Phase 2 — Define the secret and identity contract
-
-* Finalize the exact secret keys the App and iOS flow will depend on.
-* Confirm naming for SPN `client_id`, `client_secret`, `workspace_url`, `zerobus_endpoint`, `target_table_name`, and any App base URL or workspace metadata values needed for QR payload generation.
-* Document which values are auto-provisioned by bootstrap versus still manual admin inputs.
-
-### Phase 3 — Author the bootstrap job
-
-* Create the job resource currently stubbed in `resources/uc_setup.job.yml`, ideally renamed to `platform_bootstrap.job.yml`.
-* Expected task groups: ensure shared SPN, write/update secret-scope values, apply UC grants, verify session audio volume access, and validate ZeroBus / transcript destination configuration.
-* Exclude `paired_sessions` DDL from infra bootstrap unless App migration ownership is revisited.
-
-### Phase 4 — Verify permissions and runtime assumptions
-
-* Verify the shared SPN can mint M2M tokens and has the minimum permissions for UC Volume uploads, ZeroBus publishing, and SCIM `/Me` lookup.
-* Confirm the bootstrap job grants secret-scope read access only where required.
-* Confirm the job can safely be rerun without duplicating principals, grants, or schema objects.
-
-### Phase 5 — Validate deployment readiness
-
-* Validate the bundle after each resource change.
-* Deploy to `dev`, run the bootstrap job, and capture the exact manual follow-ups that remain, especially generation and storage of the SPN `client_secret` if that cannot be automated.
-* Treat QR-pair readiness as the acceptance bar, not just successful UC resource creation.
-
-## Recent Repository State
-
-* Feature branch `mg-start-infra` was merged with `main` cleanly during review.
-* Notable newer project context after sync was concentrated in `iOS/` and `architecture/hi_genie/`.
-* Key app themes observed: QR pairing auth, onboarding expansion, `AppCoordinator`, `QRScannerView`, `LoopbackCallbackListener`, Secure Enclave signing, and related tests.
-
-## Recommended Next Steps
-
-* Rename the job conceptually to `platform_bootstrap` and update the file/resource names when ready to edit bundle resources.
-* Confirm the exact secret keys and naming that the Databricks App will read when building QR payloads.
-* Verify the SPN permissions needed for UC Volume uploads, ZeroBus publishing, and SCIM `/Me` before finalizing bootstrap notebooks.
-* Draft the bootstrap job around the new QR-pair auth model, not the older OAuth U2M assumptions.
-* Keep App-managed Lakebase migrations as the default for `paired_sessions` unless deployment testing shows a readiness race.
-* Keep app/infra sequencing aligned with QR-pair onboarding requirements, since App endpoints now block iOS implementation.
-* When possible, copy any still-relevant items here into the global `.assistant_instructions.md` file as well.
+* Author the companion `lakeLoom_app` bundle (Databricks App with AppKit).
+* App bootstrap: self-migrate Lakebase tables (`paired_sessions`, etc.) before serving endpoints.
+* App bundle grants its own SPN READ on `lakeloom_credentials` and CAN_USE to the Xcode SPN.
+* QR-pair endpoint implementation depends on both SPNs having valid `client_secret` values.
