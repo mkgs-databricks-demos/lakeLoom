@@ -5,7 +5,8 @@
 #   1. lakeLoom_infra       (secret scopes, UC schemas/volumes, SQL warehouse, Lakebase)
 #   2. Platform bootstrap   (SPN creation, secret provisioning, table DDL, volume grants)
 #   3. Readiness checks     (secret scope keys + bronze table + volumes + Lakebase status)
-#   4. lakeloom-ai          (AppKit app — API backend + employee frontend)
+#   4. lakeloom-ai          (AppKit app resource: permissions, env vars, volume/warehouse bindings)
+#   5. App source deploy    (start compute if stopped, push source code to container)
 #
 # Usage:
 #   ./deploy.sh --target dev                          # deploy all bundles (with readiness checks)
@@ -29,14 +30,12 @@
 #   Lakebase project — informational; verifies project exists and endpoint is active
 #
 # App bundle variable passthrough:
-#   After readiness checks, deploy.sh passes all infra-derived values as --var
-#   overrides to the app bundle deploy:
-#     catalog, schema, secret_scope_name, sql_warehouse_id,
-#     lakebase_project_id, lakebase_database_id, xcode_spn_id,
-#     client_id_dbs_key, client_secret_dbs_key,
-#     xcode_client_id_dbs_key, xcode_client_secret_dbs_key
-#   This guarantees the app bundle always references the exact resources
-#   deployed by infra, regardless of target defaults in its databricks.yml.
+#   After readiness checks, deploy.sh passes only RUNTIME-DISCOVERED values
+#   as --var overrides to the app bundle deploy:
+#     xcode_spn_id (Xcode SPN application_id from secret scope)
+#   All other infra values (catalog, schema, warehouse ID, Lakebase IDs,
+#   SPN key names) are hardcoded as target defaults in the app bundle's
+#   databricks.yml. The readiness checks verify these match deployed infra.
 #
 # Requirements:
 #   - Databricks CLI installed and authenticated (databricks auth login)
@@ -45,9 +44,37 @@
 set -euo pipefail
 
 # --------------------------------------------------------------------------- #
+# Self-relocation — avoid FUSE filesystem staleness on long-running operations
+#
+# The Databricks web terminal mounts /Workspace via FUSE. After long-running
+# CLI commands (e.g. bundle run polling for 2+ minutes), the FUSE mount can
+# become stale, causing "error reading input file: Operation not permitted"
+# as bash tries to read subsequent lines of this script.
+#
+# Fix: if running from /Workspace, copy to /tmp and re-exec from local disk.
+# --------------------------------------------------------------------------- #
+if [[ "${BASH_SOURCE[0]}" == /Workspace/* ]] && [[ "${__DEPLOY_RELOCATED:-}" != "1" ]]; then
+  _tmp_script="/tmp/lakeloom_deploy_$$.sh"
+  cp "${BASH_SOURCE[0]}" "${_tmp_script}"
+  chmod +x "${_tmp_script}"
+  export __DEPLOY_RELOCATED=1
+  export __DEPLOY_ORIG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  exec "${_tmp_script}" "$@"
+fi
+# Clean up temp script on exit (if relocated)
+if [[ "${__DEPLOY_RELOCATED:-}" == "1" ]]; then
+  trap 'rm -f "${BASH_SOURCE[0]}"' EXIT
+fi
+
+# --------------------------------------------------------------------------- #
 # Constants
 # --------------------------------------------------------------------------- #
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# When relocated to /tmp, SCRIPT_DIR must still point to the original bundle root.
+if [[ -n "${__DEPLOY_ORIG_DIR:-}" ]]; then
+  SCRIPT_DIR="${__DEPLOY_ORIG_DIR}"
+else
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
 INFRA_BUNDLE="lakeLoom_infra"
 APP_BUNDLE="lakeloom-ai"
 
@@ -78,6 +105,11 @@ WORKSPACE_HOST=""
 # Resolved at runtime after readiness checks — Xcode SPN application_id
 # for the app bundle's permissions block (passed via --var override).
 XCODE_SPN_ID=""
+
+# Resolved at runtime from the app bundle summary — platform app name
+# and source code workspace path for `databricks apps deploy`.
+APP_NAME=""
+APP_SOURCE_PATH=""
 
 # --------------------------------------------------------------------------- #
 # Defaults
@@ -719,29 +751,19 @@ APP_DEPLOY_ARGS=()
 build_app_deploy_args() {
   APP_DEPLOY_ARGS=()
 
-  # Always pass catalog and schema (resolved from infra schema resource)
-  [[ -n "${CATALOG}" ]] && APP_DEPLOY_ARGS+=(--var "catalog=${CATALOG}")
-  [[ -n "${SCHEMA}" ]] && APP_DEPLOY_ARGS+=(--var "schema=${SCHEMA}")
+  # Only pass --var for values that are TRULY DYNAMIC — discovered at runtime
+  # and not known at YAML-write time. All other infra-derived values (catalog,
+  # schema, warehouse ID, Lakebase IDs, SPN key names) are hardcoded as target
+  # defaults in the app bundle's databricks.yml. The readiness checks above
+  # already verified these match the deployed infra.
+  #
+  # This follows the dbxWearables pattern: the app bundle's target defaults
+  # are the source of truth for static per-environment values. Only runtime-
+  # discovered values (like SPN application_ids read from the secret scope)
+  # are passed via --var.
 
-  # Secret scope name
-  [[ -n "${SCOPE_NAME}" ]] && APP_DEPLOY_ARGS+=(--var "secret_scope_name=${SCOPE_NAME}")
-
-  # SQL warehouse ID (from infra warehouse resource)
-  [[ -n "${SQL_WAREHOUSE_ID}" ]] && APP_DEPLOY_ARGS+=(--var "sql_warehouse_id=${SQL_WAREHOUSE_ID}")
-
-  # Lakebase project and database
-  [[ -n "${LAKEBASE_PROJECT_ID}" ]] && APP_DEPLOY_ARGS+=(--var "lakebase_project_id=${LAKEBASE_PROJECT_ID}")
-  [[ -n "${LAKEBASE_DATABASE_ID}" ]] && APP_DEPLOY_ARGS+=(--var "lakebase_database_id=${LAKEBASE_DATABASE_ID}")
-
-  # SPN credential key names (schema-qualified, per target)
-  # The app reads these at runtime to know which secret scope keys hold
-  # the ZeroBus and Xcode SPN credentials.
-  [[ -n "${CLIENT_ID_DBS_KEY}" ]] && APP_DEPLOY_ARGS+=(--var "client_id_dbs_key=${CLIENT_ID_DBS_KEY}")
-  [[ -n "${CLIENT_SECRET_DBS_KEY}" ]] && APP_DEPLOY_ARGS+=(--var "client_secret_dbs_key=${CLIENT_SECRET_DBS_KEY}")
-  [[ -n "${XCODE_CLIENT_ID_DBS_KEY}" ]] && APP_DEPLOY_ARGS+=(--var "xcode_client_id_dbs_key=${XCODE_CLIENT_ID_DBS_KEY}")
-  [[ -n "${XCODE_CLIENT_SECRET_DBS_KEY}" ]] && APP_DEPLOY_ARGS+=(--var "xcode_client_secret_dbs_key=${XCODE_CLIENT_SECRET_DBS_KEY}")
-
-  # Xcode SPN ID (for CAN_USE grant — future use)
+  # Xcode SPN application_id — discovered from secret scope at deploy time.
+  # Used for CAN_USE grant on the App (once wired into permissions block).
   [[ -n "${XCODE_SPN_ID}" ]] && APP_DEPLOY_ARGS+=(--var "xcode_spn_id=${XCODE_SPN_ID}")
 
   if [[ ${#APP_DEPLOY_ARGS[@]} -gt 0 ]]; then
@@ -749,7 +771,131 @@ build_app_deploy_args() {
     for arg in "${APP_DEPLOY_ARGS[@]}"; do
       echo "    ${arg}"
     done
+  else
+    log "No --var overrides needed (all values from target defaults)"
   fi
+}
+
+# --------------------------------------------------------------------------- #
+# resolve_app_name — extract the platform app name and source path from the
+#                    app bundle summary. Called before deploy_app_source().
+# --------------------------------------------------------------------------- #
+resolve_app_name() {
+  local bundle_dir="${SCRIPT_DIR}/${APP_BUNDLE}"
+
+  log "Resolving app name from bundle summary"
+
+  local summary_json
+  summary_json=$(cd "${bundle_dir}" && databricks bundle summary --target "${TARGET}" --output json 2>&1) || {
+    fail "Could not read bundle summary for ${APP_BUNDLE}."
+  }
+
+  # Extract app name from resources.apps.app.name and workspace file path
+  eval "$(echo "${summary_json}" | python3 -c "
+import sys, json, re
+
+try:
+    data = json.load(sys.stdin)
+except json.JSONDecodeError as e:
+    print(f'RESOLVE_ERROR="JSON parse error: {e}"', flush=True)
+    sys.exit(0)
+
+def safe(v):
+    return re.sub(r'[^a-zA-Z0-9_.\-]', '', str(v))
+
+# App name from resources
+app_name = ''
+resources = data.get('resources', {})
+apps_block = resources.get('apps', {})
+for key, app in apps_block.items():
+    if isinstance(app, dict) and app.get('name'):
+        app_name = app['name']
+        break
+
+# Source code path: workspace file_path from bundle summary
+# The bundle uploads source to {workspace.file_path} which is the
+# root_path + /files directory.
+workspace = data.get('workspace', {})
+file_path = workspace.get('file_path', '')
+
+print(f'APP_NAME="{safe(app_name)}"')
+# file_path contains the workspace files path (preserves slashes for path)
+# Use safe_url-like approach for path
+path_safe = re.sub(r'[^a-zA-Z0-9_.\-/]', '', str(file_path))
+print(f'APP_SOURCE_PATH="{path_safe}"')
+" 2>/dev/null)" || fail "Could not parse app bundle summary."
+
+  if [[ -n "${RESOLVE_ERROR:-}" ]]; then
+    fail "App bundle summary parse error: ${RESOLVE_ERROR}"
+  fi
+
+  [[ -n "${APP_NAME}" ]] || fail "Could not resolve app name from app bundle summary."
+  [[ -n "${APP_SOURCE_PATH}" ]] || fail "Could not resolve app source path from app bundle summary."
+
+  ok "App name:        ${APP_NAME}"
+  ok "Source path:     ${APP_SOURCE_PATH}"
+}
+
+# --------------------------------------------------------------------------- #
+# deploy_app_source — ensure app compute is running, then deploy source code.
+#
+# Flow:
+#   1. Check app status via `databricks apps get`
+#   2. If STOPPED → start compute and wait for RUNNING
+#   3. Deploy source from the bundle's workspace files path
+#
+# This step is separate from `bundle deploy` which only provisions the app
+# resource (permissions, env vars, resources) but does NOT push source code
+# to the container or start compute.
+# --------------------------------------------------------------------------- #
+deploy_app_source() {
+  log "Deploying source code to app: ${APP_NAME}"
+
+  # 1. Check current app status
+  local app_status
+  app_status=$(databricks apps get --name "${APP_NAME}" --output json 2>/dev/null     | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','UNKNOWN'))" 2>/dev/null) || app_status="UNKNOWN"
+
+  echo "  Current app status: ${app_status}"
+
+  # 2. If not running, start compute first
+  if [[ "${app_status}" != "RUNNING" ]]; then
+    log "Starting app compute (status: ${app_status})"
+    databricks apps start --name "${APP_NAME}" --no-wait 2>/dev/null || true
+
+    # Poll for RUNNING state (max 5 minutes)
+    local max_wait=300
+    local elapsed=0
+    local interval=10
+    while [[ ${elapsed} -lt ${max_wait} ]]; do
+      sleep ${interval}
+      elapsed=$((elapsed + interval))
+      app_status=$(databricks apps get --name "${APP_NAME}" --output json 2>/dev/null         | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','UNKNOWN'))" 2>/dev/null) || app_status="UNKNOWN"
+      echo "  [${elapsed}s] App status: ${app_status}"
+      if [[ "${app_status}" == "RUNNING" ]]; then
+        break
+      fi
+      if [[ "${app_status}" == "FAILED" ]] || [[ "${app_status}" == "DELETING" ]]; then
+        fail "App entered ${app_status} state. Check the Apps UI for details."
+      fi
+    done
+
+    if [[ "${app_status}" != "RUNNING" ]]; then
+      fail "App did not reach RUNNING state within ${max_wait}s (current: ${app_status})."
+    fi
+    ok "App compute is running"
+  else
+    ok "App compute already running"
+  fi
+
+  # 3. Deploy source code from bundle's workspace files path
+  log "Pushing source to container (source: ${APP_SOURCE_PATH})"
+  databricks apps deploy "${APP_NAME}" \
+    --source-code-path "${APP_SOURCE_PATH}" \
+    --no-wait || \
+    fail "Source code deployment failed. Check the Apps UI for details."
+
+  ok "Source deployment initiated for ${APP_NAME}"
+  echo "  Monitor: databricks apps get --name ${APP_NAME}"
 }
 
 # --------------------------------------------------------------------------- #
@@ -786,8 +932,8 @@ if [[ "${DEPLOY_APP}" == true ]] && [[ "${SKIP_CHECKS}" != true ]] && [[ "${VALI
 fi
 
 # Step 4: Deploy app bundle
-# Pass all resolved infra values as --var overrides to ensure the app bundle
-# always references the exact resources deployed by the infra bundle.
+# Only xcode_spn_id is passed as --var (runtime-discovered).
+# All other values use target defaults in the app bundle's databricks.yml.
 if [[ "${DEPLOY_APP}" == true ]]; then
   build_app_deploy_args
   if [[ ${#APP_DEPLOY_ARGS[@]} -gt 0 ]]; then
@@ -795,6 +941,16 @@ if [[ "${DEPLOY_APP}" == true ]]; then
   else
     deploy_bundle "${APP_BUNDLE}"
   fi
+fi
+
+# Step 5: Deploy app source code and ensure compute is running
+# bundle deploy provisions the app resource (permissions, env vars, resources)
+# but does NOT push source code to the container or start compute.
+# This step resolves the app name + source path from the bundle summary,
+# ensures compute is warm, and triggers the source deployment.
+if [[ "${DEPLOY_APP}" == true ]] && [[ "${VALIDATE_ONLY}" != true ]] && [[ "${DESTROY}" != true ]]; then
+  resolve_app_name
+  deploy_app_source
 fi
 
 log "Done."

@@ -100,6 +100,12 @@ variables:
       When empty, the Xcode SPN permission is not applied.
     default: ""
 
+  # ── App name (target-specific) ─────────────────────────────────────────
+  app_name:
+    description: >
+      Platform app name. Target-specific to allow dev and production
+      apps to coexist in the same workspace.
+
   # ── Run-as / Service Principals ─────────────────────────────────────────
   run_as_user:
     description: The user or service principal that the app runs as.
@@ -132,7 +138,7 @@ variables:
 resources:
   apps:
     app:
-      name: "lakeloom-ai"
+      name: ${var.app_name}
       description: >
         lakeLoom AI — Requirements capture, architecture design, and
         Genie Code session planning for rapid Databricks MVPs.
@@ -221,6 +227,7 @@ targets:
       lakebase_project_id: dev-matthew-giglia-lakeloom
       lakebase_database_id: db-16c3-p7ob6z9dbv
       run_as_user: matthew.giglia@databricks.com
+      app_name: lakeloom-ai-dev
       # SPN credential key names (schema-qualified for dev)
       client_id_dbs_key: client_id_dev_matthew_giglia_lakeloom
       client_secret_dbs_key: client_secret_dev_matthew_giglia_lakeloom
@@ -249,6 +256,7 @@ targets:
       lakebase_project_id: lakeloom-hls-fde
       lakebase_database_id: ""  # TBD — discover after first hls_fde infra deploy
       run_as_user: ${var.higher_level_service_principal}
+      app_name: lakeloom-ai
       # SPN credential key names (schema-qualified for production)
       client_id_dbs_key: client_id_lakeloom
       client_secret_dbs_key: client_secret_lakeloom
@@ -277,6 +285,7 @@ targets:
       lakebase_project_id: ""
       lakebase_database_id: ""
       run_as_user: matthew.giglia@databricks.com
+      app_name: lakeloom-ai-prod
       client_id_dbs_key: ""
       client_secret_dbs_key: ""
       xcode_client_id_dbs_key: ""
