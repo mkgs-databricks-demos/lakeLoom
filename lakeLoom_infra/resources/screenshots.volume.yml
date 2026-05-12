@@ -1,0 +1,23 @@
+# Managed volume for storing session screenshots captured by the iOS app.
+#
+# Files are stored as: /Volumes/{catalog}/{schema}/screenshots/{project_id}/{session_id}/{filename}.png
+#
+# Screenshot upload flow (per ADR-001 — App-Proxied Data Plane):
+#   iOS → Databricks App endpoint (authenticated via Xcode SPN M2M + session token)
+#   → App backend writes to UC Volume Files API using App's own SPN identity.
+# iOS never calls the Volume Files API directly.
+#
+# Screenshots are session-scoped — captured during a requirements-gathering
+# session and referenced by the Agent for visual context alongside transcripts.
+
+resources:
+  volumes:
+    screenshots_volume:
+      catalog_name: ${resources.schemas.lakeloom_schema.catalog_name}
+      schema_name: ${resources.schemas.lakeloom_schema.name}
+      name: screenshots
+      volume_type: MANAGED
+      comment: >
+        Managed volume for session screenshots captured by the lakeLoom iOS
+        app. Organized by project_id/session_id. Used by the Agent for visual
+        context during requirements and architecture generation.

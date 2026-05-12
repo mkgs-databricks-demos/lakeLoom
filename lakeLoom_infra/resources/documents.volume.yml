@@ -1,0 +1,29 @@
+# Managed volume for customer-provided reference documents.
+#
+# Files are stored as: /Volumes/{catalog}/{schema}/documents/{project_id}/{filename}.{ext}
+#
+# Accepted formats include PDFs, PowerPoint decks, architecture diagrams,
+# call transcripts, and any other supporting material customers provide
+# as context for their engagement.
+#
+# Document upload flow (per ADR-001 — App-Proxied Data Plane):
+#   iOS → Databricks App endpoint (authenticated via Xcode SPN M2M + session token)
+#   → App backend writes to UC Volume Files API using App's own SPN identity.
+# iOS never calls the Volume Files API directly.
+#
+# Documents are project-scoped — they provide context across all sessions
+# within a project and are consumed by the Agent for requirements generation
+# and architecture decisions.
+
+resources:
+  volumes:
+    documents_volume:
+      catalog_name: ${resources.schemas.lakeloom_schema.catalog_name}
+      schema_name: ${resources.schemas.lakeloom_schema.name}
+      name: documents
+      volume_type: MANAGED
+      comment: >
+        Managed volume for customer-provided reference documents (PDFs,
+        PowerPoints, diagrams, call transcripts). Organized by project_id.
+        Used by the Agent as supplementary context for requirements
+        generation, architecture decisions, and session plan creation.
