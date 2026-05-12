@@ -818,11 +818,11 @@ for key, app in apps_block.items():
 workspace = data.get('workspace', {})
 file_path = workspace.get('file_path', '')
 
-print(f'APP_NAME="{safe(app_name)}"')
+print(f'APP_NAME=\"{safe(app_name)}\"')
 # file_path contains the workspace files path (preserves slashes for path)
 # Use safe_url-like approach for path
 path_safe = re.sub(r'[^a-zA-Z0-9_.\-/]', '', str(file_path))
-print(f'APP_SOURCE_PATH="{path_safe}"')
+print(f'APP_SOURCE_PATH=\"{path_safe}\"')
 " 2>/dev/null)" || fail "Could not parse app bundle summary."
 
   if [[ -n "${RESOLVE_ERROR:-}" ]]; then
