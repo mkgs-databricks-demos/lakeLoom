@@ -1,53 +1,283 @@
+# Databricks Asset Bundle — lakeloom-ai
+# AppKit application for the lakeLoom rapid-MVP capture tool.
+# Deploy this bundle AFTER the lakeLoom_infra bundle and platform_bootstrap job.
+#
+# The deploy.sh script passes infrastructure-derived values (catalog, schema,
+# warehouse ID, Lakebase project/database IDs, SPN key names, Xcode SPN ID)
+# as --var overrides to ensure consistency with the deployed infra. Target
+# defaults below match expected infra values for standalone validation.
+#
+# See https://docs.databricks.com/en/dev-tools/bundles/settings.html
+
 bundle:
   name: lakeloom-ai
 
+# ---------------------------------------------------------------------------
+# Variable declarations
+# ---------------------------------------------------------------------------
+#
+# CONVENTION — infra-derived values:
+#   The variables below (catalog, schema, sql_warehouse_id, lakebase_project_id,
+#   lakebase_database_id, secret_scope_name, client_id_dbs_key,
+#   client_secret_dbs_key, xcode_client_id_dbs_key, xcode_client_secret_dbs_key)
+#   MUST match the deployed infra. deploy.sh resolves these from
+#   `databricks bundle summary` on the infra bundle and passes them as --var
+#   overrides. Target defaults provide sane fallbacks for standalone
+#   `databricks bundle validate`.
+#
+# CONVENTION — Xcode SPN grant:
+#   deploy.sh reads the Xcode SPN application_id from the secret scope and
+#   passes it as --var xcode_spn_id=<value>. This is used to grant CAN_USE
+#   on the App so the iOS auth sidecar accepts Xcode SPN M2M tokens.
+#   When empty, the permission is skipped (see app resource below).
+#
+# CONVENTION — secret scope key names:
+#   The SPN credential key names are schema-qualified per target (matching
+#   the infra bundle convention) so multiple schemas can share a single scope
+#   without key collisions. The app reads these keys at runtime to configure:
+#     - ZeroBus SDK (server-side event streaming to bronze table)
+#     - QR-pair payload (Xcode SPN credentials for iOS auth)
+# ---------------------------------------------------------------------------
 variables:
+  # ── Infrastructure-derived (passed by deploy.sh) ────────────────────────
+  catalog:
+    description: >
+      Unity Catalog catalog for lakeLoom data objects.
+      Resolved from infra bundle schema resource at deploy time.
+  schema:
+    description: >
+      Unity Catalog schema name (fully resolved, including dev-mode prefix).
+      Resolved from infra bundle schema resource at deploy time.
+  secret_scope_name:
+    description: Databricks secret scope for lakeLoom credentials.
+    default: lakeloom_credentials
   sql_warehouse_id:
-    description: SQL Warehouse ID
-  files_path:
-    description: Volume path for file storage (e.g. /Volumes/catalog/schema/volume_name)
-  files_id:
-    description: Permission to write to volumes
-  postgres_branch:
-    description: Full Lakebase Postgres branch resource name. Obtain by running `databricks postgres list-branches projects/{project-id}`, select the desired item from the output array and use its .name value.
-  postgres_database:
-    description: Full Lakebase Postgres database resource name. Obtain by running `databricks postgres list-databases {branch-name}`, select the desired item from the output array and use its .name value. Requires the branch resource name.
+    description: >
+      SQL Warehouse ID for analytics queries.
+      Resolved from infra bundle sql_warehouses.infra_warehouse resource.
+  lakebase_project_id:
+    description: >
+      Lakebase Autoscaling project ID.
+      Resolved from infra bundle postgres_projects resource.
+  lakebase_database_id:
+    description: >
+      Lakebase database resource ID (auto-generated on first project deploy).
+      Resolved by deploy.sh via: databricks postgres list-databases
+      projects/{project_id}/branches/production
 
+  # ── SPN credential key names (schema-qualified, per target) ─────────────
+  #
+  # These are the KEY NAMES within the secret scope, not the actual secrets.
+  # The app reads these keys at runtime to obtain M2M credentials:
+  #   - ZeroBus SPN: used server-side for ZeroBus SDK streaming + volume writes
+  #   - Xcode SPN:   included in QR payload for iOS app auth sidecar
+  client_id_dbs_key:
+    description: >
+      Secret scope key name for the ZeroBus SPN OAuth2 M2M client_id.
+      Schema-qualified per target to avoid collisions in shared scopes.
+    default: client_id
+  client_secret_dbs_key:
+    description: >
+      Secret scope key name for the ZeroBus SPN OAuth2 M2M client_secret.
+      Schema-qualified per target to avoid collisions in shared scopes.
+    default: client_secret
+  xcode_client_id_dbs_key:
+    description: >
+      Secret scope key name for the Xcode SPN OAuth2 M2M client_id.
+      Schema-qualified per target. Included in QR payload for iOS pairing.
+    default: xcode_client_id
+  xcode_client_secret_dbs_key:
+    description: >
+      Secret scope key name for the Xcode SPN OAuth2 M2M client_secret.
+      Schema-qualified per target. Included in QR payload for iOS pairing.
+    default: xcode_client_secret
+
+  # ── Xcode SPN application_id (passed by deploy.sh from secret scope) ────
+  xcode_spn_id:
+    description: >
+      Xcode SPN application_id for CAN_USE grant on the App.
+      Passed by deploy.sh after reading from the secret scope.
+      When empty, the Xcode SPN permission is not applied.
+    default: ""
+
+  # ── Run-as / Service Principals ─────────────────────────────────────────
+  run_as_user:
+    description: The user or service principal that the app runs as.
+  higher_level_service_principal:
+    description: Service principal for higher-level (non-dev) deployments.
+    default: acf021b4-87c6-44ff-b3d7-45c59d63fe4d
+
+  # ── Tags (consistent with infra bundle) ─────────────────────────────────
+  tags_project:
+    default: lakeLoom
+    description: Project tag for deployed resources.
+  tags_businessUnit:
+    default: Healthcare and Life Sciences
+    description: Business unit tag for cost and ROI allocation.
+  tags_developer:
+    default: matthew.giglia@databricks.com
+    description: Primary developer contact for Ops.
+  tags_requestedBy:
+    default: Forward Deployed Engineering
+    description: Primary business-unit stakeholder(s).
+  tags_RemoveAfter:
+    default: 2027-06-01
+    description: >
+      Required Databricks demo-environment tag for long-lived demos.
+      Cannot exceed one year after the deployment date.
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
 resources:
   apps:
     app:
       name: "lakeloom-ai"
-      description: "A Databricks App powered by AppKit"
+      description: >
+        lakeLoom AI — Requirements capture, architecture design, and
+        Genie Code session planning for rapid Databricks MVPs.
       source_code_path: ./
       user_api_scopes:
         - files.files
 
-      # The resources which this app has access to.
+      # Resources the App's auto-provisioned SPN has access to.
       resources:
         - name: sql-warehouse
           sql_warehouse:
             id: ${var.sql_warehouse_id}
             permission: CAN_USE
-        - name: files
+
+        # ── UC Volumes (App proxies uploads from iOS) ─────────────────────
+        #
+        # Three separate volumes for distinct upload types:
+        #   session-audio  — Final session audio recordings (.m4a/.wav)
+        #                    Uploaded post-session for server-side re-transcription.
+        #   screenshots    — Whiteboard/screen captures (.png/.jpg/.heic)
+        #                    Uploaded during session for architecture documentation.
+        #   documents      — Supporting PDFs, specs, and reference materials
+        #                    Uploaded before/during session as context for AI processing.
+        #
+        # All proxied through the App from iOS (single network boundary).
+        # Volume paths injected at runtime via app.yaml valueFrom bindings.
+        - name: session-audio
           uc_securable:
-            securable_full_name: ${var.files_id}
+            securable_full_name: ${var.catalog}.${var.schema}.session_audio
             securable_type: VOLUME
             permission: WRITE_VOLUME
+        - name: screenshots
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.schema}.screenshots
+            securable_type: VOLUME
+            permission: WRITE_VOLUME
+        - name: documents
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.schema}.documents
+            securable_type: VOLUME
+            permission: WRITE_VOLUME
+
+        # ── Lakebase (OLTP — paired_sessions, projects, sync state) ───────
         - name: postgres
           postgres:
-            branch: ${var.postgres_branch}
-            database: ${var.postgres_database}
+            branch: projects/${var.lakebase_project_id}/branches/production
+            database: projects/${var.lakebase_project_id}/branches/production/databases/${var.lakebase_database_id}
             permission: CAN_CONNECT_AND_CREATE
 
+      # ── App-level permissions ───────────────────────────────────────────
+      # NOTE: Xcode SPN CAN_USE grant is applied post-deploy by deploy.sh
+      # when xcode_spn_id is resolved. DABs cannot conditionally include
+      # permissions (empty service_principal_name would fail validation).
+      # Once the Xcode SPN application_id is known and stable per target,
+      # it can be hardcoded here:
+      #
+      #   permissions:
+      #     - service_principal_name: ${var.xcode_spn_id}
+      #       level: CAN_USE
+
+# ---------------------------------------------------------------------------
+# Targets
+# ---------------------------------------------------------------------------
 targets:
-  default:
+
+  # ── dev ──────────────────────────────────────────────────────────────────
+  dev:
+    mode: development
     default: true
+    presets:
+      source_linked_deployment: false
+      tags:
+        project: ${var.tags_project}
+        businessUnit: ${var.tags_businessUnit}
+        requestedBy: ${var.tags_requestedBy}
+        developer: ${var.tags_developer}
+        RemoveAfter: ${var.tags_RemoveAfter}
+        env: ${bundle.target}
     workspace:
       host: https://fevm-hls-fde.cloud.databricks.com
-
+      root_path: /Workspace/Users/${var.run_as_user}/.bundle/${bundle.name}/${bundle.target}
     variables:
+      catalog: hls_fde_dev
+      schema: dev_matthew_giglia_lakeloom
       sql_warehouse_id: 64d286e6be17d837
-      files_path: /Volumes/hls_fde_dev/dev_matthew_giglia_lakeloom/session_audio
-      files_id: hls_fde_dev.dev_matthew_giglia_lakeloom.session_audio
-      postgres_branch: projects/dev-matthew-giglia-lakeloom/branches/production
-      postgres_database: projects/dev-matthew-giglia-lakeloom/branches/production/databases/db-16c3-p7ob6z9dbv
+      lakebase_project_id: dev-matthew-giglia-lakeloom
+      lakebase_database_id: db-16c3-p7ob6z9dbv
+      run_as_user: matthew.giglia@databricks.com
+      # SPN credential key names (schema-qualified for dev)
+      client_id_dbs_key: client_id_dev_matthew_giglia_lakeloom
+      client_secret_dbs_key: client_secret_dev_matthew_giglia_lakeloom
+      xcode_client_id_dbs_key: xcode_client_id_dev_matthew_giglia_lakeloom
+      xcode_client_secret_dbs_key: xcode_client_secret_dev_matthew_giglia_lakeloom
+
+  # ── hls_fde (production — same workspace as dev) ────────────────────────
+  hls_fde:
+    mode: production
+    presets:
+      source_linked_deployment: false
+      tags:
+        project: ${var.tags_project}
+        businessUnit: ${var.tags_businessUnit}
+        requestedBy: ${var.tags_requestedBy}
+        developer: ${var.tags_developer}
+        RemoveAfter: ${var.tags_RemoveAfter}
+        env: ${bundle.target}
+    workspace:
+      host: https://fevm-hls-fde.cloud.databricks.com
+      root_path: /Workspace/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      catalog: hls_fde
+      schema: lakeloom
+      sql_warehouse_id: 64d286e6be17d837
+      lakebase_project_id: lakeloom-hls-fde
+      lakebase_database_id: ""  # TBD — discover after first hls_fde infra deploy
+      run_as_user: ${var.higher_level_service_principal}
+      # SPN credential key names (schema-qualified for production)
+      client_id_dbs_key: client_id_lakeloom
+      client_secret_dbs_key: client_secret_lakeloom
+      xcode_client_id_dbs_key: xcode_client_id_lakeloom
+      xcode_client_secret_dbs_key: xcode_client_secret_lakeloom
+    permissions:
+      - user_name: matthew.giglia@databricks.com
+        level: CAN_MANAGE
+      - group_name: users
+        level: CAN_RUN
+      - service_principal_name: ${var.higher_level_service_principal}
+        level: CAN_MANAGE
+
+  # ── prod (placeholder — separate workspace TBD) ─────────────────────────
+  prod:
+    mode: production
+    workspace:
+      host: https://fevm-hls-fde.cloud.databricks.com
+      root_path: /Workspace/.bundle/${bundle.name}/${bundle.target}
+    run_as:
+      user_name: matthew.giglia@databricks.com
+    variables:
+      catalog: ""
+      schema: ""
+      sql_warehouse_id: ""
+      lakebase_project_id: ""
+      lakebase_database_id: ""
+      run_as_user: matthew.giglia@databricks.com
+      client_id_dbs_key: ""
+      client_secret_dbs_key: ""
+      xcode_client_id_dbs_key: ""
+      xcode_client_secret_dbs_key: ""
