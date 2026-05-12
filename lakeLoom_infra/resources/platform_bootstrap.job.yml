@@ -3,6 +3,7 @@
 # This job intentionally focuses on platform-owned concerns:
 #   1. Ensure or discover the shared lakeLoom service principal and establish
 #      the secret-scope contract used by the Databricks App and iOS pairing flow.
+#      Also creates the Xcode SPN for iOS app → Databricks App API access.
 #   2. Create the expected ZeroBus bronze target table used for transcript and
 #      event ingestion (Speech-to-Text ZeroBus Target Table DDL).
 #   3. Validate deployed platform resources needed by QR-pair onboarding,
@@ -28,13 +29,14 @@ resources:
       description: >
         Bootstraps the shared lakeLoom platform prerequisites for QR-pair
         onboarding. Task 1 establishes the shared service-principal and secret
-        contract used for workspace data-plane access. Task 2 creates the
-        expected transcript_events_raw bronze target table for ZeroBus
-        transcript/event ingestion. Task 3 validates the Unity Catalog schema,
-        managed session_audio volume, and transcript target-table readiness
-        from the infrastructure SQL warehouse. Lakebase application-schema
-        migrations remain App-owned. Idempotent by design and intended to be
-        safe to re-run.
+        contract used for workspace data-plane access, plus the Xcode SPN for
+        iOS app API authentication. Task 2 creates the expected
+        transcript_events_raw bronze target table for ZeroBus transcript/event
+        ingestion. Task 3 validates the Unity Catalog schema, managed
+        session_audio volume, and transcript target-table readiness from the
+        infrastructure SQL warehouse. Lakebase application-schema migrations
+        remain App-owned. Idempotent by design and intended to be safe to
+        re-run.
 
       parameters:
         - name: catalog_use
@@ -47,6 +49,10 @@ resources:
           default: ${var.client_id_dbs_key}
         - name: client_secret_dbs_key
           default: ${var.client_secret_dbs_key}
+        - name: xcode_client_id_dbs_key
+          default: ${var.xcode_client_id_dbs_key}
+        - name: xcode_client_secret_dbs_key
+          default: ${var.xcode_client_secret_dbs_key}
         - name: zerobus_stream_pool_size
           default: ${var.zerobus_stream_pool_size}
 
@@ -67,6 +73,8 @@ resources:
               secret_scope_name: "{{job.parameters.secret_scope_name}}"
               client_id_dbs_key: "{{job.parameters.client_id_dbs_key}}"
               client_secret_dbs_key: "{{job.parameters.client_secret_dbs_key}}"
+              xcode_client_id_dbs_key: "{{job.parameters.xcode_client_id_dbs_key}}"
+              xcode_client_secret_dbs_key: "{{job.parameters.xcode_client_secret_dbs_key}}"
               zerobus_stream_pool_size: "{{job.parameters.zerobus_stream_pool_size}}"
           environment_key: default
 
