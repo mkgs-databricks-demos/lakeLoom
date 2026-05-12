@@ -1,0 +1,53 @@
+bundle:
+  name: lakeloom-ai
+
+variables:
+  sql_warehouse_id:
+    description: SQL Warehouse ID
+  files_path:
+    description: Volume path for file storage (e.g. /Volumes/catalog/schema/volume_name)
+  files_id:
+    description: Permission to write to volumes
+  postgres_branch:
+    description: Full Lakebase Postgres branch resource name. Obtain by running `databricks postgres list-branches projects/{project-id}`, select the desired item from the output array and use its .name value.
+  postgres_database:
+    description: Full Lakebase Postgres database resource name. Obtain by running `databricks postgres list-databases {branch-name}`, select the desired item from the output array and use its .name value. Requires the branch resource name.
+
+resources:
+  apps:
+    app:
+      name: "lakeloom-ai"
+      description: "A Databricks App powered by AppKit"
+      source_code_path: ./
+      user_api_scopes:
+        - files.files
+
+      # The resources which this app has access to.
+      resources:
+        - name: sql-warehouse
+          sql_warehouse:
+            id: ${var.sql_warehouse_id}
+            permission: CAN_USE
+        - name: files
+          uc_securable:
+            securable_full_name: ${var.files_id}
+            securable_type: VOLUME
+            permission: WRITE_VOLUME
+        - name: postgres
+          postgres:
+            branch: ${var.postgres_branch}
+            database: ${var.postgres_database}
+            permission: CAN_CONNECT_AND_CREATE
+
+targets:
+  default:
+    default: true
+    workspace:
+      host: https://fevm-hls-fde.cloud.databricks.com
+
+    variables:
+      sql_warehouse_id: 64d286e6be17d837
+      files_path: /Volumes/hls_fde_dev/dev_matthew_giglia_lakeloom/session_audio
+      files_id: hls_fde_dev.dev_matthew_giglia_lakeloom.session_audio
+      postgres_branch: projects/dev-matthew-giglia-lakeloom/branches/production
+      postgres_database: projects/dev-matthew-giglia-lakeloom/branches/production/databases/db-16c3-p7ob6z9dbv
