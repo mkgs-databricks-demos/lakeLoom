@@ -1,6 +1,6 @@
 # Databricks Asset Bundle — lakeloom-ai
 # AppKit application for the lakeLoom rapid-MVP capture tool.
-# Deploy this bundle AFTER the lakeLoom_infra bundle and platform_bootstrap job.
+# Deploy this bundle AFTER the lakeloom-infra bundle and platform_bootstrap job.
 #
 # The deploy.sh script passes infrastructure-derived values (catalog, schema,
 # warehouse ID, Lakebase project/database IDs, SPN key names, Xcode SPN ID)

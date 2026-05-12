@@ -2,11 +2,12 @@
 # deploy.sh — Shared deployment script for the lakeLoom solution.
 #
 # Deploys Databricks Asset Bundles in dependency order:
-#   1. lakeLoom_infra       (secret scopes, UC schemas/volumes, SQL warehouse, Lakebase)
+#   1. lakeloom-infra       (secret scopes, UC schemas/volumes, SQL warehouse, Lakebase)
 #   2. Platform bootstrap   (SPN creation, secret provisioning, table DDL, volume grants)
 #   3. Readiness checks     (secret scope keys + bronze table + volumes + Lakebase status)
-#   4. lakeloom-ai          (AppKit app resource: permissions, env vars, volume/warehouse bindings)
-#   5. App source deploy    (start compute if stopped, push source code to container)
+#   4. Readiness checks     (secret scope keys + bronze table + volumes + Lakebase)
+#   5. lakeloom-ai          (AppKit app resource: permissions, env vars, volume/warehouse bindings)
+#   6. App source deploy    (start compute if stopped, push source code to container)
 #
 # Usage:
 #   ./deploy.sh --target dev                          # deploy all bundles (with readiness checks)
@@ -75,7 +76,7 @@ if [[ -n "${__DEPLOY_ORIG_DIR:-}" ]]; then
 else
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
-INFRA_BUNDLE="lakeLoom_infra"
+INFRA_BUNDLE="lakeloom-infra"
 APP_BUNDLE="lakeloom-ai"
 
 # Infrastructure readiness — expected secret scope keys.
@@ -936,15 +937,22 @@ if [[ "${DEPLOY_INFRA}" == true ]]; then
   deploy_bundle "${INFRA_BUNDLE}"
 fi
 
-# Step 2: Run platform bootstrap job (optional — creates SPNs, stores secrets,
+# Step 2: Resolve infrastructure variables from infra bundle summary.
+# MUST run immediately after infra deploy (FUSE still fresh). After bundle run
+# (~2 min wait), FUSE directory handles go stale and cd fails with
+# "Operation not permitted". The summary doesn't depend on the bootstrap job.
+if [[ "${DEPLOY_APP}" == true ]] && [[ "${VALIDATE_ONLY}" != true ]] && [[ "${DESTROY}" != true ]]; then
+  resolve_infra_vars
+fi
+
+# Step 3: Run platform bootstrap job (optional — creates SPNs, stores secrets,
 #          creates table, grants volume access, validates platform)
 if [[ "${RUN_SETUP}" == true ]] && [[ "${VALIDATE_ONLY}" != true ]] && [[ "${DESTROY}" != true ]]; then
   run_platform_bootstrap
 fi
 
-# Step 3: Verify infrastructure readiness (gate before app bundle deploy)
+# Step 4: Verify infrastructure readiness (gate before app bundle deploy)
 if [[ "${DEPLOY_APP}" == true ]] && [[ "${SKIP_CHECKS}" != true ]] && [[ "${VALIDATE_ONLY}" != true ]] && [[ "${DESTROY}" != true ]]; then
-  resolve_infra_vars
   verify_infra_readiness
   # Resolve Lakebase database ID (requires project to be deployed)
   resolve_lakebase_database
@@ -952,7 +960,7 @@ if [[ "${DEPLOY_APP}" == true ]] && [[ "${SKIP_CHECKS}" != true ]] && [[ "${VALI
   read_xcode_spn_id
 fi
 
-# Step 4: Deploy app bundle
+# Step 5: Deploy app bundle
 # Only xcode_spn_id is passed as --var (runtime-discovered).
 # All other values use target defaults in the app bundle's databricks.yml.
 if [[ "${DEPLOY_APP}" == true ]]; then
@@ -964,7 +972,7 @@ if [[ "${DEPLOY_APP}" == true ]]; then
   fi
 fi
 
-# Step 5: Deploy app source code and ensure compute is running
+# Step 6: Deploy app source code and ensure compute is running
 # bundle deploy provisions the app resource (permissions, env vars, resources)
 # but does NOT push source code to the container or start compute.
 # This step resolves the app name + source path from the bundle summary,

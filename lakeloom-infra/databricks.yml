@@ -8,7 +8,7 @@
 # See https://docs.databricks.com/en/dev-tools/bundles/settings.html
 
 bundle:
-  name: "lakeLoom_infra"
+  name: "lakeloom-infra"
 
 include:
   - resources/*.schema.yml
