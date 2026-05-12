@@ -70,6 +70,12 @@ variables:
   client_secret_dbs_key:
     description: The key name for the ZeroBus OAuth2 M2M client secret in the secret scope.
     default: client_secret
+  xcode_client_id_dbs_key:
+    description: The key name for the xcode (iOS, iPadOS, MacOS, WatchOS) OAuth2 M2M client ID in the secret scope.
+    default: xcode_client_id
+  xcode_client_secret_dbs_key:
+    description: The key name for the xcode (iOS, iPadOS, MacOS, WatchOS) OAuth2 M2M client secret in the secret scope.
+    default: xcode_client_secret
 
   # ── Lakebase Project ────────────────────────────────────────────────
   #
@@ -87,16 +93,16 @@ variables:
 
   # ── ZeroBus Configuration ───────────────────────────────────────────
   #
-  # The UC setup job stores these values in the secret scope so the
+  # The platform bootstrap job stores these values in the secret scope so the
   # lakeLoom_app can read them at runtime via environment variables.
   # The target_table_name is the fully qualified bronze table name
   # (catalog.schema.table) that ZeroBus lands records into.
   zerobus_stream_pool_size:
     description: >
-      Number of concurrent gRPC streams in the ZeroBus SDK stream pool.
-      Stored in the secret scope by the UC setup job. The app bundle reads
-      it via ZEROBUS_STREAM_POOL_SIZE env var. The app defaults to 4 if unset.
-    default: "4"
+      Maximum number of concurrent gRPC streams in the ZeroBus SDK stream pool.
+      Stored in the secret scope by the platform bootstrap job. The app bundle reads
+      it via ZEROBUS_STREAM_POOL_SIZE env var. The app defaults to 16 if unset.
+    default: "16"
 
   run_as_user:
     description: The user or service principal that workflows should run as.
@@ -160,6 +166,8 @@ targets:
       client_id_dbs_key: client_id_dev_matthew_giglia_${var.schema}
       client_secret_dbs_key: client_secret_dev_matthew_giglia_${var.schema}
       lakebase_project_id: dev-matthew-giglia-lakeloom
+      xcode_client_id_dbs_key: xcode_client_id_dev_matthew_giglia_${var.schema}
+      xcode_client_secret_dbs_key: xcode_client_secret_dev_matthew_giglia_${var.schema}
 
   # ── hls_fde (production — same workspace as dev) ────────────────────────
   hls_fde:
@@ -186,6 +194,8 @@ targets:
       serverless_environment_version: "5"
       client_id_dbs_key: client_id_${var.schema}
       client_secret_dbs_key: client_secret_${var.schema}
+      xcode_client_id_dbs_key: xcode_client_id_${var.schema}
+      xcode_client_secret_dbs_key: xcode_client_secret_${var.schema}
       lakebase_project_id: lakeloom-hls-fde
     permissions:
       - user_name: matthew.giglia@databricks.com
