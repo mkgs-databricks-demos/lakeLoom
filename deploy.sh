@@ -192,6 +192,27 @@ safe() { echo "$1" | sed 's/[^a-zA-Z0-9_.\-]//g'; }
 # safe_url() — like safe() but preserves :// for workspace URLs
 safe_url() { echo "$1" | sed 's/[^a-zA-Z0-9_.\-:\/]//g'; }
 
+# cd_bundle() — cd into a /Workspace directory with FUSE refresh and retry.
+# After long-running operations (bundle run ~2 min), the FUSE mount for
+# /Workspace directories can become stale and reject cd with "Operation not
+# permitted". This function pokes the directory via `ls` to force the kernel
+# to re-validate the mount, then retries cd up to 3 times.
+cd_bundle() {
+  local dir="$1"
+  local i
+  for ((i=1; i<=3; i++)); do
+    # Poke FUSE to refresh stale directory handles
+    ls "${dir}" >/dev/null 2>&1 || true
+    sleep 0.5
+    if cd "${dir}" 2>/dev/null; then
+      return 0
+    fi
+    sleep 2
+  done
+  # Final attempt — let error propagate
+  cd "${dir}"
+}
+
 # --------------------------------------------------------------------------- #
 # Prerequisites
 # --------------------------------------------------------------------------- #
@@ -221,7 +242,7 @@ deploy_bundle() {
   fi
 
   log "Validating ${bundle_name} (target: ${TARGET})"
-  (cd "${bundle_dir}" && databricks bundle validate --target "${TARGET}")
+  (cd_bundle "${bundle_dir}" && databricks bundle validate --target "${TARGET}")
   ok "Validation passed: ${bundle_name}"
 
   if [[ "${VALIDATE_ONLY}" == true ]]; then
@@ -230,14 +251,14 @@ deploy_bundle() {
 
   if [[ "${DESTROY}" == true ]]; then
     log "Destroying ${bundle_name} (target: ${TARGET})"
-    (cd "${bundle_dir}" && databricks bundle destroy --target "${TARGET}" --auto-approve)
+    (cd_bundle "${bundle_dir}" && databricks bundle destroy --target "${TARGET}" --auto-approve)
     ok "Destroyed: ${bundle_name}"
   else
     log "Deploying ${bundle_name} (target: ${TARGET})"
     if [[ ${#extra_args[@]} -gt 0 ]]; then
-      (cd "${bundle_dir}" && databricks bundle deploy --target "${TARGET}" "${extra_args[@]}")
+      (cd_bundle "${bundle_dir}" && databricks bundle deploy --target "${TARGET}" "${extra_args[@]}")
     else
-      (cd "${bundle_dir}" && databricks bundle deploy --target "${TARGET}")
+      (cd_bundle "${bundle_dir}" && databricks bundle deploy --target "${TARGET}")
     fi
     ok "Deployed: ${bundle_name}"
   fi
@@ -253,7 +274,7 @@ resolve_infra_vars() {
   log "Resolving infrastructure variables (target: ${TARGET})"
 
   local summary_json
-  summary_json=$(cd "${bundle_dir}" && databricks bundle summary --target "${TARGET}" --output json 2>&1) || {
+  summary_json=$(cd_bundle "${bundle_dir}" && databricks bundle summary --target "${TARGET}" --output json 2>&1) || {
     fail "Could not read bundle summary for ${INFRA_BUNDLE}.\n" \
          "  Deploy the infra bundle first:\n" \
          "    cd ${bundle_dir} && databricks bundle deploy --target ${TARGET}"
@@ -482,7 +503,7 @@ run_platform_bootstrap() {
   local bundle_dir="${SCRIPT_DIR}/${INFRA_BUNDLE}"
 
   log "Running platform bootstrap job: ${PLATFORM_BOOTSTRAP_JOB} (target: ${TARGET})"
-  (cd "${bundle_dir}" && databricks bundle run "${PLATFORM_BOOTSTRAP_JOB}" --target "${TARGET}") || \
+  (cd_bundle "${bundle_dir}" && databricks bundle run "${PLATFORM_BOOTSTRAP_JOB}" --target "${TARGET}") || \
     fail "Platform bootstrap job failed. Check the Databricks Jobs UI for details."
   ok "Platform bootstrap job completed successfully"
 }
@@ -786,7 +807,7 @@ resolve_app_name() {
   log "Resolving app name from bundle summary"
 
   local summary_json
-  summary_json=$(cd "${bundle_dir}" && databricks bundle summary --target "${TARGET}" --output json 2>&1) || {
+  summary_json=$(cd_bundle "${bundle_dir}" && databricks bundle summary --target "${TARGET}" --output json 2>&1) || {
     fail "Could not read bundle summary for ${APP_BUNDLE}."
   }
 
