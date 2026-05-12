@@ -25,6 +25,8 @@ lakeLoom_infra/
 ├── resources/
 │   ├── lakeloom.schema.yml
 │   ├── session_audio.volume.yml
+│   ├── screenshots.volume.yml
+│   ├── documents.volume.yml
 │   ├── lakeloom.secret_scope.yml
 │   ├── infra_warehouse.sql_warehouse.yml
 │   ├── lakeloom.lakebase.yml
@@ -38,7 +40,7 @@ lakeLoom_infra/
 │   ├── platform_bootstrap/         # NOTEBOOK objects (no raw .sql/.py files)
 │   │   ├── ensure-service-principal # Python default, 12 cells
 │   │   ├── stt-0bus-target-table-ddl # SQL default, 14 cells
-│   │   └── validate-platform       # SQL default, 7 cells
+│   │   └── validate-platform       # SQL default, 9 cells
 │   └── admin_actions/              # Manual admin notebooks
 │       ├── set-databricks-secrets  # Generic secret provisioning
 │       └── update-secrets-acls     # Secret scope ACL management
@@ -137,7 +139,7 @@ lakeLoom_infra/
 
 1. **ensure_service_principal** (Python, serverless) — Creates/finds both SPNs, provisions secrets, verifies M2M token flow if `client_secret` is available.
 2. **create_transcript_events_raw_table** (SQL, warehouse) — Idempotent DDL for the bronze table + dynamic GRANTs (USE CATALOG, USE SCHEMA, MODIFY+SELECT) to the ZeroBus SPN.
-3. **validate_platform** (SQL, warehouse) — Assertion-based checks: schema exists, `session_audio` volume is MANAGED, `transcript_events_raw` table exists.
+3. **validate_platform** (SQL, warehouse) — Assertion-based checks: schema exists, all three managed volumes (`session_audio`, `screenshots`, `documents`) exist and are MANAGED, `transcript_events_raw` table exists.
 
 Job is idempotent and safe to re-run.
 
@@ -157,7 +159,7 @@ Job is idempotent and safe to re-run.
 * Layer 1 scope: App sidecar authentication ONLY. iOS does NOT call UC APIs, ZeroBus, or SCIM directly.
 * Layer 2: iOS sends a per-user session token plus ECDSA P-256 request signature on every App API call. The App verifies the token against `paired_sessions` in Lakebase and the signature against the bound `device_pubkey`.
 * The App, not the workspace, is responsible for per-user authorization and paired-device lifecycle.
-* **All data-plane operations are App-proxied:** audio uploads, ZeroBus event forwarding, and project/session CRUD flow through the App's API. iOS never touches UC Volume Files API or ZeroBus directly.
+* **All data-plane operations are App-proxied:** audio uploads, screenshot uploads, document uploads, ZeroBus event forwarding, and project/session CRUD flow through the App's API. iOS never touches UC Volume Files API or ZeroBus directly.
 * ZeroBus SPN credentials **never leave the server** — the App reads them from the secret scope and uses them server-side.
 
 ### App-side data model and APIs now expected
@@ -174,14 +176,16 @@ Job is idempotent and safe to re-run.
 **Context:** Isaac's original QR-pair design had iOS calling UC Volume Files API directly using a shared SPN's M2M token (Layer 1). This created an exception to the single-network-boundary principle and required SPN credentials (ZeroBus SPN) in the QR payload.
 
 **Decision:** All data-plane operations route through the Databricks App:
-* Audio upload: iOS → App endpoint → App SPN writes to UC Volume
+* Audio upload: iOS → App endpoint → App SPN writes to UC Volume (`session_audio`)
+* Screenshot upload: iOS → App endpoint → App SPN writes to UC Volume (`screenshots`)
+* Document upload: iOS → App endpoint → App SPN writes to UC Volume (`documents`)
 * Transcript events: iOS → App endpoint → App forwards via ZeroBus TS SDK (already designed this way)
 * SCIM identity: User identity supplied in QR payload from browser session (no iOS-side SCIM call)
 
 **Consequences:**
 * QR payload carries **Xcode SPN** credentials only (for App sidecar M2M auth). No ZeroBus SPN credentials on the wire.
 * iOS auth surface simplified: M2MTokenClient uses Xcode SPN → App sidecar. No separate token flow for data-plane.
-* WRITE_VOLUME on `session_audio` granted to **App's auto-provisioned SPN** (App-bundle scope, not infra).
+* WRITE_VOLUME on all three volumes granted to **App's auto-provisioned SPN** (App-bundle scope, not infra).
 * Single-network-boundary principle is absolute: iOS → App (HTTPS) is the ONLY network call.
 * ZeroBus SPN stays single-responsibility: streams to bronze table, credentials never exposed to clients.
 * Infra bundle requires NO changes — already complete for this architecture.
@@ -212,9 +216,15 @@ Job is idempotent and safe to re-run.
 | Xcode SPN client_secret in scope | Admin manual step (DONE per env) |
 | CAN_USE on App for Xcode SPN | App bundle |
 | WRITE_VOLUME on session_audio | App bundle (App's own SPN) |
+| WRITE_VOLUME on screenshots | App bundle (App's own SPN) |
+| WRITE_VOLUME on documents | App bundle (App's own SPN) |
 | ZeroBus SPN credentials in scope | Infra bundle (DONE) |
 | Audio upload endpoint + Volume write | App bundle |
+| Screenshot upload endpoint + Volume write | App bundle |
+| Document upload endpoint + Volume write | App bundle |
 | Lakebase paired_sessions migration | App bundle |
+
+**Note:** Isaac is NOT yet aware of the `screenshots` and `documents` volumes. These must be communicated via `hey_isaac/` so the iOS app can implement upload flows for these content types in addition to audio.
 
 ## Infra Bundle Plan Status
 
@@ -238,5 +248,6 @@ Job is idempotent and safe to re-run.
 * Author the companion `lakeLoom_app` bundle (Databricks App with AppKit).
 * App bootstrap: self-migrate Lakebase tables (`paired_sessions`, etc.) before serving endpoints.
 * App bundle grants its own SPN READ on `lakeloom_credentials` and CAN_USE to the Xcode SPN.
-* App SPN needs WRITE_VOLUME on `session_audio` for proxied audio uploads from iOS.
+* App SPN needs WRITE_VOLUME on `session_audio`, `screenshots`, and `documents` for proxied uploads from iOS.
 * QR-pair endpoint implementation depends on both SPNs having valid `client_secret` values.
+* Inform Isaac (via `hey_isaac/`) about `screenshots` and `documents` volumes and the corresponding App upload endpoints iOS will need to call.
