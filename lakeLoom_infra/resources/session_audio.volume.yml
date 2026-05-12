@@ -1,0 +1,20 @@
+# Managed volume for storing session audio files uploaded by the iOS app.
+#
+# Files are stored as: /Volumes/{catalog}/{schema}/session_audio/{project_id}/{session_id}/{filename}.m4a
+#
+# The iOS app uploads audio post-session over Wi-Fi directly to the UC
+# Volume Files API using the OAuth U2M token. Audio is referenced by URI
+# in the bronze table (transcript_events_raw, event_type=audio_uploaded)
+# and joined in silver for optional server-side re-transcription.
+
+resources:
+  volumes:
+    session_audio_volume:
+      catalog_name: ${resources.schemas.lakeloom_schema.catalog_name}
+      schema_name: ${resources.schemas.lakeloom_schema.name}
+      name: session_audio
+      volume_type: MANAGED
+      comment: >
+        Managed volume for session audio files uploaded by the lakeLoom iOS
+        app. Organized by project_id/session_id. Used for server-side
+        re-transcription (WhisperKit) and archival.

@@ -1,0 +1,55 @@
+# Serverless SQL warehouse for infrastructure setup tasks (DDL, grants, etc.)
+# and runtime queries from the lakeLoom Databricks App.
+# Smallest available size on the preview channel.
+#
+# Referenced by other resources as:
+#   ${resources.sql_warehouses.infra_warehouse.id}
+
+resources:
+  sql_warehouses:
+    infra_warehouse:
+      name: lakeLoom Infra [${bundle.target}]
+
+      # Smallest serverless warehouse
+      cluster_size: "2X-Small"
+      warehouse_type: PRO
+      enable_serverless_compute: true
+      enable_photon: true
+
+      # Preview channel for latest SQL features (VARIANT, CLUSTER BY AUTO, etc.)
+      channel:
+        name: CHANNEL_NAME_PREVIEW
+
+      # Auto-stop after 10 minutes of idle to minimize cost
+      auto_stop_mins: 10
+
+      # Single cluster — infra tasks are infrequent and sequential
+      min_num_clusters: 1
+      max_num_clusters: 1
+
+      permissions:
+        - user_name: matthew.giglia@databricks.com
+          level: CAN_MANAGE
+
+# Target-specific overrides
+targets:
+
+  hls_fde:
+    resources:
+      sql_warehouses:
+        infra_warehouse:
+          permissions:
+            - user_name: matthew.giglia@databricks.com
+              level: CAN_MANAGE
+            - service_principal_name: ${var.higher_level_service_principal}
+              level: CAN_MANAGE
+            - group_name: users
+              level: CAN_USE
+
+  prod:
+    resources:
+      sql_warehouses:
+        infra_warehouse:
+          permissions:
+            - user_name: matthew.giglia@databricks.com
+              level: CAN_MANAGE

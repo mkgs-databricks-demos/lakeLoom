@@ -1,0 +1,117 @@
+# Job to bootstrap and validate the shared lakeLoom platform prerequisites.
+#
+# This job intentionally focuses on platform-owned concerns:
+#   1. Ensure or discover the shared lakeLoom service principal and establish
+#      the secret-scope contract used by the Databricks App and iOS pairing flow.
+#      Also creates the Xcode SPN for iOS app → Databricks App API access.
+#   2. Create the expected ZeroBus bronze target table used for transcript and
+#      event ingestion (Speech-to-Text ZeroBus Target Table DDL).
+#   3. Validate deployed platform resources needed by QR-pair onboarding,
+#      especially the UC schema, managed session_audio volume, and expected
+#      ZeroBus target-table naming contract.
+#
+# The App owns Lakebase schema migrations (including paired_sessions) and
+# should self-migrate before serving pairing endpoints.
+#
+# NOTE: catalog and schema references use ${resources.schemas.lakeloom_schema.*}
+#       per the bundle convention — never ${var.catalog} or ${var.schema} directly.
+#
+# CONVENTION — notebook_path extensions:
+#   All notebooks are NOTEBOOK objects referenced as .ipynb.
+#   The warehouse_id field on SQL tasks determines compute routing — the
+#   extension is purely for Databricks API notebook resolution.
+
+resources:
+  jobs:
+    platform_bootstrap:
+      name: lakeLoom — Platform Bootstrap [${bundle.target}]
+
+      description: >
+        Bootstraps the shared lakeLoom platform prerequisites for QR-pair
+        onboarding. Task 1 establishes the shared service-principal and secret
+        contract used for workspace data-plane access, plus the Xcode SPN for
+        iOS app API authentication. Task 2 creates the expected
+        transcript_events_raw bronze target table for ZeroBus transcript/event
+        ingestion. Task 3 validates the Unity Catalog schema, managed
+        session_audio volume, and transcript target-table readiness from the
+        infrastructure SQL warehouse. Lakebase application-schema migrations
+        remain App-owned. Idempotent by design and intended to be safe to
+        re-run.
+
+      parameters:
+        - name: catalog_use
+          default: ${resources.schemas.lakeloom_schema.catalog_name}
+        - name: schema_use
+          default: ${resources.schemas.lakeloom_schema.name}
+        - name: secret_scope_name
+          default: ${var.secret_scope_name}
+        - name: client_id_dbs_key
+          default: ${var.client_id_dbs_key}
+        - name: client_secret_dbs_key
+          default: ${var.client_secret_dbs_key}
+        - name: xcode_client_id_dbs_key
+          default: ${var.xcode_client_id_dbs_key}
+        - name: xcode_client_secret_dbs_key
+          default: ${var.xcode_client_secret_dbs_key}
+        - name: zerobus_stream_pool_size
+          default: ${var.zerobus_stream_pool_size}
+
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: ${var.serverless_environment_version}
+
+      tasks:
+        # Python default notebook — runs on serverless compute
+        - task_key: ensure_service_principal
+          notebook_task:
+            notebook_path: ../src/platform_bootstrap/ensure-service-principal.ipynb
+            source: WORKSPACE
+            base_parameters:
+              catalog_use: "{{job.parameters.catalog_use}}"
+              schema_use: "{{job.parameters.schema_use}}"
+              secret_scope_name: "{{job.parameters.secret_scope_name}}"
+              client_id_dbs_key: "{{job.parameters.client_id_dbs_key}}"
+              client_secret_dbs_key: "{{job.parameters.client_secret_dbs_key}}"
+              xcode_client_id_dbs_key: "{{job.parameters.xcode_client_id_dbs_key}}"
+              xcode_client_secret_dbs_key: "{{job.parameters.xcode_client_secret_dbs_key}}"
+              zerobus_stream_pool_size: "{{job.parameters.zerobus_stream_pool_size}}"
+          environment_key: default
+
+        # SQL default notebook — runs on infra SQL warehouse
+        - task_key: create_transcript_events_raw_table
+          depends_on:
+            - task_key: ensure_service_principal
+          notebook_task:
+            notebook_path: ../src/platform_bootstrap/stt-0bus-target-table-ddl.ipynb
+            source: WORKSPACE
+            warehouse_id: ${resources.sql_warehouses.infra_warehouse.id}
+            base_parameters:
+              catalog_use: "{{job.parameters.catalog_use}}"
+              schema_use: "{{job.parameters.schema_use}}"
+              secret_scope_name: "{{job.parameters.secret_scope_name}}"
+              client_id_dbs_key: "{{job.parameters.client_id_dbs_key}}"
+              spn_application_id: "{{tasks.ensure_service_principal.values.spn_application_id}}"
+
+        # SQL default notebook — runs on infra SQL warehouse
+        - task_key: validate_platform
+          depends_on:
+            - task_key: create_transcript_events_raw_table
+          notebook_task:
+            notebook_path: ../src/platform_bootstrap/validate-platform.ipynb
+            source: WORKSPACE
+            warehouse_id: ${resources.sql_warehouses.infra_warehouse.id}
+            base_parameters:
+              catalog_use: "{{job.parameters.catalog_use}}"
+              schema_use: "{{job.parameters.schema_use}}"
+              secret_scope_name: "{{job.parameters.secret_scope_name}}"
+              client_id_dbs_key: "{{job.parameters.client_id_dbs_key}}"
+              client_secret_dbs_key: "{{job.parameters.client_secret_dbs_key}}"
+              zerobus_stream_pool_size: "{{job.parameters.zerobus_stream_pool_size}}"
+
+      max_concurrent_runs: 1
+      timeout_seconds: 900
+
+      tags:
+        component: bootstrap
+        resource_type: platform

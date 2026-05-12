@@ -1,27 +1,215 @@
-# Declarative Automation Bundle configuration, more info here: https://docs.databricks.com/en/dev-tools/bundles/settings.html
+# Databricks Asset Bundle — lakeLoom_infra
+# Shared infrastructure for the lakeLoom rapid-MVP capture tool.
+# Deploy this bundle BEFORE the lakeLoom_app application bundle.
+#
+# Manages: secret scopes, Unity Catalog schemas/volumes/grants,
+#          SQL warehouses, Lakebase projects, and bootstrap DDL jobs.
+#
+# See https://docs.databricks.com/en/dev-tools/bundles/settings.html
+
 bundle:
   name: "lakeLoom_infra"
 
 include:
+  - resources/*.schema.yml
+  - resources/*.secret_scope.yml
+  - resources/*.sql_warehouse.yml
+  - resources/*.job.yml
   - resources/*.yml
   - resources/*/*.yml
 
+# ---------------------------------------------------------------------------
+# Variable declarations
+# Assigned per-target below; referenced in resource YAML files.
+# ---------------------------------------------------------------------------
+#
+# CONVENTION — schema & catalog references:
+#   The `catalog` and `schema` variables below feed ONLY into the schema
+#   resource definition (resources/lakeloom.schema.yml).
+#
+#   All OTHER resources (jobs, pipelines, apps, volumes, etc.) in this
+#   bundle and in the companion lakeLoom_app bundle MUST reference
+#   the schema through deployed-resource substitutions:
+#
+#     ${resources.schemas.lakeloom_schema.catalog_name}   — catalog
+#     ${resources.schemas.lakeloom_schema.name}            — schema
+#     ${resources.schemas.lakeloom_schema.id}              — schema ID (for pipeline targets)
+#
+#   Similarly, the SQL warehouse is referenced as:
+#     ${resources.sql_warehouses.infra_warehouse.id}
+#
+#   This guarantees references are bound to the actual deployed object,
+#   not to a loosely-coupled variable that could drift.
+#
+# CONVENTION — secret scope key names:
+#   The `client_id_dbs_key` and `client_secret_dbs_key` variables control
+#   the key names used inside the shared secret scope. Targets override
+#   these to schema-qualified names (e.g. client_id_lakeloom) so that
+#   multiple schemas can share a single scope without key collisions.
+#
+#   These variables are passed to the UC setup job as parameters and used
+#   by the ensure-service-principal notebook to store/check secrets.
+#   The companion lakeLoom_app bundle declares matching variables
+#   with identical per-target values.
+# ---------------------------------------------------------------------------
+variables:
+  catalog:
+    description: >
+      The Unity Catalog catalog for lakeLoom data objects.
+      USED ONLY by the schema resource — see convention note above.
+  schema:
+    description: >
+      The Unity Catalog schema name within the catalog.
+      USED ONLY by the schema resource — see convention note above.
+  secret_scope_name:
+    description: The Databricks secret scope name for lakeLoom ZeroBus credentials.
+    default: lakeloom_credentials
+  client_id_dbs_key:
+    description: The key name for the ZeroBus OAuth2 M2M client ID in the secret scope.
+    default: client_id
+  client_secret_dbs_key:
+    description: The key name for the ZeroBus OAuth2 M2M client secret in the secret scope.
+    default: client_secret
+  xcode_client_id_dbs_key:
+    description: The key name for the xcode (iOS, iPadOS, MacOS, WatchOS) OAuth2 M2M client ID in the secret scope.
+    default: xcode_client_id
+  xcode_client_secret_dbs_key:
+    description: The key name for the xcode (iOS, iPadOS, MacOS, WatchOS) OAuth2 M2M client secret in the secret scope.
+    default: xcode_client_secret
+
+  # ── Lakebase Project ────────────────────────────────────────────────
+  #
+  # Target-specific Lakebase project IDs. When two targets share the
+  # same workspace (dev + hls_fde), each must have a distinct project
+  # to avoid collisions. The resource in lakeloom.lakebase.yml
+  # references ${var.lakebase_project_id}.
+  lakebase_project_id:
+    description: >
+      Lakebase Autoscaling project ID. Must be target-specific so that dev
+      and production environments have isolated OLTP databases. The project_id
+      is a globally unique slug within the workspace — unlike display_name,
+      it is NOT prefixed by DABs development mode.
+    default: lakeloom
+
+  # ── ZeroBus Configuration ───────────────────────────────────────────
+  #
+  # The platform bootstrap job stores these values in the secret scope so the
+  # lakeLoom_app can read them at runtime via environment variables.
+  # The target_table_name is the fully qualified bronze table name
+  # (catalog.schema.table) that ZeroBus lands records into.
+  zerobus_stream_pool_size:
+    description: >
+      Maximum number of concurrent gRPC streams in the ZeroBus SDK stream pool.
+      Stored in the secret scope by the platform bootstrap job. The app bundle reads
+      it via ZEROBUS_STREAM_POOL_SIZE env var. The app defaults to 16 if unset.
+    default: "16"
+
+  run_as_user:
+    description: The user or service principal that workflows should run as.
+  higher_level_service_principal:
+    description: >
+      The service principal application ID for higher-level (non-dev) deployments.
+      Comment out or override if not using a service principal for deployments above dev.
+    default: acf021b4-87c6-44ff-b3d7-45c59d63fe4d
+  serverless_environment_version:
+    description: The serverless environment version for notebook/job tasks.
+    default: "5"
+  dashboard_embed_credentials:
+    description: >
+      true = dashboard uses owner's credentials; false = viewer's credentials.
+    default: false
+
+  # Tags — applied to all deployed resources via presets
+  tags_project:
+    default: lakeLoom
+    description: Project tag for deployed resources.
+  tags_businessUnit:
+    default: Healthcare and Life Sciences
+    description: Business unit tag for cost and ROI allocation.
+  tags_developer:
+    default: matthew.giglia@databricks.com
+    description: Primary developer contact for Ops.
+  tags_requestedBy:
+    default: Forward Deployed Engineering
+    description: Primary business-unit stakeholder(s).
+  tags_RemoveAfter:
+    default: 2027-06-01
+    description: >
+      Required Databricks demo-environment tag for long-lived demos.
+      Cannot exceed one year after the deployment date.
+
+# ---------------------------------------------------------------------------
+# Targets
+# ---------------------------------------------------------------------------
 targets:
-  # The 'dev' target, for development purposes. This target is the default.
+
+  # ── dev ──────────────────────────────────────────────────────────────────
   dev:
     mode: development
     default: true
+    presets:
+      source_linked_deployment: false
+      tags:
+        project: ${var.tags_project}
+        businessUnit: ${var.tags_businessUnit}
+        requestedBy: ${var.tags_requestedBy}
+        developer: ${var.tags_developer}
+        RemoveAfter: ${var.tags_RemoveAfter}
+        env: ${bundle.target}
     workspace:
       host: https://fevm-hls-fde.cloud.databricks.com
+      root_path: /Workspace/Users/${var.run_as_user}/.bundle/${bundle.name}/${bundle.target}
+    variables:
+      catalog: hls_fde_dev
+      schema: lakeloom
+      run_as_user: matthew.giglia@databricks.com
+      client_id_dbs_key: client_id_dev_matthew_giglia_${var.schema}
+      client_secret_dbs_key: client_secret_dev_matthew_giglia_${var.schema}
+      lakebase_project_id: dev-matthew-giglia-lakeloom
+      xcode_client_id_dbs_key: xcode_client_id_dev_matthew_giglia_${var.schema}
+      xcode_client_secret_dbs_key: xcode_client_secret_dev_matthew_giglia_${var.schema}
 
-  # The 'prod' target, used for production deployment.
+  # ── hls_fde (production — same workspace as dev) ────────────────────────
+  hls_fde:
+    mode: production
+    presets:
+      source_linked_deployment: false
+      tags:
+        project: ${var.tags_project}
+        businessUnit: ${var.tags_businessUnit}
+        requestedBy: ${var.tags_requestedBy}
+        developer: ${var.tags_developer}
+        RemoveAfter: ${var.tags_RemoveAfter}
+        env: ${bundle.target}
+    workspace:
+      host: https://fevm-hls-fde.cloud.databricks.com
+      root_path: /Workspace/.bundle/${bundle.name}/${bundle.target}
+    # run_as:
+    #   user_name: ${var.run_as_user}
+    variables:
+      catalog: hls_fde
+      schema: lakeloom
+      higher_level_service_principal: acf021b4-87c6-44ff-b3d7-45c59d63fe4d
+      run_as_user: ${var.higher_level_service_principal}
+      serverless_environment_version: "5"
+      client_id_dbs_key: client_id_${var.schema}
+      client_secret_dbs_key: client_secret_${var.schema}
+      xcode_client_id_dbs_key: xcode_client_id_${var.schema}
+      xcode_client_secret_dbs_key: xcode_client_secret_${var.schema}
+      lakebase_project_id: lakeloom-hls-fde
+    permissions:
+      - user_name: matthew.giglia@databricks.com
+        level: CAN_MANAGE
+      - group_name: users
+        level: CAN_RUN
+      - service_principal_name: ${var.run_as_user}
+        level: CAN_MANAGE
+
+  # ── prod (placeholder — separate workspace TBD) ─────────────────────────
   prod:
     mode: production
     workspace:
       host: https://fevm-hls-fde.cloud.databricks.com
-      # We always use /Users/matthew.giglia@databricks.com for all resources to make sure we only have a single copy.
       root_path: /Users/matthew.giglia@databricks.com/.bundle/${bundle.name}/${bundle.target}
     run_as:
-      # This runs as matthew.giglia@databricks.com in production. We could also use a service principal here,
-      # see https://docs.databricks.com/dev-tools/bundles/permissions.html.
       user_name: matthew.giglia@databricks.com
