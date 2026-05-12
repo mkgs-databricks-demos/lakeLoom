@@ -8,9 +8,8 @@
 #      event ingestion (Speech-to-Text ZeroBus Target Table DDL).
 #   3. Apply volume access permissions to the ZeroBus SPN via a forEach task
 #      (session_audio, screenshots, documents).
-#   4. Validate deployed platform resources needed by QR-pair onboarding,
-#      especially the UC schema, managed volumes, and expected ZeroBus
-#      target-table naming contract.
+#   4. Validate deployed platform resources: UC schema, managed volumes,
+#      volume grants for ZeroBus SPN, and target-table readiness.
 #
 # The App owns Lakebase schema migrations (including paired_sessions) and
 # should self-migrate before serving pairing endpoints.
@@ -33,8 +32,8 @@ resources:
         onboarding. Task 1 establishes the shared service-principal and secret
         contract. Task 2 creates the transcript_events_raw bronze target table.
         Task 3 applies volume access for the ZeroBus SPN via forEach.
-        Task 4 validates UC schema, managed volumes, and target-table readiness.
-        Idempotent by design and safe to re-run.
+        Task 4 validates UC schema, managed volumes, volume grants, and
+        target-table readiness. Idempotent by design and safe to re-run.
 
       parameters:
         - name: catalog_use
@@ -126,6 +125,7 @@ resources:
               client_id_dbs_key: "{{job.parameters.client_id_dbs_key}}"
               client_secret_dbs_key: "{{job.parameters.client_secret_dbs_key}}"
               zerobus_stream_pool_size: "{{job.parameters.zerobus_stream_pool_size}}"
+              spn_application_id: "{{tasks.ensure_service_principal.values.spn_application_id}}"
 
       max_concurrent_runs: 1
       timeout_seconds: 900
