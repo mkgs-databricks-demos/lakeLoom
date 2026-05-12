@@ -2,10 +2,14 @@
 #
 # Files are stored as: /Volumes/{catalog}/{schema}/session_audio/{project_id}/{session_id}/{filename}.m4a
 #
-# The iOS app uploads audio post-session over Wi-Fi directly to the UC
-# Volume Files API using the OAuth U2M token. Audio is referenced by URI
-# in the bronze table (transcript_events_raw, event_type=audio_uploaded)
-# and joined in silver for optional server-side re-transcription.
+# Audio upload flow (per ADR-001 — App-Proxied Data Plane):
+#   iOS → Databricks App endpoint (authenticated via Xcode SPN M2M + session token)
+#   → App backend writes to UC Volume Files API using App's own SPN identity.
+# iOS never calls the Volume Files API directly.
+#
+# Audio is referenced by URI in the bronze table (transcript_events_raw,
+# event_type=audio_uploaded) and joined in silver for optional server-side
+# re-transcription.
 
 resources:
   volumes:
