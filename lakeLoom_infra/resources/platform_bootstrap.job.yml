@@ -4,7 +4,7 @@
 #   1. Ensure or discover the shared lakeLoom service principal and establish
 #      the secret-scope contract used by the Databricks App and iOS pairing flow.
 #   2. Create the expected ZeroBus bronze target table used for transcript and
-#      event ingestion.
+#      event ingestion (Speech-to-Text ZeroBus Target Table DDL).
 #   3. Validate deployed platform resources needed by QR-pair onboarding,
 #      especially the UC schema, managed session_audio volume, and expected
 #      ZeroBus target-table naming contract.
@@ -14,6 +14,11 @@
 #
 # NOTE: catalog and schema references use ${resources.schemas.lakeloom_schema.*}
 #       per the bundle convention — never ${var.catalog} or ${var.schema} directly.
+#
+# CONVENTION — notebook_path extensions:
+#   All notebooks are NOTEBOOK objects referenced as .ipynb.
+#   The warehouse_id field on SQL tasks determines compute routing — the
+#   extension is purely for Databricks API notebook resolution.
 
 resources:
   jobs:
@@ -51,6 +56,7 @@ resources:
             environment_version: ${var.serverless_environment_version}
 
       tasks:
+        # Python default notebook — runs on serverless compute
         - task_key: ensure_service_principal
           notebook_task:
             notebook_path: ../src/platform_bootstrap/ensure-service-principal.ipynb
@@ -64,11 +70,12 @@ resources:
               zerobus_stream_pool_size: "{{job.parameters.zerobus_stream_pool_size}}"
           environment_key: default
 
+        # SQL default notebook — runs on infra SQL warehouse
         - task_key: create_transcript_events_raw_table
           depends_on:
             - task_key: ensure_service_principal
           notebook_task:
-            notebook_path: ../src/platform_bootstrap/transcript-events-raw-ddl-notebook.ipynb
+            notebook_path: ../src/platform_bootstrap/stt-0bus-target-table-ddl.ipynb
             source: WORKSPACE
             warehouse_id: ${resources.sql_warehouses.infra_warehouse.id}
             base_parameters:
@@ -78,11 +85,12 @@ resources:
               client_id_dbs_key: "{{job.parameters.client_id_dbs_key}}"
               spn_application_id: "{{tasks.ensure_service_principal.values.spn_application_id}}"
 
+        # SQL default notebook — runs on infra SQL warehouse
         - task_key: validate_platform
           depends_on:
             - task_key: create_transcript_events_raw_table
           notebook_task:
-            notebook_path: ../src/platform_bootstrap/validate-platform.sql
+            notebook_path: ../src/platform_bootstrap/validate-platform.ipynb
             source: WORKSPACE
             warehouse_id: ${resources.sql_warehouses.infra_warehouse.id}
             base_parameters:
