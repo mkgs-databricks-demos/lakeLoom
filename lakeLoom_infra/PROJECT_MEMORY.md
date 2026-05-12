@@ -8,10 +8,11 @@ Project-local durable context for `lakeLoom_infra` when global instructions are 
 
 ### Isaac collaboration folders
 
-* `hi_genie/` is read-only context from Isaac.
+* `hi_genie/` is read-only context from Isaac — lives at `lakeLoom/architecture/hi_genie/`.
 * Always read `hi_genie/` for relevant project context before substantive work.
 * Never write to `hi_genie/`, any subfolder inside it, or any file within it.
-* Reply to Isaac, share progress, or record decisions in a sibling `hey_isaac/` folder at the same project root if present.
+* Reply to Isaac, share progress, or record decisions in `lakeLoom/architecture/hey_isaac/` (sibling to `hi_genie/`).
+* Both folders live under `lakeLoom/architecture/`, NOT inside individual bundle directories.
 * Genie is the source of truth for Databricks-related decisions; Isaac = non-Databricks domains (Xcode, Apple platforms).
 
 ## Project Structure
@@ -52,11 +53,13 @@ lakeLoom_infra/
 ## Current Infra Status
 
 * Bundle fully deployed to **dev** target and `platform_bootstrap` job runs successfully (all 3 tasks pass).
+* Latest successful run: **2026-05-12** — validates schema, all 3 managed volumes, and bronze table.
 * `resources/uc_setup.job.yml` was **deleted** (empty legacy file, superseded by `platform_bootstrap.job.yml`).
 * Source code reorganized: all task logic lives in NOTEBOOK objects; reusable functions in `src/lib/`.
 * **No plain `.sql` files** outside of SDP. SQL logic lives in SQL-default NOTEBOOK objects.
 * NOTEBOOK objects are always referenced as `.ipynb` in job YAML. The `warehouse_id` field determines SQL compute routing, not the file extension.
 * `src/lib/secret_scope.py` — named to avoid collision with Python stdlib `secrets` module.
+* **Isaac notified** (2026-05-12) about `screenshots` and `documents` volumes via `lakeLoom/architecture/hey_isaac/2026-05-12_new-upload-volumes.md`.
 
 ## Resolved Target Variables (dev)
 
@@ -224,7 +227,7 @@ Job is idempotent and safe to re-run.
 | Document upload endpoint + Volume write | App bundle |
 | Lakebase paired_sessions migration | App bundle |
 
-**Note:** Isaac is NOT yet aware of the `screenshots` and `documents` volumes. These must be communicated via `hey_isaac/` so the iOS app can implement upload flows for these content types in addition to audio.
+**Isaac notification:** Sent 2026-05-12 via `lakeLoom/architecture/hey_isaac/2026-05-12_new-upload-volumes.md`. Covers volume paths, proposed endpoint contracts, WRITE_VOLUME grant expectations, and filename convention questions.
 
 ## Infra Bundle Plan Status
 
@@ -235,6 +238,7 @@ Job is idempotent and safe to re-run.
 | 3. Author the bootstrap job | **DONE** | 3-task job deployed and running on dev. |
 | 4. Verify permissions and runtime | **DONE** | M2M verification implemented. ACL design: SPNs don't need scope READ. |
 | 5. Validate deployment readiness | **DONE** | Dev deployed, job succeeds. Manual steps: provision client_secrets. |
+| 6. Notify Isaac of new volumes | **DONE** | 2026-05-12 — screenshots + documents volumes, App endpoint expectations. |
 
 ## Remaining Manual Steps (per environment)
 
@@ -250,4 +254,5 @@ Job is idempotent and safe to re-run.
 * App bundle grants its own SPN READ on `lakeloom_credentials` and CAN_USE to the Xcode SPN.
 * App SPN needs WRITE_VOLUME on `session_audio`, `screenshots`, and `documents` for proxied uploads from iOS.
 * QR-pair endpoint implementation depends on both SPNs having valid `client_secret` values.
-* Inform Isaac (via `hey_isaac/`) about `screenshots` and `documents` volumes and the corresponding App upload endpoints iOS will need to call.
+* ~~Inform Isaac (via `hey_isaac/`) about `screenshots` and `documents` volumes and the corresponding App upload endpoints iOS will need to call.~~ **DONE 2026-05-12**
+* Await Isaac's response on filename conventions (timestamps vs UUIDs) before finalizing App upload handlers.
