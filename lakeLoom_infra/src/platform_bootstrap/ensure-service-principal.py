@@ -17,6 +17,10 @@ parser.add_argument("--client_secret_dbs_key", required=True)
 parser.add_argument("--zerobus_stream_pool_size", required=True)
 args = parser.parse_args()
 
+WORKSPACE_REGION_OVERRIDES = {
+    "fevm-hls-fde.cloud.databricks.com": "us-east-1",
+}
+
 
 def print_header(title: str) -> None:
     print("\n" + "=" * 72)
@@ -75,13 +79,16 @@ def get_region(workspace_url: str) -> str:
         pass
 
     host = workspace_url.replace("https://", "").replace("http://", "")
+    if host in WORKSPACE_REGION_OVERRIDES:
+        return WORKSPACE_REGION_OVERRIDES[host]
+
     parts = host.split(".")
     if len(parts) >= 5 and parts[1] not in {"cloud", "apps"}:
         return parts[1]
 
     raise RuntimeError(
         "Could not determine the AWS region needed to construct the ZeroBus endpoint. "
-        "Set AWS_REGION or run on compute that exposes spark.databricks.clusterUsageTags.region."
+        "Set AWS_REGION, extend WORKSPACE_REGION_OVERRIDES for this workspace host, or run on compute that exposes spark.databricks.clusterUsageTags.region."
     )
 
 
@@ -246,17 +253,10 @@ summary = {
     "m2m_verification_status": m2m_verification_status,
     "m2m_verification_details": verification_details,
     "next_manual_step": (
-        f"Generate and store {args.client_secret_dbs_key} in secret scope {args.secret_scope_name}"
-        if not credentials_provisioned
-        else "No manual secret provisioning blocked this run."
+        f"Generate and store {args.client_secret_dbs_key} in secret scope {args.secret_scope_name} "
+        f"for service principal {spn_application_id} if it is not already present."
     ),
 }
 
-print_header("Bootstrap Summary")
+print_header("Summary")
 print(json.dumps(summary, indent=2, sort_keys=True))
-
-if not credentials_provisioned:
-    print("\nADMIN ACTION REQUIRED")
-    print(f"  1. Generate an OAuth secret for '{spn_display_name}'.")
-    print(f"  2. Store it in secret scope '{args.secret_scope_name}' as '{args.client_secret_dbs_key}'.")
-    print("  3. Re-run platform_bootstrap to verify the credentials end-to-end.")
