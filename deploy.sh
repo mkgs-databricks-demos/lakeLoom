@@ -111,6 +111,8 @@ XCODE_SPN_ID=""
 # and source code workspace path for `databricks apps deploy`.
 APP_NAME=""
 APP_SOURCE_PATH=""
+APP_SPN_CLIENT_ID=""
+GRANT_SECRETS_ACL_JOB="grant_secrets_acl"
 
 # --------------------------------------------------------------------------- #
 # Defaults
@@ -965,6 +967,70 @@ deploy_app_source() {
 }
 
 # --------------------------------------------------------------------------- #
+# resolve_app_spn_id — discover the app's auto-provisioned SPN client_id
+#                      from the Apps API after the app resource is registered.
+#
+# Sets APP_SPN_CLIENT_ID global variable. Non-fatal — warns on failure.
+# --------------------------------------------------------------------------- #
+resolve_app_spn_id() {
+  if [[ -z "${APP_NAME}" ]]; then
+    warn "APP_NAME not resolved — cannot look up app SPN."
+    return 0
+  fi
+
+  log "Resolving app SPN client_id (app: ${APP_NAME})"
+
+  local app_json
+  app_json=$(databricks apps get "${APP_NAME}" --output json 2>/dev/null) || {
+    warn "Could not retrieve app info for '${APP_NAME}'."
+    warn "The app may not be registered yet."
+    return 0
+  }
+
+  APP_SPN_CLIENT_ID=$(echo "${app_json}" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    print(data.get('service_principal_client_id', ''))
+except (json.JSONDecodeError, ValueError, KeyError):
+    pass
+" 2>/dev/null) || APP_SPN_CLIENT_ID=""
+
+  if [[ -n "${APP_SPN_CLIENT_ID}" ]]; then
+    ok "App SPN client_id: ${APP_SPN_CLIENT_ID:0:8}..."
+  else
+    warn "Could not resolve app SPN client_id."
+    warn "Secret scope ACL step will be skipped."
+  fi
+}
+
+# --------------------------------------------------------------------------- #
+# run_secrets_acl_grant — run the grant_secrets_acl bundle job to ensure the
+#                         app SPN has READ on the secret scope.
+#
+# Passes the resolved APP_SPN_CLIENT_ID as the "principal" notebook param.
+# Idempotent — safe to run on every deploy (put_acl is an upsert).
+# --------------------------------------------------------------------------- #
+run_secrets_acl_grant() {
+  if [[ -z "${APP_SPN_CLIENT_ID}" ]]; then
+    warn "No app SPN client_id available — skipping secrets ACL step."
+    return 0
+  fi
+
+  log "Ensuring app SPN has scope access (job: ${GRANT_SECRETS_ACL_JOB})"
+
+  local bundle_dir="${SCRIPT_DIR}/${APP_BUNDLE}"
+  (cd_bundle "${bundle_dir}" && databricks bundle run "${GRANT_SECRETS_ACL_JOB}" \
+    --target "${TARGET}" \
+    --params "principal=${APP_SPN_CLIENT_ID}") || {
+    warn "Secrets ACL job failed. The app may not be able to read secrets."
+    warn "You can re-run manually: databricks bundle run ${GRANT_SECRETS_ACL_JOB} --target ${TARGET} --params \"principal=${APP_SPN_CLIENT_ID}\""
+    return 0  # Non-fatal — don't block deployment
+  }
+  ok "App SPN scope access configured"
+}
+
+# --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
 log "lakeLoom — Bundle Deployment"
@@ -1016,13 +1082,16 @@ if [[ "${DEPLOY_APP}" == true ]]; then
   fi
 fi
 
-# Step 6: Deploy app source code and ensure compute is running
-# bundle deploy provisions the app resource (permissions, env vars, resources)
-# but does NOT push source code to the container or start compute.
-# This step resolves the app name + source path from the bundle summary,
-# ensures compute is warm, and triggers the source deployment.
+# Step 6: Configure app SPN and deploy source code
+# After bundle deploy registers the app resource (permissions, env vars,
+# resources), this step:
+#   a) Resolves the app name + SPN client_id from the platform
+#   b) Runs the grant_secrets_acl job to ensure scope READ access
+#   c) Starts compute and triggers the source deployment
 if [[ "${DEPLOY_APP}" == true ]] && [[ "${VALIDATE_ONLY}" != true ]] && [[ "${DESTROY}" != true ]]; then
   resolve_app_name
+  resolve_app_spn_id
+  run_secrets_acl_grant
   deploy_app_source
 fi
 

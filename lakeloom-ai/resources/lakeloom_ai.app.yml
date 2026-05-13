@@ -1,0 +1,79 @@
+# App resource — lakeLoom AI
+# AppKit application for requirements capture, architecture design, and
+# Genie Code session planning for rapid Databricks MVPs.
+#
+# NOTE: Xcode SPN CAN_USE grant is applied post-deploy by deploy.sh
+# when xcode_spn_id is resolved. DABs cannot conditionally include
+# permissions (empty service_principal_name would fail validation).
+# Once the Xcode SPN application_id is known and stable per target,
+# it can be hardcoded here.
+
+resources:
+  apps:
+    app:
+      name: ${var.app_name}
+      description: >
+        lakeLoom AI — Requirements capture, architecture design, and
+        Genie Code session planning for rapid Databricks MVPs.
+      source_code_path: ..
+      user_api_scopes:
+        - files.files
+
+      # Resources the App's auto-provisioned SPN has access to.
+      resources:
+        - name: sql-warehouse
+          sql_warehouse:
+            id: ${var.sql_warehouse_id}
+            permission: CAN_USE
+
+        # ── UC Volumes (App proxies uploads from iOS) ─────────────────────
+        #
+        # Three separate volumes for distinct upload types:
+        #   session-audio  — Final session audio recordings (.m4a/.wav)
+        #                    Uploaded post-session for server-side re-transcription.
+        #   screenshots    — Whiteboard/screen captures (.png/.jpg/.heic)
+        #                    Uploaded during session for architecture documentation.
+        #   documents      — Supporting PDFs, specs, and reference materials
+        #                    Uploaded before/during session as context for AI processing.
+        #
+        # All proxied through the App from iOS (single network boundary).
+        # Volume paths injected at runtime via app.yaml valueFrom bindings.
+        - name: session-audio
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.schema}.session_audio
+            securable_type: VOLUME
+            permission: WRITE_VOLUME
+        - name: screenshots
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.schema}.screenshots
+            securable_type: VOLUME
+            permission: WRITE_VOLUME
+        - name: documents
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.schema}.documents
+            securable_type: VOLUME
+            permission: WRITE_VOLUME
+
+        # ── Lakebase (OLTP — paired_sessions, projects, sync state) ───────
+        - name: postgres
+          postgres:
+            branch: projects/${var.lakebase_project_id}/branches/production
+            database: projects/${var.lakebase_project_id}/branches/production/databases/${var.lakebase_database_id}
+            permission: CAN_CONNECT_AND_CREATE
+
+      # ── App-level permissions ───────────────────────────────────────────
+      permissions:
+        - service_principal_name: ${var.xcode_spn_id}
+          level: CAN_USE
+
+      # ── Telemetry (OTel → Unity Catalog) ────────────────────────────────
+      # Platform auto-injects OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4314
+      # and related env vars at runtime. Tables are auto-created if absent.
+      # Resolves per-target via catalog/schema variables:
+      #   dev:     hls_fde_dev.dev_matthew_giglia_lakeloom.lakeloom_ai_otel_*
+      #   hls_fde: hls_fde.lakeloom.lakeloom_ai_otel_*
+      telemetry_export_destinations:
+        - unity_catalog:
+            logs_table: ${var.catalog}.${var.schema}.lakeloom_ai_otel_logs
+            metrics_table: ${var.catalog}.${var.schema}.lakeloom_ai_otel_metrics
+            traces_table: ${var.catalog}.${var.schema}.lakeloom_ai_otel_traces
