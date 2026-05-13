@@ -4,10 +4,25 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
+  Skeleton,
 } from '@databricks/appkit-ui/react';
-import { AnalyticsPage } from './pages/analytics/AnalyticsPage';
-import { LakebasePage } from './pages/lakebase/LakebasePage';
-import { FilesPage } from './pages/files/FilesPage';
+import { Suspense, lazy } from 'react';
+
+// ── Route-level code splitting ────────────────────────────────────────────────
+// Each page is loaded on demand. Reduces initial bundle from ~1.7 MB to the
+// shell + whichever page the user navigates to first.
+const AnalyticsPage = lazy(() => import('./pages/analytics/AnalyticsPage').then(m => ({ default: m.AnalyticsPage })));
+const LakebasePage = lazy(() => import('./pages/lakebase/LakebasePage').then(m => ({ default: m.LakebasePage })));
+const FilesPage = lazy(() => import('./pages/files/FilesPage').then(m => ({ default: m.FilesPage })));
+
+function PageLoader() {
+  return (
+    <div className="w-full max-w-2xl mx-auto space-y-4 mt-8">
+      <Skeleton className="h-8 w-1/3" />
+      <Skeleton className="h-64 w-full" />
+    </div>
+  );
+}
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   `px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
@@ -38,7 +53,9 @@ function Layout() {
       </header>
 
       <main className="flex-1 p-6">
-        <Outlet />
+        <Suspense fallback={<PageLoader />}>
+          <Outlet />
+        </Suspense>
       </main>
     </div>
   );

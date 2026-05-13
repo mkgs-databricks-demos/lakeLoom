@@ -24,24 +24,13 @@ createApp({
 
     // ── Graceful shutdown ──────────────────────────────────────────────────
     // The platform sends SIGTERM on redeploy/stop. Drain in-flight requests,
-    // close the Lakebase connection pool, and exit cleanly so OTel spans flush.
+    // close the Lakebase PG pool, and exit cleanly so OTel spans flush.
     const shutdown = async (signal: string) => {
       console.log(`[shutdown] Received ${signal}, shutting down gracefully...`);
       try {
-        // AppKit exposes a destroy/close method to tear down plugins cleanly.
-        // This closes the Lakebase PG pool, stops the HTTP server, and flushes
-        // any buffered analytics/telemetry.
-        if (typeof appkit.destroy === 'function') {
-          await appkit.destroy();
-        } else if (typeof appkit.close === 'function') {
-          await appkit.close();
-        } else {
-          // Fallback: close Lakebase pool directly if available
-          if (appkit.lakebase && typeof appkit.lakebase.close === 'function') {
-            await appkit.lakebase.close();
-          }
-        }
-        console.log('[shutdown] Cleanup complete, exiting.');
+        // Close the Lakebase PG connection pool (pg.Pool.end())
+        await appkit.lakebase.pool.end();
+        console.log('[shutdown] Lakebase pool closed.');
       } catch (err) {
         console.error('[shutdown] Error during cleanup:', err);
       }
