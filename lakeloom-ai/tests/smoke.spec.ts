@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
-// ── Templated configuration (resolved by `databricks apps init`) ────────────
+// ── App configuration ───────────────────────────────────────────────────────
 const APP_CONFIG = {
   name: 'lakeloom-ai',
   plugins: [
@@ -27,11 +27,6 @@ const PLUGIN_PAGES: Record<string, PluginPage> = {
     navLabel: 'Lakebase',
     path: '/lakebase',
     expectedTexts: ['Todo List'],
-  },
-  genie: {
-    navLabel: 'Genie',
-    path: '/genie',
-    expectedTexts: ['Ask questions about your data using Databricks AI/BI Genie'],
   },
 };
 

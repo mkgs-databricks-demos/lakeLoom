@@ -1,13 +1,28 @@
-import { createBrowserRouter, RouterProvider, NavLink, Outlet } from 'react-router';
+import { createBrowserRouter, RouterProvider, NavLink, Outlet, useRouteError, isRouteErrorResponse } from 'react-router';
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
+  Skeleton,
 } from '@databricks/appkit-ui/react';
-import { AnalyticsPage } from './pages/analytics/AnalyticsPage';
-import { LakebasePage } from './pages/lakebase/LakebasePage';
-import { FilesPage } from './pages/files/FilesPage';
+import { Suspense, lazy } from 'react';
+
+// ── Route-level code splitting ────────────────────────────────────────────────
+// Each page is loaded on demand. Reduces initial bundle from ~1.7 MB to the
+// shell + whichever page the user navigates to first.
+const AnalyticsPage = lazy(() => import('./pages/analytics/AnalyticsPage').then(m => ({ default: m.AnalyticsPage })));
+const LakebasePage = lazy(() => import('./pages/lakebase/LakebasePage').then(m => ({ default: m.LakebasePage })));
+const FilesPage = lazy(() => import('./pages/files/FilesPage').then(m => ({ default: m.FilesPage })));
+
+function PageLoader() {
+  return (
+    <div className="w-full max-w-2xl mx-auto space-y-4 mt-8">
+      <Skeleton className="h-8 w-1/3" />
+      <Skeleton className="h-64 w-full" />
+    </div>
+  );
+}
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   `px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
@@ -38,8 +53,63 @@ function Layout() {
       </header>
 
       <main className="flex-1 p-6">
-        <Outlet />
+        <Suspense fallback={<PageLoader />}>
+          <Outlet />
+        </Suspense>
       </main>
+    </div>
+  );
+}
+
+// ── Route-level error boundary ────────────────────────────────────────────────
+// React Router v7 creates its own error boundary scope that supersedes the outer
+// class-based ErrorBoundary in main.tsx. This component catches navigation errors,
+// lazy-load failures, and unhandled throws from route loaders/actions/components.
+function RouteErrorFallback() {
+  const error = useRouteError();
+
+  let title = 'Application Error';
+  let message = 'An unexpected error occurred.';
+  let stack: string | undefined;
+
+  if (isRouteErrorResponse(error)) {
+    title = `${error.status} ${error.statusText}`;
+    message = typeof error.data === 'string' ? error.data : JSON.stringify(error.data);
+  } else if (error instanceof Error) {
+    message = error.message;
+    stack = error.stack;
+  } else if (typeof error === 'string') {
+    message = error;
+  }
+
+  return (
+    <div className="min-h-screen bg-background p-4">
+      <Card className="max-w-2xl mx-auto mt-8">
+        <CardHeader>
+          <CardTitle className="text-destructive">{title}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            <div>
+              <h3 className="font-semibold mb-2">Error Message:</h3>
+              <pre className="bg-muted p-3 rounded text-sm overflow-auto">{message}</pre>
+            </div>
+            {stack && (
+              <div>
+                <h3 className="font-semibold mb-2">Stack Trace:</h3>
+                <pre className="bg-muted p-3 rounded text-sm overflow-auto max-h-96">{stack}</pre>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => window.location.assign('/')}
+              className="text-sm text-primary underline underline-offset-4 hover:text-primary/80"
+            >
+              Return to Home
+            </button>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -47,6 +117,7 @@ function Layout() {
 const router = createBrowserRouter([
   {
     element: <Layout />,
+    errorElement: <RouteErrorFallback />,
     children: [
       { path: '/', element: <HomePage /> },
       { path: '/analytics', element: <AnalyticsPage /> },
