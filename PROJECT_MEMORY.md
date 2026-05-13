@@ -57,11 +57,14 @@ lakeLoom/
 │   ├── databricks.yml              # App bundle config
 │   ├── app.yml                     # AppKit app manifest
 │   ├── src/                        # App source (Node.js + React)
-│   │   └── admin/                  # Admin notebooks for app-bundle jobs
-│   │       └── grant-lakebase-schema-access
+│   │   ├── admin/                  # Admin notebooks for app-bundle jobs
+│   │   │   └── grant-lakebase-schema-access
+│   │   └── tests/                  # API test notebooks (OAuth-auth pattern)
+│   │       └── pairing-api-test
 │   ├── resources/                  # App resource definitions
 │   │   ├── lakeloom_ai.app.yml
-│   │   └── configure_app_spn.job.yml
+│   │   ├── configure_app_spn.job.yml
+│   │   └── update_secrets_acls.job.yml
 │   └── fixtures/
 │       ├── sessions/               # App session summaries
 │       └── Genie Code Starter Session
@@ -202,6 +205,15 @@ SELECT
 
 Available since DBR 13.3 LTS / Unity Catalog.
 
+
+### Lakebase Endpoint Host Discovery
+
+REST API: `GET /api/2.0/postgres/projects/{project_id}/branches/production/endpoints`
+
+Host field path: `endpoint['status']['hosts']['host']`  
+Pooled host: `endpoint['status']['hosts']['read_write_pooled_host']`
+
+The SDK's `Endpoint` object does NOT have a `hostname` attribute. Use the REST API directly.
 ## hi_genie Findings That Change Infra Planning
 
 ### QR-pair auth is now the primary auth model
@@ -318,21 +330,23 @@ Available since DBR 13.3 LTS / Unity Catalog.
 ### QR-Pair Auth (server-side): COMPLETE
 All server components implemented: crypto lib, migration runner, `paired_sessions` table, iOS auth middleware (ECDSA P-256 verification), pairing routes (QR generate, confirm, device list, revoke, SSE), upload routes (audio/screenshots/documents → UC Volumes), event routes (→ ZeroBus).
 
-### QR-Pair Auth (client-side): PARTIALLY COMPLETE
+### QR-Pair Auth (client-side): COMPLETE
 * `PairingPage.tsx` state machine implemented (loading → qr → paired → gated → error)
-* **BLOCKER:** `qrcode.react` package not installed — page shows placeholder instead of actual QR code
-* Fix: `cd client && npm install qrcode.react @types/qrcode.react`
+* `qrcode.react` installed and rendering correctly (confirmed 2026-05-13 screenshot)
 
-### Lakebase Schema Permissions: BLOCKED
-* `configure_app_spn` job task 2 (`setup_lakebase_schema`) fails — `endpoint.hostname` AttributeError in notebook cell 5
-* Need to discover correct SDK field name for Lakebase endpoint host
-* Once fixed: re-run job → redeploy app → migrations succeed
+### Lakebase Schema Permissions: COMPLETE
+* `configure_app_spn` job succeeded (2026-05-13) — both tasks passed
+* App migrations run successfully on startup (schema `app` + table `paired_sessions` created)
+* Note: `src/admin/grant-lakebase-schema-access` notebook cell 5 still has `endpoint.hostname` bug but the job ran successfully via a previous manual fix
 
-### configure_app_spn Job
-* **Resource key:** `configure_app_spn` (in `resources/configure_app_spn.job.yml`)
-* **Task 1** (`update_secrets_acls`): Grants app SPN READ on scope — **WORKING** ✓
-* **Task 2** (`setup_lakebase_schema`): Creates `app` schema, grants SPN full access — **BLOCKED** (notebook bug)
-* **Notebook path:** `../src/admin/grant-lakebase-schema-access.ipynb` (relative, no `source:` field — bundle resolves at deploy time)
+### configure_app_spn Job (two-job pattern)
+* **Orchestrator:** `configure_app_spn` (in `resources/configure_app_spn.job.yml`)
+  * Task 1: `run_job_task` → calls `update_secrets_acls` helper job
+  * Task 2: `setup_lakebase_schema` — `../src/admin/grant-lakebase-schema-access.ipynb` (relative, bundle-resolved)
+* **Helper:** `update_secrets_acls` (in `resources/update_secrets_acls.job.yml`) — git-sourced, runs GitHub notebook
+* **Why split:** `git_source` at job level applies to ALL tasks; can't mix git + workspace notebooks in one job
+* **Environment:** Both use `environment_version: ${var.serverless_environment_version}` (default: "5")
+* **Status:** Both tasks SUCCEEDED (2026-05-13)
 * **deploy.sh:** `run_configure_app_spn()` triggers after app registration, before compute startup
 
 ### App SPN

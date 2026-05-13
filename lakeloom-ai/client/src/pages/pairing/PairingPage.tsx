@@ -17,6 +17,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@databricks/appkit-ui/react';
+import { QRCodeSVG } from 'qrcode.react';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -56,7 +57,6 @@ type PageState =
 // ── QR encoding (simple SVG via canvas-free approach) ─────────────────────────
 // We encode the payload as gzipped base64url JSON in a QR.
 // For the browser we render the raw JSON as a data URL placeholder.
-// TODO: Add qrcode lib (qrcode.react) for real QR rendering.
 function encodeQRPayload(payload: QRPayload): string {
   // Placeholder: return a data URL that represents the payload.
   // Real implementation will gzip + base64url encode, then generate QR SVG.
@@ -160,12 +160,13 @@ export function PairingPage() {
 
           {state.kind === 'qr' && (
             <div className="flex flex-col items-center gap-4">
-              {/* TODO: Replace with real QR SVG from qrcode.react */}
-              <div className="w-64 h-64 bg-muted rounded-lg flex items-center justify-center border-2 border-dashed border-border">
-                <p className="text-xs text-muted-foreground text-center px-4">
-                  QR Code Placeholder<br />
-                  (install qrcode.react for rendering)
-                </p>
+              <div className="bg-white p-4 rounded-lg">
+                <QRCodeSVG
+                  value={state.qrDataUrl}
+                  size={256}
+                  level="M"
+                  marginSize={2}
+                />
               </div>
               <p className="text-xs text-muted-foreground">
                 Refreshes automatically every 30 seconds
