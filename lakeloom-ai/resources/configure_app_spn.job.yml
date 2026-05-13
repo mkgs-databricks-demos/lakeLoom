@@ -35,15 +35,14 @@ resources:
           notebook_task:
             notebook_path: ../src/admin/grant-lakebase-schema-access.ipynb
             base_parameters:
-              principal: ""
+              principal: ${var.app_spn_id}
               lakebase_project_id: ${var.lakebase_project_id}
               lakebase_database_id: ${var.lakebase_database_id}
               schema_name: app
-            source: WORKSPACE
           environment_key: Default
 
       environments:
         - environment_key: Default
           spec:
-            client: "1"
+            client: "5"
       max_concurrent_runs: 1
