@@ -1,4 +1,4 @@
-import { createBrowserRouter, RouterProvider, NavLink, Outlet } from 'react-router';
+import { createBrowserRouter, RouterProvider, NavLink, Outlet, useRouteError, isRouteErrorResponse } from 'react-router';
 import {
   Card,
   CardContent,
@@ -44,9 +44,63 @@ function Layout() {
   );
 }
 
+// ── Route-level error boundary ────────────────────────────────────────────────
+// React Router v7 creates its own error boundary scope that supersedes the outer
+// class-based ErrorBoundary in main.tsx. This component catches navigation errors,
+// lazy-load failures, and unhandled throws from route loaders/actions/components.
+function RouteErrorFallback() {
+  const error = useRouteError();
+
+  let title = 'Application Error';
+  let message = 'An unexpected error occurred.';
+  let stack: string | undefined;
+
+  if (isRouteErrorResponse(error)) {
+    title = `${error.status} ${error.statusText}`;
+    message = typeof error.data === 'string' ? error.data : JSON.stringify(error.data);
+  } else if (error instanceof Error) {
+    message = error.message;
+    stack = error.stack;
+  } else if (typeof error === 'string') {
+    message = error;
+  }
+
+  return (
+    <div className="min-h-screen bg-background p-4">
+      <Card className="max-w-2xl mx-auto mt-8">
+        <CardHeader>
+          <CardTitle className="text-destructive">{title}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            <div>
+              <h3 className="font-semibold mb-2">Error Message:</h3>
+              <pre className="bg-muted p-3 rounded text-sm overflow-auto">{message}</pre>
+            </div>
+            {stack && (
+              <div>
+                <h3 className="font-semibold mb-2">Stack Trace:</h3>
+                <pre className="bg-muted p-3 rounded text-sm overflow-auto max-h-96">{stack}</pre>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => window.location.assign('/')}
+              className="text-sm text-primary underline underline-offset-4 hover:text-primary/80"
+            >
+              Return to Home
+            </button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 const router = createBrowserRouter([
   {
     element: <Layout />,
+    errorElement: <RouteErrorFallback />,
     children: [
       { path: '/', element: <HomePage /> },
       { path: '/analytics', element: <AnalyticsPage /> },

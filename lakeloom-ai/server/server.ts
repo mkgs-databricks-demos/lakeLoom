@@ -10,6 +10,15 @@ createApp({
   ],
 })
   .then(async (appkit) => {
+    // ── Health check endpoint ────────────────────────────────────────────────
+    // Gives the platform an explicit liveness signal during cold-start.
+    // Registered before custom routes so it's always reachable.
+    appkit.server.extend((app) => {
+      app.get('/healthz', (_req, res) => {
+        res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+      });
+    });
+
     await setupSampleLakebaseRoutes(appkit);
     await appkit.server.start();
 
