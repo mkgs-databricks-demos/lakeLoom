@@ -1,0 +1,38 @@
+# Job resource — configure app SPN access (secrets + Lakebase schema)
+# Orchestrator job that:
+#   1. Triggers the git-sourced secrets ACL job (run_job_task)
+#   2. Runs the bundle-local Lakebase schema notebook (workspace)
+# Triggered by deploy.sh after app registration, before compute startup.
+
+resources:
+  jobs:
+    configure_app_spn:
+      name: "[${bundle.target}] Configure App SPN Access"
+      tags:
+        project: ${var.tags_project}
+        purpose: admin-action
+        env: ${bundle.target}
+      tasks:
+        # Task 1: Trigger the git-sourced secrets ACL job
+        - task_key: update_secrets_acls
+          run_job_task:
+            job_id: ${resources.jobs.update_secrets_acls.id}
+
+        # Task 2: Lakebase schema setup (CREATE SCHEMA app + GRANT to SPN)
+        - task_key: setup_lakebase_schema
+          depends_on:
+            - task_key: update_secrets_acls
+          notebook_task:
+            notebook_path: ../src/admin/grant-lakebase-schema-access.ipynb
+            base_parameters:
+              principal: ${var.app_spn_id}
+              lakebase_project_id: ${var.lakebase_project_id}
+              lakebase_database_id: ${var.lakebase_database_id}
+              schema_name: app
+          environment_key: default
+
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: ${var.serverless_environment_version}
+      max_concurrent_runs: 1

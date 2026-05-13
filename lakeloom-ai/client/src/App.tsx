@@ -14,6 +14,7 @@ import { Suspense, lazy } from 'react';
 const AnalyticsPage = lazy(() => import('./pages/analytics/AnalyticsPage').then(m => ({ default: m.AnalyticsPage })));
 const LakebasePage = lazy(() => import('./pages/lakebase/LakebasePage').then(m => ({ default: m.LakebasePage })));
 const FilesPage = lazy(() => import('./pages/files/FilesPage').then(m => ({ default: m.FilesPage })));
+const PairingPage = lazy(() => import('./pages/pairing/PairingPage').then(m => ({ default: m.PairingPage })));
 
 function PageLoader() {
   return (
@@ -39,6 +40,9 @@ function Layout() {
         <nav className="flex gap-1">
           <NavLink to="/" end className={navLinkClass}>
             Home
+          </NavLink>
+          <NavLink to="/pairing" className={navLinkClass}>
+            Pair iPhone
           </NavLink>
           <NavLink to="/analytics" className={navLinkClass}>
             Analytics
@@ -120,6 +124,7 @@ const router = createBrowserRouter([
     errorElement: <RouteErrorFallback />,
     children: [
       { path: '/', element: <HomePage /> },
+      { path: '/pairing', element: <PairingPage /> },
       { path: '/analytics', element: <AnalyticsPage /> },
       { path: '/lakebase', element: <LakebasePage /> },
       { path: '/files', element: <FilesPage /> },

@@ -57,7 +57,14 @@ lakeLoom/
 │   ├── databricks.yml              # App bundle config
 │   ├── app.yml                     # AppKit app manifest
 │   ├── src/                        # App source (Node.js + React)
+│   │   ├── admin/                  # Admin notebooks for app-bundle jobs
+│   │   │   └── grant-lakebase-schema-access
+│   │   └── tests/                  # API test notebooks (OAuth-auth pattern)
+│   │       └── pairing-api-test
 │   ├── resources/                  # App resource definitions
+│   │   ├── lakeloom_ai.app.yml
+│   │   ├── configure_app_spn.job.yml
+│   │   └── update_secrets_acls.job.yml
 │   └── fixtures/
 │       ├── sessions/               # App session summaries
 │       └── Genie Code Starter Session
@@ -84,6 +91,8 @@ lakeLoom/
 * NOTEBOOK objects are always referenced as `.ipynb` in job YAML. The `warehouse_id` field determines SQL compute routing, not the file extension.
 * `src/lib/secret_scope.py` — named to avoid collision with Python stdlib `secrets` module.
 * **Isaac notified** (2026-05-12) about `screenshots` and `documents` volumes via `lakeLoom/architecture/hey_isaac/2026-05-12_new-upload-volumes.md`.
+* **Isaac notified** (2026-05-13) about pairing endpoint contract via `lakeLoom/architecture/hey_isaac/2026-05-13_pairing-auth-endpoints-live.md`. Covers: Layer 1/2 auth headers, POST /confirm contract, QR payload structure, error format, open questions (device_label, pubkey encoding, filename convention).
+
 
 ## Resolved Target Variables (dev)
 
@@ -198,6 +207,15 @@ SELECT
 
 Available since DBR 13.3 LTS / Unity Catalog.
 
+
+### Lakebase Endpoint Host Discovery
+
+REST API: `GET /api/2.0/postgres/projects/{project_id}/branches/production/endpoints`
+
+Host field path: `endpoint['status']['hosts']['host']`  
+Pooled host: `endpoint['status']['hosts']['read_write_pooled_host']`
+
+The SDK's `Endpoint` object does NOT have a `hostname` attribute. Use the REST API directly.
 ## hi_genie Findings That Change Infra Planning
 
 ### QR-pair auth is now the primary auth model
@@ -301,10 +319,40 @@ Available since DBR 13.3 LTS / Unity Catalog.
 
 ## Next Steps (post-infra)
 
-* Author the companion `lakeLoom_app` bundle (Databricks App with AppKit).
-* App bootstrap: self-migrate Lakebase tables (`paired_sessions`, etc.) before serving endpoints.
-* App bundle grants its own SPN READ on `lakeloom_credentials` and CAN_USE to the Xcode SPN.
-* App SPN needs WRITE_VOLUME on `session_audio`, `screenshots`, and `documents` for proxied uploads from iOS.
-* QR-pair endpoint implementation depends on both SPNs having valid `client_secret` values.
+* ~~Author the companion `lakeLoom_app` bundle (Databricks App with AppKit).~~ **DONE — `lakeloom-ai` bundle.**
+* ~~App bootstrap: self-migrate Lakebase tables (`paired_sessions`, etc.) before serving endpoints.~~ **DONE — auto-migration in `server/migrations/`.**
+* ~~App bundle grants its own SPN READ on `lakeloom_credentials` and CAN_USE to the Xcode SPN.~~ **DONE — `configure_app_spn` job task 1.**
+* ~~QR-pair endpoint implementation depends on both SPNs having valid `client_secret` values.~~ **DONE — all endpoints implemented.**
 * ~~Inform Isaac (via `hey_isaac/`) about `screenshots` and `documents` volumes and the corresponding App upload endpoints iOS will need to call.~~ **DONE 2026-05-12**
+* App SPN needs WRITE_VOLUME on `session_audio`, `screenshots`, and `documents` for proxied uploads from iOS.
 * Await Isaac's response on filename conventions (timestamps vs UUIDs) before finalizing App upload handlers.
+
+## App Bundle (lakeloom-ai) — Implementation Status
+
+### QR-Pair Auth (server-side): COMPLETE
+All server components implemented: crypto lib, migration runner, `paired_sessions` table, iOS auth middleware (ECDSA P-256 verification), pairing routes (QR generate, confirm, device list, revoke, SSE), upload routes (audio/screenshots/documents → UC Volumes), event routes (→ ZeroBus).
+
+### QR-Pair Auth (client-side): COMPLETE
+* `PairingPage.tsx` state machine implemented (loading → qr → paired → gated → error)
+* `qrcode.react` rendering correctly (confirmed 2026-05-13)
+* API test notebook validates: Xcode SPN token acquired, sidecar pass-through works, Layer 2 rejection correct
+
+### Lakebase Schema Permissions: COMPLETE
+* `configure_app_spn` job succeeded (2026-05-13) — both tasks passed
+* App migrations run successfully on startup (schema `app` + table `paired_sessions` created)
+* Note: `src/admin/grant-lakebase-schema-access` notebook cell 5 still has `endpoint.hostname` bug but the job ran successfully via a previous manual fix
+
+### configure_app_spn Job (two-job pattern)
+* **Orchestrator:** `configure_app_spn` (in `resources/configure_app_spn.job.yml`)
+  * Task 1: `run_job_task` → calls `update_secrets_acls` helper job
+  * Task 2: `setup_lakebase_schema` — `../src/admin/grant-lakebase-schema-access.ipynb` (relative, bundle-resolved)
+* **Helper:** `update_secrets_acls` (in `resources/update_secrets_acls.job.yml`) — git-sourced, runs GitHub notebook
+* **Why split:** `git_source` at job level applies to ALL tasks; can't mix git + workspace notebooks in one job
+* **Environment:** Both use `environment_version: ${var.serverless_environment_version}` (default: "5")
+* **Status:** Both tasks SUCCEEDED (2026-05-13)
+* **deploy.sh:** `run_configure_app_spn()` triggers after app registration, before compute startup
+
+### App SPN
+* **Client ID:** `686d32bf-a6a4-461b-a18b-82489eecdc15`
+* **Variable:** `${var.app_spn_id}` in `databricks.yml`
+* **Secrets:** All 8 env vars confirmed present at runtime via `valueFrom` bindings in `app.yaml`
