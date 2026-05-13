@@ -10,3 +10,16 @@ env:
     valueFrom: documents
   - name: LAKEBASE_ENDPOINT
     valueFrom: postgres
+  # ── Secret scope configuration ──────────────────────────────────────────
+  # Key names are schema-qualified per target. Values injected by deploy.sh
+  # via bundle variables → databricks.yml → app resource env.
+  - name: LAKELOOM_SECRET_SCOPE
+    value: lakeloom_credentials
+  - name: LAKELOOM_CLIENT_ID_KEY
+    value: ${DATABRICKS_CLIENT_ID_KEY:-client_id}
+  - name: LAKELOOM_CLIENT_SECRET_KEY
+    value: ${DATABRICKS_CLIENT_SECRET_KEY:-client_secret}
+  - name: LAKELOOM_XCODE_CLIENT_ID_KEY
+    value: ${DATABRICKS_XCODE_CLIENT_ID_KEY:-xcode_client_id}
+  - name: LAKELOOM_XCODE_CLIENT_SECRET_KEY
+    value: ${DATABRICKS_XCODE_CLIENT_SECRET_KEY:-xcode_client_secret}
