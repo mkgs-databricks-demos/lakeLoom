@@ -11,14 +11,12 @@
 
 import { z } from 'zod';
 import type { Application } from 'express';
-import { generateSessionToken, sha256, verifyEcdsaP256, buildCanonicalMessage, sha256Hex } from '../../lib/crypto';
+import { generateSessionToken, verifyEcdsaP256, buildCanonicalMessage, sha256Hex } from '../../lib/crypto';
 import {
-  AppError,
   xcodeSPNNotProvisioned,
   pairingAlreadyConfirmed,
   deviceNotFound,
   validationError,
-  tokenNotFound,
   invalidSignature,
 } from '../../lib/errors';
 import { getSecrets, getMissingKeys, isPairingReady, getXcodeSPNCredentials } from '../../services/secrets-service';
@@ -99,7 +97,7 @@ export async function setupPairingRoutes(appkit: AppKitContext): Promise<void> {
           user: {
             scim_id: userId,
             user_name: userEmail ?? '',
-            display_name: req.headers['x-forwarded-preferred-username'] as string ?? userEmail ?? '',
+            display_name: (req.headers['x-forwarded-preferred-username'] as string) ?? userEmail ?? '',
           },
           xcode_spn: {
             client_id: xcodeCreds.clientId,

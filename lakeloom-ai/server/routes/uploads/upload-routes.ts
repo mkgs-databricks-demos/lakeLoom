@@ -14,6 +14,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 import type { Application, Request, Response, NextFunction } from 'express';
 import { WorkspaceClient } from '@databricks/sdk-experimental';
 import { iosAuth } from '../../middleware/ios-auth';
@@ -72,12 +73,10 @@ function createUploadHandler(opts: {
       }
 
       // Write to UC Volume via Databricks SDK Files API
-      // Each file gets a unique UUID name so no existing data is ever replaced.
-      const wc = new WorkspaceClient();
-      await wc.files.upload({
-        file_path: fullPath,
-        contents: body,
-      });
+      // Convert Buffer to a ReadableStream for the SDK's upload method.
+      const wc = new WorkspaceClient({ host: process.env.DATABRICKS_HOST });
+      const stream = Readable.toWeb(Readable.from(body)) as ReadableStream;
+      await (wc.files as any).upload(fullPath, stream);
 
       res.status(201).json({
         filename,

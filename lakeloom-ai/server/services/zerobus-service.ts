@@ -31,7 +31,6 @@ interface ZerobusStream {
 let sdk: InstanceType<typeof ZerobusSdk> | null = null;
 let streams: ZerobusStream[] = [];
 let roundRobinIndex = 0;
-let initializing = false;
 let initPromise: Promise<void> | null = null;
 
 // ── Initialization ───────────────────────────────────────────────────────────
@@ -84,10 +83,7 @@ async function ensurePool(): Promise<void> {
   if (streams.length > 0) return;
   if (initPromise) return initPromise;
 
-  initializing = true;
-  initPromise = initPool().finally(() => {
-    initializing = false;
-  });
+  initPromise = initPool();
   return initPromise;
 }
 

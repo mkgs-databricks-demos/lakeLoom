@@ -75,18 +75,15 @@ export async function initSecrets(): Promise<void> {
   if (initialized) return;
 
   const config = loadConfig();
-  const wc = new WorkspaceClient();
+  const wc = new WorkspaceClient({ host: process.env.DATABRICKS_HOST });
 
   console.log(`[secrets] Reading from scope: ${config.scopeName}`);
 
   const read = async (key: string): Promise<string | null> => {
     try {
-      const resp = await wc.secrets.getSecret({
-        scope: config.scopeName,
-        key,
-      });
+      const resp = await (wc.secrets as any).getSecret(config.scopeName, key);
       // SDK returns base64-encoded value
-      if (resp.value) {
+      if (resp?.value) {
         return Buffer.from(resp.value, 'base64').toString('utf-8');
       }
       return null;
