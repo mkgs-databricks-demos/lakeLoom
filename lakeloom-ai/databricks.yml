@@ -181,7 +181,7 @@ resources:
             securable_type: VOLUME
             permission: WRITE_VOLUME
 
-        # ── Lakebase (OLTP — paired_sessions, projects, sync state) ───────
+        # ── Lakebase (OLTP — paired_sessions, projects, sync state) ─────── 
         - name: postgres
           postgres:
             branch: projects/${var.lakebase_project_id}/branches/production

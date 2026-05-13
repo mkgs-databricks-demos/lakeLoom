@@ -1,11 +1,10 @@
-import { createApp, analytics, files, lakebase, server } from '@databricks/appkit';
+import { createApp, analytics, lakebase, server } from '@databricks/appkit';
 import { setupSampleLakebaseRoutes } from './routes/lakebase/todo-routes';
 
 createApp({
   plugins: [
     server({ autoStart: false }),
     analytics(),
-    files(),
     lakebase(),
   ],
 })
