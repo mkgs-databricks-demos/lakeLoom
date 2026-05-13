@@ -1,0 +1,12 @@
+command: ['npm', 'run', 'start']
+env:
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: sql-warehouse
+  - name: DATABRICKS_VOLUME_SESSION_AUDIO
+    valueFrom: session-audio
+  - name: DATABRICKS_VOLUME_SCREENSHOTS
+    valueFrom: screenshots
+  - name: DATABRICKS_VOLUME_DOCUMENTS
+    valueFrom: documents
+  - name: LAKEBASE_ENDPOINT
+    valueFrom: postgres

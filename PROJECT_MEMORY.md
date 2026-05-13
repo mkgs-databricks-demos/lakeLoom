@@ -2,7 +2,8 @@
 
 ## Purpose
 
-Project-local durable context for `lakeLoom_infra` when global instructions are unavailable from this editing scope.
+Shared durable context for the **lakeLoom** solution — spans both `lakeloom-infra` and `lakeloom-ai` bundles.
+Used when global `.assistant_instructions.md` is unavailable from a particular editing scope.
 
 ## Collaboration Conventions
 
@@ -18,42 +19,63 @@ Project-local durable context for `lakeLoom_infra` when global instructions are 
 ## Project Structure
 
 ```
-lakeLoom_infra/
-├── databricks.yml              # Bundle config, variables, targets
-├── PROJECT_MEMORY.md           # This file
-├── README.md
-├── .gitignore
-├── resources/
-│   ├── lakeloom.schema.yml
-│   ├── session_audio.volume.yml
-│   ├── screenshots.volume.yml
-│   ├── documents.volume.yml
-│   ├── lakeloom.secret_scope.yml
-│   ├── infra_warehouse.sql_warehouse.yml
-│   ├── lakeloom.lakebase.yml
-│   └── platform_bootstrap.job.yml
-├── src/
-│   ├── lib/                        # Reusable Python modules
-│   │   ├── __init__.py
-│   │   ├── workspace_metadata.py   # get_workspace_id(), get_region(), get_zerobus_endpoint()
-│   │   ├── service_principal.py    # get_or_create_service_principal(), verify_client_credentials()
-│   │   └── secret_scope.py         # put_secret(), list_secret_keys(), try_get_secret_value()
-│   ├── platform_bootstrap/         # NOTEBOOK objects (no raw .sql/.py files)
-│   │   ├── ensure-service-principal # Python default, 12 cells
-│   │   ├── stt-0bus-target-table-ddl # SQL default, 14 cells
-│   │   ├── grant-volume-access     # SQL default, 10 cells (forEach target)
-│   │   └── validate-platform       # SQL default, 13 cells
-│   └── admin_actions/              # Manual admin notebooks
-│       ├── set-databricks-secrets  # Generic secret provisioning
-│       └── update-secrets-acls     # Secret scope ACL management
-└── fixtures/
-    ├── sessions/                   # Session summaries (YYYY-MM-DD_desc.md)
-    └── Genie Session Starter       # Notebook fixture
+lakeLoom/
+├── PROJECT_MEMORY.md               # This file (shared between bundles)
+├── deploy.sh                       # Unified deployment script
+├── architecture/
+│   ├── hi_genie/                   # Read-only context from Isaac
+│   └── hey_isaac/                  # Outbound messages to Isaac
+├── lakeloom-infra/
+│   ├── databricks.yml              # Bundle config, variables, targets
+│   ├── README.md
+│   ├── resources/
+│   │   ├── lakeloom.schema.yml
+│   │   ├── session_audio.volume.yml
+│   │   ├── screenshots.volume.yml
+│   │   ├── documents.volume.yml
+│   │   ├── lakeloom.secret_scope.yml
+│   │   ├── infra_warehouse.sql_warehouse.yml
+│   │   ├── lakeloom.lakebase.yml
+│   │   └── platform_bootstrap.job.yml
+│   ├── src/
+│   │   ├── lib/                    # Reusable Python modules
+│   │   │   ├── __init__.py
+│   │   │   ├── workspace_metadata.py
+│   │   │   ├── service_principal.py
+│   │   │   └── secret_scope.py
+│   │   ├── platform_bootstrap/     # NOTEBOOK task implementations
+│   │   │   ├── ensure-service-principal
+│   │   │   ├── stt-0bus-target-table-ddl
+│   │   │   ├── grant-volume-access
+│   │   │   └── validate-platform
+│   │   └── admin_actions/          # Manual admin notebooks
+│   │       ├── set-databricks-secrets
+│   │       └── update-secrets-acls
+│   └── fixtures/
+│       └── sessions/               # Infra session summaries
+├── lakeloom-ai/
+│   ├── databricks.yml              # App bundle config
+│   ├── app.yml                     # AppKit app manifest
+│   ├── src/                        # App source (Node.js + React)
+│   ├── resources/                  # App resource definitions
+│   └── fixtures/
+│       ├── sessions/               # App session summaries
+│       └── Genie Code Starter Session
 ```
+## App Bundle (lakeloom-ai)
+
+* **Purpose:** Databricks AppKit application — requirements capture, architecture design, and Genie Code session planning for rapid Databricks MVPs.
+* **App name (dev):** `lakeloom-ai-dev`
+* **Compute:** Medium AppKit container
+* **Source path:** `/Workspace/Users/matthew.giglia@databricks.com/.bundle/lakeloom-ai/dev/files`
+* **deploy.sh** handles end-to-end: infra validation → readiness checks → bundle deploy → app source push.
+* **Runtime variables passed via `--var`:** `xcode_spn_id` (discovered from secret scope at deploy time).
+* All other values (catalog, schema, warehouse ID, Lakebase IDs) use target defaults in `databricks.yml`.
 
 ## Current Infra Status
 
-* Bundle fully deployed to **dev** target and `platform_bootstrap` job runs successfully (all **4 tasks** pass).
+* Both bundles fully deployed to **dev** target. `platform_bootstrap` job runs successfully (all **4 tasks** pass).
+* `deploy.sh --target dev --app` deploys app bundle end-to-end (validated 2026-05-13).
 * Latest successful run: **2026-05-12** — validates schema, all 3 managed volumes, volume grants (via `information_schema.volume_privileges`), and bronze table.
 * Job now uses a **forEach task** to apply volume grants across all 3 volumes in parallel (concurrency: 3).
 * `resources/uc_setup.job.yml` was **deleted** (empty legacy file, superseded by `platform_bootstrap.job.yml`).
