@@ -98,7 +98,7 @@ variables:
       Xcode SPN application_id for CAN_USE grant on the App.
       Passed by deploy.sh after reading from the secret scope.
       When empty, the Xcode SPN permission is not applied.
-    default: ""
+    default: bc67e71b-99af-4357-a981-05eaed8c9b93
 
   # ── App name (target-specific) ─────────────────────────────────────────
   app_name:
