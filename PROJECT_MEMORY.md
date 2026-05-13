@@ -91,6 +91,8 @@ lakeLoom/
 * NOTEBOOK objects are always referenced as `.ipynb` in job YAML. The `warehouse_id` field determines SQL compute routing, not the file extension.
 * `src/lib/secret_scope.py` — named to avoid collision with Python stdlib `secrets` module.
 * **Isaac notified** (2026-05-12) about `screenshots` and `documents` volumes via `lakeLoom/architecture/hey_isaac/2026-05-12_new-upload-volumes.md`.
+* **Isaac notified** (2026-05-13) about pairing endpoint contract via `lakeLoom/architecture/hey_isaac/2026-05-13_pairing-auth-endpoints-live.md`. Covers: Layer 1/2 auth headers, POST /confirm contract, QR payload structure, error format, open questions (device_label, pubkey encoding, filename convention).
+
 
 ## Resolved Target Variables (dev)
 
@@ -332,7 +334,8 @@ All server components implemented: crypto lib, migration runner, `paired_session
 
 ### QR-Pair Auth (client-side): COMPLETE
 * `PairingPage.tsx` state machine implemented (loading → qr → paired → gated → error)
-* `qrcode.react` installed and rendering correctly (confirmed 2026-05-13 screenshot)
+* `qrcode.react` rendering correctly (confirmed 2026-05-13)
+* API test notebook validates: Xcode SPN token acquired, sidecar pass-through works, Layer 2 rejection correct
 
 ### Lakebase Schema Permissions: COMPLETE
 * `configure_app_spn` job succeeded (2026-05-13) — both tasks passed
