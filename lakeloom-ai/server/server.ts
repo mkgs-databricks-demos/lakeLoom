@@ -1,6 +1,7 @@
 import { createApp, analytics, lakebase, server } from '@databricks/appkit';
 import { setupSampleLakebaseRoutes } from './routes/lakebase/todo-routes';
 import { setupPairingRoutes } from './routes/pairing/pairing-routes';
+import { setupCaptureRoutes } from './routes/captures/capture-routes';
 import { setupUploadRoutes } from './routes/uploads/upload-routes';
 import { setupEventRoutes } from './routes/events/event-routes';
 import { runMigrations } from './migrations/migrate';
@@ -23,7 +24,7 @@ createApp({
     });
 
     // ── Run Lakebase migrations ───────────────────────────────────────────
-    // Creates app schema + paired_sessions table if not present.
+    // Creates app schema + paired_sessions + capture_sessions + uploads tables.
     try {
       await runMigrations(appkit.lakebase);
     } catch (err) {
@@ -41,6 +42,7 @@ createApp({
     // ── Register routes ───────────────────────────────────────────────────
     await setupSampleLakebaseRoutes(appkit);
     await setupPairingRoutes(appkit);
+    await setupCaptureRoutes(appkit);
     await setupUploadRoutes(appkit);
     await setupEventRoutes(appkit);
 

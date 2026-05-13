@@ -3,13 +3,24 @@
  *
  * Validates the three X-Lakeloom-* headers on every iOS → App request:
  *   - X-Lakeloom-Session-Token: opaque session token from QR pairing
- *   - X-Lakeloom-Timestamp: unix seconds (replay defense)
+ *   - X-Lakeloom-Timestamp: unix seconds (replay defense, skew: 90s past / 30s future)
  *   - X-Lakeloom-Signature: base64url-encoded ECDSA P-256 DER signature
  *
  * Layer 0 (Authorization: Bearer <M2M>) is already validated by the
  * Databricks Apps platform sidecar before requests reach this code.
  *
- * Verification order (per Isaac's spec):
+ * Canonical-form string specification (locked 2026-05-13):
+ *
+ *   <HTTP_METHOD>\n<PATH>\n<UNIX_SECONDS>\n<BODY_SHA256_HEX>
+ *
+ *   - HTTP_METHOD = uppercase (GET, POST, PATCH, etc.)
+ *   - PATH = full path including query string (e.g. /api/captures/abc-123/audio)
+ *   - UNIX_SECONDS = integer string, no fractional part, no leading zeros (e.g. 1747152120)
+ *   - BODY_SHA256_HEX = lowercase hex SHA-256 of raw request body bytes.
+ *     Empty body → hash of empty string (e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855)
+ *   - Line separator = \n (0x0A), no trailing newline
+ *
+ * Verification order:
  *   1. Token lookup by sha256(token) in app.paired_sessions
  *   2. Revocation check (revoked_at IS NULL)
  *   3. Expiry check (expires_at > now)
@@ -67,7 +78,7 @@ export interface IosAuthOptions {
  * Create the iOS auth middleware.
  *
  * Usage:
- *   app.use('/api/sessions', iosAuth({ lakebase }));
+ *   app.use('/api/captures', iosAuth({ lakebase }));
  *   app.post('/api/pairing/confirm', iosAuth({ lakebase, allowUnboundSession: true }), handler);
  */
 export function iosAuth(opts: IosAuthOptions) {
