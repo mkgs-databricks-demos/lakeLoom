@@ -10,16 +10,33 @@ env:
     valueFrom: documents
   - name: LAKEBASE_ENDPOINT
     valueFrom: postgres
-  # ── Secret scope configuration ──────────────────────────────────────────
-  # Key names are schema-qualified per target. Values injected by deploy.sh
-  # via bundle variables → databricks.yml → app resource env.
+
+  # ── Secret scope values (injected via platform valueFrom) ─────────────
+  # The platform reads the secret value and injects it as an env var.
+  # No SDK calls needed at runtime — eliminates the secrets-service error.
+
+  # ZeroBus SPN credentials (server-side event streaming)
+  - name: LAKELOOM_ZEROBUS_CLIENT_ID
+    valueFrom: zerobus-client-id
+  - name: LAKELOOM_ZEROBUS_CLIENT_SECRET
+    valueFrom: zerobus-client-secret
+
+  # Xcode SPN credentials (included in QR payload for iOS pairing)
+  - name: LAKELOOM_XCODE_CLIENT_ID
+    valueFrom: xcode-client-id
+  - name: LAKELOOM_XCODE_CLIENT_SECRET
+    valueFrom: xcode-client-secret
+
+  # Infrastructure config (auto-provisioned by platform bootstrap)
+  - name: LAKELOOM_WORKSPACE_URL
+    valueFrom: workspace-url
+  - name: LAKELOOM_ZEROBUS_ENDPOINT
+    valueFrom: zerobus-endpoint
+  - name: LAKELOOM_TARGET_TABLE_NAME
+    valueFrom: target-table-name
+  - name: LAKELOOM_ZEROBUS_STREAM_POOL_SIZE
+    valueFrom: zerobus-stream-pool-size
+
+  # Secret scope name (static value — used for diagnostics/logging only)
   - name: LAKELOOM_SECRET_SCOPE
     value: lakeloom_credentials
-  - name: LAKELOOM_CLIENT_ID_KEY
-    value: ${DATABRICKS_CLIENT_ID_KEY:-client_id}
-  - name: LAKELOOM_CLIENT_SECRET_KEY
-    value: ${DATABRICKS_CLIENT_SECRET_KEY:-client_secret}
-  - name: LAKELOOM_XCODE_CLIENT_ID_KEY
-    value: ${DATABRICKS_XCODE_CLIENT_ID_KEY:-xcode_client_id}
-  - name: LAKELOOM_XCODE_CLIENT_SECRET_KEY
-    value: ${DATABRICKS_XCODE_CLIENT_SECRET_KEY:-xcode_client_secret}

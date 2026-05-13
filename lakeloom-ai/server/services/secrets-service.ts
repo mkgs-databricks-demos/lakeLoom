@@ -1,40 +1,23 @@
 /**
- * Secrets service — reads Databricks Secrets at startup.
+ * Secrets service — reads secret values from environment variables.
  *
- * Loads SPN credentials and infra metadata from the `lakeloom_credentials`
- * secret scope. Exposes typed getters and a readiness check for gating
- * pairing endpoints (503 if critical secrets are missing).
+ * The platform injects actual secret values at container start via
+ * app.yaml valueFrom bindings → Databricks Apps secret resources.
+ * No SDK calls or secret scope reads needed at runtime.
  *
- * Key names are schema-qualified per target and passed via environment
- * variables (from app.yaml valueFrom bindings or bundle variables).
- *
- * Uses the Databricks SDK WorkspaceClient (auto-authenticated in Apps).
+ * Env vars (set by platform from secret resources):
+ *   LAKELOOM_ZEROBUS_CLIENT_ID       — ZeroBus SPN client_id
+ *   LAKELOOM_ZEROBUS_CLIENT_SECRET   — ZeroBus SPN client_secret
+ *   LAKELOOM_XCODE_CLIENT_ID         — Xcode SPN client_id
+ *   LAKELOOM_XCODE_CLIENT_SECRET     — Xcode SPN client_secret
+ *   LAKELOOM_WORKSPACE_URL           — Workspace URL
+ *   LAKELOOM_ZEROBUS_ENDPOINT        — ZeroBus endpoint
+ *   LAKELOOM_TARGET_TABLE_NAME       — Bronze table name
+ *   LAKELOOM_ZEROBUS_STREAM_POOL_SIZE — Stream pool size (default: 16)
+ *   LAKELOOM_SECRET_SCOPE            — Scope name (diagnostics only)
  */
 
-import { WorkspaceClient } from '@databricks/sdk-experimental';
-
-// ── Configuration from environment ───────────────────────────────────────────
-
-interface SecretsConfig {
-  scopeName: string;
-  clientIdKey: string;
-  clientSecretKey: string;
-  xcodeClientIdKey: string;
-  xcodeClientSecretKey: string;
-}
-
-function loadConfig(): SecretsConfig {
-  const env = process.env;
-  return {
-    scopeName: env.LAKELOOM_SECRET_SCOPE ?? 'lakeloom_credentials',
-    clientIdKey: env.LAKELOOM_CLIENT_ID_KEY ?? 'client_id',
-    clientSecretKey: env.LAKELOOM_CLIENT_SECRET_KEY ?? 'client_secret',
-    xcodeClientIdKey: env.LAKELOOM_XCODE_CLIENT_ID_KEY ?? 'xcode_client_id',
-    xcodeClientSecretKey: env.LAKELOOM_XCODE_CLIENT_SECRET_KEY ?? 'xcode_client_secret',
-  };
-}
-
-// ── Secret values (populated at init) ────────────────────────────────────────
+// ── Secret values (read once from env) ───────────────────────────────────────
 
 export interface SecretsState {
   // ZeroBus SPN (server-side streaming + volume writes)
@@ -52,86 +35,35 @@ export interface SecretsState {
   zerobusStreamPoolSize: number;
 }
 
-let state: SecretsState = {
-  zerobusClientId: null,
-  zerobusClientSecret: null,
-  xcodeClientId: null,
-  xcodeClientSecret: null,
-  workspaceUrl: null,
-  zerobusEndpoint: null,
-  targetTableName: null,
-  zerobusStreamPoolSize: 16,
-};
+function readEnv(): SecretsState {
+  const env = process.env;
+  const poolStr = env.LAKELOOM_ZEROBUS_STREAM_POOL_SIZE;
+  return {
+    zerobusClientId: env.LAKELOOM_ZEROBUS_CLIENT_ID || null,
+    zerobusClientSecret: env.LAKELOOM_ZEROBUS_CLIENT_SECRET || null,
+    xcodeClientId: env.LAKELOOM_XCODE_CLIENT_ID || null,
+    xcodeClientSecret: env.LAKELOOM_XCODE_CLIENT_SECRET || null,
+    workspaceUrl: env.LAKELOOM_WORKSPACE_URL || null,
+    zerobusEndpoint: env.LAKELOOM_ZEROBUS_ENDPOINT || null,
+    targetTableName: env.LAKELOOM_TARGET_TABLE_NAME || null,
+    zerobusStreamPoolSize: poolStr ? (parseInt(poolStr, 10) || 16) : 16,
+  };
+}
 
-let initialized = false;
+const state: SecretsState = readEnv();
 
-// ── Initialization ───────────────────────────────────────────────────────────
+// ── Initialization (synchronous — no async needed) ───────────────────────────
 
 /**
- * Initialize the secrets service by reading all required keys from the scope.
- * Non-fatal: missing secrets are logged as warnings; readiness checks gate endpoints.
+ * Initialize the secrets service. Now synchronous (env vars are already present).
+ * Kept as async for backward-compatible call signature in server.ts.
  */
 export async function initSecrets(): Promise<void> {
-  if (initialized) return;
-
-  const config = loadConfig();
-  const wc = new WorkspaceClient({ host: process.env.DATABRICKS_HOST });
-
-  console.log(`[secrets] Reading from scope: ${config.scopeName}`);
-
-  const read = async (key: string): Promise<string | null> => {
-    try {
-      const resp = await (wc.secrets as any).getSecret(config.scopeName, key);
-      // SDK returns base64-encoded value
-      if (resp?.value) {
-        return Buffer.from(resp.value, 'base64').toString('utf-8');
-      }
-      return null;
-    } catch (err) {
-      console.warn(`[secrets] Key "${key}" not found or inaccessible:`, (err as Error).message);
-      return null;
-    }
-  };
-
-  // Read all keys in parallel
-  const [
-    zerobusClientId,
-    zerobusClientSecret,
-    xcodeClientId,
-    xcodeClientSecret,
-    workspaceUrl,
-    zerobusEndpoint,
-    targetTableName,
-    poolSizeStr,
-  ] = await Promise.all([
-    read(config.clientIdKey),
-    read(config.clientSecretKey),
-    read(config.xcodeClientIdKey),
-    read(config.xcodeClientSecretKey),
-    read('workspace_url'),
-    read('zerobus_endpoint'),
-    read('target_table_name'),
-    read('zerobus_stream_pool_size'),
-  ]);
-
-  state = {
-    zerobusClientId,
-    zerobusClientSecret,
-    xcodeClientId,
-    xcodeClientSecret,
-    workspaceUrl,
-    zerobusEndpoint,
-    targetTableName,
-    zerobusStreamPoolSize: poolSizeStr ? (parseInt(poolSizeStr, 10) || 16) : 16,
-  };
-
-  initialized = true;
-
   const missing = getMissingKeys();
   if (missing.length > 0) {
-    console.warn(`[secrets] Missing keys (pairing will be gated): ${missing.join(', ')}`);
+    console.warn(`[secrets] Missing env vars (pairing will be gated): ${missing.join(', ')}`);
   } else {
-    console.log('[secrets] All keys loaded successfully.');
+    console.log('[secrets] All secret env vars present.');
   }
 }
 
@@ -143,24 +75,20 @@ export async function initSecrets(): Promise<void> {
  */
 export function getMissingKeys(): string[] {
   const missing: string[] = [];
-  if (!state.xcodeClientId) missing.push('xcode_spn_client_id');
-  if (!state.xcodeClientSecret) missing.push('xcode_spn_client_secret');
-  if (!state.zerobusClientId) missing.push('zerobus_spn_client_id');
-  if (!state.zerobusClientSecret) missing.push('zerobus_spn_client_secret');
-  if (!state.workspaceUrl) missing.push('workspace_url');
+  if (!state.xcodeClientId) missing.push('LAKELOOM_XCODE_CLIENT_ID');
+  if (!state.xcodeClientSecret) missing.push('LAKELOOM_XCODE_CLIENT_SECRET');
+  if (!state.zerobusClientId) missing.push('LAKELOOM_ZEROBUS_CLIENT_ID');
+  if (!state.zerobusClientSecret) missing.push('LAKELOOM_ZEROBUS_CLIENT_SECRET');
+  if (!state.workspaceUrl) missing.push('LAKELOOM_WORKSPACE_URL');
   return missing;
 }
 
-/**
- * Whether the pairing system has all required secrets.
- */
+/** Whether the pairing system has all required secrets. */
 export function isPairingReady(): boolean {
   return getMissingKeys().length === 0;
 }
 
-/**
- * Whether ZeroBus streaming is ready (has SPN creds + endpoint + table).
- */
+/** Whether ZeroBus streaming is ready (has SPN creds + endpoint + table). */
 export function isZerobusReady(): boolean {
   return !!(
     state.zerobusClientId &&

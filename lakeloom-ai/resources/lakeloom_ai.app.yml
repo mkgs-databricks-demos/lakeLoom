@@ -61,6 +61,58 @@ resources:
             database: projects/${var.lakebase_project_id}/branches/production/databases/${var.lakebase_database_id}
             permission: CAN_CONNECT_AND_CREATE
 
+        # ── Secrets (scope keys injected at runtime via valueFrom) ────────
+        #
+        # Each secret resource binds one key from the secret scope. The
+        # platform injects the actual secret VALUE as an env var at container
+        # start — no SDK calls needed at runtime.
+        #
+        # ZeroBus SPN credentials (server-side event streaming)
+        - name: zerobus-client-id
+          secret:
+            scope: ${var.secret_scope_name}
+            key: ${var.client_id_dbs_key}
+            permission: READ
+        - name: zerobus-client-secret
+          secret:
+            scope: ${var.secret_scope_name}
+            key: ${var.client_secret_dbs_key}
+            permission: READ
+
+        # Xcode SPN credentials (included in QR payload for iOS pairing)
+        - name: xcode-client-id
+          secret:
+            scope: ${var.secret_scope_name}
+            key: ${var.xcode_client_id_dbs_key}
+            permission: READ
+        - name: xcode-client-secret
+          secret:
+            scope: ${var.secret_scope_name}
+            key: ${var.xcode_client_secret_dbs_key}
+            permission: READ
+
+        # Infrastructure config keys (auto-provisioned by platform bootstrap)
+        - name: workspace-url
+          secret:
+            scope: ${var.secret_scope_name}
+            key: workspace_url
+            permission: READ
+        - name: zerobus-endpoint
+          secret:
+            scope: ${var.secret_scope_name}
+            key: zerobus_endpoint
+            permission: READ
+        - name: target-table-name
+          secret:
+            scope: ${var.secret_scope_name}
+            key: target_table_name
+            permission: READ
+        - name: zerobus-stream-pool-size
+          secret:
+            scope: ${var.secret_scope_name}
+            key: zerobus_stream_pool_size
+            permission: READ
+
       # ── App-level permissions ───────────────────────────────────────────
       permissions:
         - service_principal_name: ${var.xcode_spn_id}

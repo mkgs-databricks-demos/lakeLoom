@@ -109,6 +109,10 @@ variables:
       Platform app name. Target-specific to allow dev and production
       apps to coexist in the same workspace.
 
+  app_spn_id:
+    description: >
+      The actual lakeLoom.AI SPN.  Only known after the app is first deployed.
+
   # ── Run-as / Service Principals ─────────────────────────────────────────
   run_as_user:
     description: The user or service principal that the app runs as.
@@ -164,6 +168,7 @@ targets:
       lakebase_database_id: db-16c3-p7ob6z9dbv
       run_as_user: matthew.giglia@databricks.com
       app_name: lakeloom-ai-dev
+      app_spn_id: 686d32bf-a6a4-461b-a18b-82489eecdc15
       # SPN credential key names (schema-qualified for dev)
       client_id_dbs_key: client_id_dev_matthew_giglia_lakeloom
       client_secret_dbs_key: client_secret_dev_matthew_giglia_lakeloom

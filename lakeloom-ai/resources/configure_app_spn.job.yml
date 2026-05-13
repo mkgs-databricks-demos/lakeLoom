@@ -1,0 +1,49 @@
+# Job resource — configure app SPN access (secrets + Lakebase schema)
+# Runs admin notebooks to ensure the app's auto-provisioned SPN has:
+#   1. READ access on the secret scope (for env var injection)
+#   2. Full privileges on the 'app' schema in Lakebase (for migrations)
+# Triggered by deploy.sh after app registration, before compute startup.
+
+resources:
+  jobs:
+    configure_app_spn:
+      name: "[${bundle.target}] Configure App SPN Access"
+      tags:
+        project: ${var.tags_project}
+        purpose: admin-action
+        env: ${bundle.target}
+      git_source:
+        git_url: https://github.com/matthew-gigl-db/helper-notebooks
+        git_provider: gitHub
+        git_branch: main
+      tasks:
+        # Task 1: Secret scope READ access (from GitHub)
+        - task_key: update_secrets_acls
+          notebook_task:
+            notebook_path: Update Databricks Secrets ACLs
+            base_parameters:
+              secret_scope: ${var.secret_scope_name}
+              principal: ""
+              permission: READ
+            source: GIT
+          environment_key: Default
+
+        # Task 2: Lakebase schema setup (CREATE SCHEMA app + GRANT to SPN)
+        - task_key: setup_lakebase_schema
+          depends_on:
+            - task_key: update_secrets_acls
+          notebook_task:
+            notebook_path: ../src/admin/grant-lakebase-schema-access
+            base_parameters:
+              principal: ""
+              lakebase_project_id: ${var.lakebase_project_id}
+              lakebase_database_id: ${var.lakebase_database_id}
+              schema_name: app
+            source: WORKSPACE
+          environment_key: Default
+
+      environments:
+        - environment_key: Default
+          spec:
+            client: "1"
+      max_concurrent_runs: 1

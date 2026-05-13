@@ -10,7 +10,7 @@
  * Databricks Apps platform sidecar before requests reach this code.
  *
  * Verification order (per Isaac's spec):
- *   1. Token lookup by sha256(token) in paired_sessions
+ *   1. Token lookup by sha256(token) in app.paired_sessions
  *   2. Revocation check (revoked_at IS NULL)
  *   3. Expiry check (expires_at > now)
  *   4. Timestamp skew (90s past, 30s future)

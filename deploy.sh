@@ -112,7 +112,7 @@ XCODE_SPN_ID=""
 APP_NAME=""
 APP_SOURCE_PATH=""
 APP_SPN_CLIENT_ID=""
-GRANT_SECRETS_ACL_JOB="grant_secrets_acl"
+CONFIGURE_APP_SPN_JOB="configure_app_spn"
 
 # --------------------------------------------------------------------------- #
 # Defaults
@@ -1005,26 +1005,26 @@ except (json.JSONDecodeError, ValueError, KeyError):
 }
 
 # --------------------------------------------------------------------------- #
-# run_secrets_acl_grant — run the grant_secrets_acl bundle job to ensure the
+# run_configure_app_spn — run the configure_app_spn bundle job to ensure the
 #                         app SPN has READ on the secret scope.
 #
 # Passes the resolved APP_SPN_CLIENT_ID as the "principal" notebook param.
 # Idempotent — safe to run on every deploy (put_acl is an upsert).
 # --------------------------------------------------------------------------- #
-run_secrets_acl_grant() {
+run_configure_app_spn() {
   if [[ -z "${APP_SPN_CLIENT_ID}" ]]; then
     warn "No app SPN client_id available — skipping secrets ACL step."
     return 0
   fi
 
-  log "Ensuring app SPN has scope access (job: ${GRANT_SECRETS_ACL_JOB})"
+  log "Ensuring app SPN has scope access (job: ${CONFIGURE_APP_SPN_JOB})"
 
   local bundle_dir="${SCRIPT_DIR}/${APP_BUNDLE}"
-  (cd_bundle "${bundle_dir}" && databricks bundle run "${GRANT_SECRETS_ACL_JOB}" \
+  (cd_bundle "${bundle_dir}" && databricks bundle run "${CONFIGURE_APP_SPN_JOB}" \
     --target "${TARGET}" \
     --params "principal=${APP_SPN_CLIENT_ID}") || {
     warn "Secrets ACL job failed. The app may not be able to read secrets."
-    warn "You can re-run manually: databricks bundle run ${GRANT_SECRETS_ACL_JOB} --target ${TARGET} --params \"principal=${APP_SPN_CLIENT_ID}\""
+    warn "You can re-run manually: databricks bundle run ${CONFIGURE_APP_SPN_JOB} --target ${TARGET} --params \"principal=${APP_SPN_CLIENT_ID}\""
     return 0  # Non-fatal — don't block deployment
   }
   ok "App SPN scope access configured"
@@ -1086,12 +1086,12 @@ fi
 # After bundle deploy registers the app resource (permissions, env vars,
 # resources), this step:
 #   a) Resolves the app name + SPN client_id from the platform
-#   b) Runs the grant_secrets_acl job to ensure scope READ access
+#   b) Runs the configure_app_spn job to ensure scope READ access
 #   c) Starts compute and triggers the source deployment
 if [[ "${DEPLOY_APP}" == true ]] && [[ "${VALIDATE_ONLY}" != true ]] && [[ "${DESTROY}" != true ]]; then
   resolve_app_name
   resolve_app_spn_id
-  run_secrets_acl_grant
+  run_configure_app_spn
   deploy_app_source
 fi
 
