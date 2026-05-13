@@ -57,7 +57,11 @@ lakeLoom/
 │   ├── databricks.yml              # App bundle config
 │   ├── app.yml                     # AppKit app manifest
 │   ├── src/                        # App source (Node.js + React)
+│   │   └── admin/                  # Admin notebooks for app-bundle jobs
+│   │       └── grant-lakebase-schema-access
 │   ├── resources/                  # App resource definitions
+│   │   ├── lakeloom_ai.app.yml
+│   │   └── configure_app_spn.job.yml
 │   └── fixtures/
 │       ├── sessions/               # App session summaries
 │       └── Genie Code Starter Session
@@ -301,10 +305,37 @@ Available since DBR 13.3 LTS / Unity Catalog.
 
 ## Next Steps (post-infra)
 
-* Author the companion `lakeLoom_app` bundle (Databricks App with AppKit).
-* App bootstrap: self-migrate Lakebase tables (`paired_sessions`, etc.) before serving endpoints.
-* App bundle grants its own SPN READ on `lakeloom_credentials` and CAN_USE to the Xcode SPN.
-* App SPN needs WRITE_VOLUME on `session_audio`, `screenshots`, and `documents` for proxied uploads from iOS.
-* QR-pair endpoint implementation depends on both SPNs having valid `client_secret` values.
+* ~~Author the companion `lakeLoom_app` bundle (Databricks App with AppKit).~~ **DONE — `lakeloom-ai` bundle.**
+* ~~App bootstrap: self-migrate Lakebase tables (`paired_sessions`, etc.) before serving endpoints.~~ **DONE — auto-migration in `server/migrations/`.**
+* ~~App bundle grants its own SPN READ on `lakeloom_credentials` and CAN_USE to the Xcode SPN.~~ **DONE — `configure_app_spn` job task 1.**
+* ~~QR-pair endpoint implementation depends on both SPNs having valid `client_secret` values.~~ **DONE — all endpoints implemented.**
 * ~~Inform Isaac (via `hey_isaac/`) about `screenshots` and `documents` volumes and the corresponding App upload endpoints iOS will need to call.~~ **DONE 2026-05-12**
+* App SPN needs WRITE_VOLUME on `session_audio`, `screenshots`, and `documents` for proxied uploads from iOS.
 * Await Isaac's response on filename conventions (timestamps vs UUIDs) before finalizing App upload handlers.
+
+## App Bundle (lakeloom-ai) — Implementation Status
+
+### QR-Pair Auth (server-side): COMPLETE
+All server components implemented: crypto lib, migration runner, `paired_sessions` table, iOS auth middleware (ECDSA P-256 verification), pairing routes (QR generate, confirm, device list, revoke, SSE), upload routes (audio/screenshots/documents → UC Volumes), event routes (→ ZeroBus).
+
+### QR-Pair Auth (client-side): PARTIALLY COMPLETE
+* `PairingPage.tsx` state machine implemented (loading → qr → paired → gated → error)
+* **BLOCKER:** `qrcode.react` package not installed — page shows placeholder instead of actual QR code
+* Fix: `cd client && npm install qrcode.react @types/qrcode.react`
+
+### Lakebase Schema Permissions: BLOCKED
+* `configure_app_spn` job task 2 (`setup_lakebase_schema`) fails — `endpoint.hostname` AttributeError in notebook cell 5
+* Need to discover correct SDK field name for Lakebase endpoint host
+* Once fixed: re-run job → redeploy app → migrations succeed
+
+### configure_app_spn Job
+* **Resource key:** `configure_app_spn` (in `resources/configure_app_spn.job.yml`)
+* **Task 1** (`update_secrets_acls`): Grants app SPN READ on scope — **WORKING** ✓
+* **Task 2** (`setup_lakebase_schema`): Creates `app` schema, grants SPN full access — **BLOCKED** (notebook bug)
+* **Notebook path:** `../src/admin/grant-lakebase-schema-access.ipynb` (relative, no `source:` field — bundle resolves at deploy time)
+* **deploy.sh:** `run_configure_app_spn()` triggers after app registration, before compute startup
+
+### App SPN
+* **Client ID:** `686d32bf-a6a4-461b-a18b-82489eecdc15`
+* **Variable:** `${var.app_spn_id}` in `databricks.yml`
+* **Secrets:** All 8 env vars confirmed present at runtime via `valueFrom` bindings in `app.yaml`
