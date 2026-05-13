@@ -33,7 +33,7 @@ resources:
           depends_on:
             - task_key: update_secrets_acls
           notebook_task:
-            notebook_path: ../src/admin/grant-lakebase-schema-access
+            notebook_path: ../src/admin/grant-lakebase-schema-access.ipynb
             base_parameters:
               principal: ""
               lakebase_project_id: ${var.lakebase_project_id}
