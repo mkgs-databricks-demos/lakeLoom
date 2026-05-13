@@ -193,8 +193,11 @@ safe() { echo "$1" | sed 's/[^a-zA-Z0-9_.\-]//g'; }
 # safe_url() — like safe() but preserves :// for workspace URLs
 safe_url() { echo "$1" | sed 's/[^a-zA-Z0-9_.\-:\/]//g'; }
 
-# get_app_status() — extract app status from `databricks apps get` JSON output.
-# Handles both flat string status and nested object {state: "..."} formats.
+# get_app_status() — extract compute readiness from `databricks apps get` JSON.
+# The API returns separate fields for compute vs app status. For deploy purposes,
+# we need COMPUTE readiness (ACTIVE) — the app status stays UNAVAILABLE until
+# source is pushed. Checks: compute_status > status > app_status.
+# Returns uppercase state string: ACTIVE, STARTING, STOPPED, UNKNOWN, etc.
 get_app_status() {
   python3 -c "
 import sys, json
@@ -203,12 +206,32 @@ try:
 except (json.JSONDecodeError, ValueError):
     print('UNKNOWN')
     sys.exit(0)
-s = data.get('status', 'UNKNOWN')
-if isinstance(s, dict):
-    print(s.get('state', 'UNKNOWN'))
-else:
-    print(s)
+
+def extract_state(field):
+    if isinstance(field, dict):
+        return field.get('state', '')
+    if isinstance(field, str):
+        return field
+    return ''
+
+# Priority: compute_status (compute readiness) > status > app_status
+for key in ('compute_status', 'status', 'app_status'):
+    val = data.get(key)
+    if val is not None:
+        state = extract_state(val)
+        if state:
+            print(state.upper())
+            sys.exit(0)
+
+print('UNKNOWN')
 " 2>/dev/null
+}
+
+# is_compute_ready() — check if a status value indicates compute is ready
+# for source deployment. Accepts ACTIVE (compute up) and RUNNING (app serving).
+is_compute_ready() {
+  local status="$1"
+  [[ "${status}" == "ACTIVE" ]] || [[ "${status}" == "RUNNING" ]]
 }
 
 # cd_bundle() — cd into a /Workspace directory with FUSE refresh and retry.
@@ -861,7 +884,7 @@ file_path = workspace.get('file_path', '')
 print(f'APP_NAME=\"{safe(app_name)}\"')
 # file_path contains the workspace files path (preserves slashes for path)
 # Use safe_url-like approach for path
-path_safe = re.sub(r'[^a-zA-Z0-9_.\-/]', '', str(file_path))
+path_safe = re.sub(r'[^a-zA-Z0-9_.\-/@]', '', str(file_path))
 print(f'APP_SOURCE_PATH=\"{path_safe}\"')
 ")" || fail "Could not parse app bundle summary."
 
@@ -899,8 +922,8 @@ deploy_app_source() {
 
   echo "  Current app status: ${app_status}"
 
-  # 2. If not running, start compute first
-  if [[ "${app_status}" != "RUNNING" ]]; then
+  # 2. If compute not ready, start it first
+  if ! is_compute_ready "${app_status}"; then
     log "Starting app compute (status: ${app_status})"
     databricks apps start "${APP_NAME}" --no-wait 2>/dev/null || true
 
@@ -914,7 +937,7 @@ deploy_app_source() {
       app_status=$(databricks apps get "${APP_NAME}" --output json 2>/dev/null \
         | get_app_status) || app_status="UNKNOWN"
       echo "  [${elapsed}s] App status: ${app_status}"
-      if [[ "${app_status}" == "RUNNING" ]]; then
+      if is_compute_ready "${app_status}"; then
         break
       fi
       if [[ "${app_status}" == "FAILED" ]] || [[ "${app_status}" == "CRASHED" ]] || [[ "${app_status}" == "DELETING" ]]; then
@@ -922,12 +945,12 @@ deploy_app_source() {
       fi
     done
 
-    if [[ "${app_status}" != "RUNNING" ]]; then
-      fail "App did not reach RUNNING state within ${max_wait}s (current: ${app_status})."
+    if ! is_compute_ready "${app_status}"; then
+      fail "App compute did not reach ACTIVE state within ${max_wait}s (current: ${app_status})."
     fi
-    ok "App compute is running"
+    ok "App compute is ready"
   else
-    ok "App compute already running"
+    ok "App compute already ready"
   fi
 
   # 3. Deploy source code from bundle's workspace files path

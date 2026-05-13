@@ -195,9 +195,9 @@ resources:
       # Once the Xcode SPN application_id is known and stable per target,
       # it can be hardcoded here:
       #
-      #   permissions:
-      #     - service_principal_name: ${var.xcode_spn_id}
-      #       level: CAN_USE
+      permissions:
+        - service_principal_name: ${var.xcode_spn_id}
+          level: CAN_USE
 
 # ---------------------------------------------------------------------------
 # Targets
