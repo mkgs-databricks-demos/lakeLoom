@@ -187,11 +187,29 @@ warn() { echo -e "\033[1;33m  ⚠  $1\033[0m"; }
 ok()   { echo -e "\033[1;32m  ✓  $1\033[0m"; }
 fail() { echo -e "\033[1;31m  ✗  $1\033[0m"; exit 1; }
 
-# safe() — sanitise a value for shell interpolation (strips unsafe chars)
+# safe() — sanitise a value for shell  interpolation (strips unsafe chars)
 safe() { echo "$1" | sed 's/[^a-zA-Z0-9_.\-]//g'; }
 
 # safe_url() — like safe() but preserves :// for workspace URLs
 safe_url() { echo "$1" | sed 's/[^a-zA-Z0-9_.\-:\/]//g'; }
+
+# get_app_status() — extract app status from `databricks apps get` JSON output.
+# Handles both flat string status and nested object {state: "..."} formats.
+get_app_status() {
+  python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+except (json.JSONDecodeError, ValueError):
+    print('UNKNOWN')
+    sys.exit(0)
+s = data.get('status', 'UNKNOWN')
+if isinstance(s, dict):
+    print(s.get('state', 'UNKNOWN'))
+else:
+    print(s)
+" 2>/dev/null
+}
 
 # cd_bundle() — cd into a /Workspace directory with FUSE refresh and retry.
 # After long-running operations (bundle run ~2 min), the FUSE mount for
@@ -275,7 +293,7 @@ resolve_infra_vars() {
   log "Resolving infrastructure variables (target: ${TARGET})"
 
   local summary_json
-  summary_json=$(cd_bundle "${bundle_dir}" && databricks bundle summary --target "${TARGET}" --output json 2>&1) || {
+  summary_json=$(cd_bundle "${bundle_dir}" && databricks bundle summary --target "${TARGET}" --output json 2>/dev/null) || {
     fail "Could not read bundle summary for ${INFRA_BUNDLE}.\n" \
          "  Deploy the infra bundle first:\n" \
          "    cd ${bundle_dir} && databricks bundle deploy --target ${TARGET}"
@@ -808,7 +826,7 @@ resolve_app_name() {
   log "Resolving app name from bundle summary"
 
   local summary_json
-  summary_json=$(cd_bundle "${bundle_dir}" && databricks bundle summary --target "${TARGET}" --output json 2>&1) || {
+  summary_json=$(cd_bundle "${bundle_dir}" && databricks bundle summary --target "${TARGET}" --output json 2>/dev/null) || {
     fail "Could not read bundle summary for ${APP_BUNDLE}."
   }
 
@@ -819,7 +837,7 @@ import sys, json, re
 try:
     data = json.load(sys.stdin)
 except json.JSONDecodeError as e:
-    print(f'RESOLVE_ERROR="JSON parse error: {e}"', flush=True)
+    print(f'RESOLVE_ERROR=\"JSON parse error: {e}\"', flush=True)
     sys.exit(0)
 
 def safe(v):
@@ -845,7 +863,7 @@ print(f'APP_NAME=\"{safe(app_name)}\"')
 # Use safe_url-like approach for path
 path_safe = re.sub(r'[^a-zA-Z0-9_.\-/]', '', str(file_path))
 print(f'APP_SOURCE_PATH=\"{path_safe}\"')
-" 2>/dev/null)" || fail "Could not parse app bundle summary."
+")" || fail "Could not parse app bundle summary."
 
   if [[ -n "${RESOLVE_ERROR:-}" ]]; then
     fail "App bundle summary parse error: ${RESOLVE_ERROR}"
@@ -874,15 +892,17 @@ deploy_app_source() {
   log "Deploying source code to app: ${APP_NAME}"
 
   # 1. Check current app status
+  # NOTE: CLI uses positional arg for app name (not --name flag)
   local app_status
-  app_status=$(databricks apps get --name "${APP_NAME}" --output json 2>/dev/null     | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','UNKNOWN'))" 2>/dev/null) || app_status="UNKNOWN"
+  app_status=$(databricks apps get "${APP_NAME}" --output json 2>/dev/null \
+    | get_app_status) || app_status="UNKNOWN"
 
   echo "  Current app status: ${app_status}"
 
   # 2. If not running, start compute first
   if [[ "${app_status}" != "RUNNING" ]]; then
     log "Starting app compute (status: ${app_status})"
-    databricks apps start --name "${APP_NAME}" --no-wait 2>/dev/null || true
+    databricks apps start "${APP_NAME}" --no-wait 2>/dev/null || true
 
     # Poll for RUNNING state (max 5 minutes)
     local max_wait=300
@@ -891,12 +911,13 @@ deploy_app_source() {
     while [[ ${elapsed} -lt ${max_wait} ]]; do
       sleep ${interval}
       elapsed=$((elapsed + interval))
-      app_status=$(databricks apps get --name "${APP_NAME}" --output json 2>/dev/null         | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','UNKNOWN'))" 2>/dev/null) || app_status="UNKNOWN"
+      app_status=$(databricks apps get "${APP_NAME}" --output json 2>/dev/null \
+        | get_app_status) || app_status="UNKNOWN"
       echo "  [${elapsed}s] App status: ${app_status}"
       if [[ "${app_status}" == "RUNNING" ]]; then
         break
       fi
-      if [[ "${app_status}" == "FAILED" ]] || [[ "${app_status}" == "DELETING" ]]; then
+      if [[ "${app_status}" == "FAILED" ]] || [[ "${app_status}" == "CRASHED" ]] || [[ "${app_status}" == "DELETING" ]]; then
         fail "App entered ${app_status} state. Check the Apps UI for details."
       fi
     done
@@ -917,7 +938,7 @@ deploy_app_source() {
     fail "Source code deployment failed. Check the Apps UI for details."
 
   ok "Source deployment initiated for ${APP_NAME}"
-  echo "  Monitor: databricks apps get --name ${APP_NAME}"
+  echo "  Monitor: databricks apps get ${APP_NAME}"
 }
 
 # --------------------------------------------------------------------------- #
