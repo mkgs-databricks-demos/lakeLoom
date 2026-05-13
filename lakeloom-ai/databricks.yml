@@ -199,6 +199,18 @@ resources:
         - service_principal_name: ${var.xcode_spn_id}
           level: CAN_USE
 
+      # ── Telemetry (OTel → Unity Catalog) ────────────────────────────────
+      # Platform auto-injects OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4314
+      # and related env vars at runtime. Tables are auto-created if absent.
+      # Resolves per-target via catalog/schema variables:
+      #   dev:     hls_fde_dev.dev_matthew_giglia_lakeloom.lakeloom_ai_otel_*
+      #   hls_fde: hls_fde.lakeloom.lakeloom_ai_otel_* 
+      telemetry_export_destinations:
+        - unity_catalog:
+            logs_table: ${var.catalog}.${var.schema}.lakeloom_ai_otel_logs
+            metrics_table: ${var.catalog}.${var.schema}.lakeloom_ai_otel_metrics
+            traces_table: ${var.catalog}.${var.schema}.lakeloom_ai_otel_traces
+
 # ---------------------------------------------------------------------------
 # Targets
 # ---------------------------------------------------------------------------
