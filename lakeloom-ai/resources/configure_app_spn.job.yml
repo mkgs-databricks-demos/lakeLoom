@@ -23,7 +23,7 @@ resources:
             notebook_path: Update Databricks Secrets ACLs
             base_parameters:
               secret_scope: ${var.secret_scope_name}
-              principal: ""
+              principal: ${var.app_spn_id}
               permission: READ
             source: GIT
           environment_key: Default
