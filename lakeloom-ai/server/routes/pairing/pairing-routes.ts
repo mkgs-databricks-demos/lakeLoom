@@ -86,6 +86,12 @@ export async function setupPairingRoutes(appkit: AppKitContext): Promise<void> {
         const xcodeCreds = getXcodeSPNCredentials()!;
         const secrets = getSecrets();
 
+        // Resolve public-facing hostname. Inside the container, req.headers.host
+        // is 'localhost:8000' because the platform proxy forwards to loopback.
+        // The real hostname comes via x-forwarded-host (set by the edge proxy).
+        const forwardedHost = (req.headers['x-forwarded-host'] as string | undefined) ?? req.headers.host;
+        const forwardedProto = (req.headers['x-forwarded-proto'] as string | undefined) ?? 'https';
+
         const payload = {
           v: 1,
           workspace: {
@@ -108,7 +114,7 @@ export async function setupPairingRoutes(appkit: AppKitContext): Promise<void> {
             expires_at: expiresAt.toISOString(),
           },
           app: {
-            base_url: `https://${req.headers.host}`,
+            base_url: `${forwardedProto}://${forwardedHost}`,
           },
         };
 
