@@ -148,9 +148,14 @@ export function iosAuth(opts: IosAuthOptions) {
 
       if (devicePubkey) {
         // Compute body hash per canonical-form spec:
-        // Present body → sha256(JSON.stringify(parsed body))
-        // Absent body  → sha256('') = EMPTY_BODY_HASH
-        const bodyHash = req.body ? sha256Hex(JSON.stringify(req.body)) : EMPTY_BODY_HASH;
+        // - Request has meaningful body (POST/PATCH with content) → sha256(JSON.stringify(parsed body))
+        // - No body or empty body ({} from Express json() on GET) → EMPTY_BODY_HASH
+        //
+        // NOTE: Express json() middleware sets req.body = {} even for GET/DELETE.
+        // {} is truthy in JS but represents "no body" from the client's perspective.
+        // We detect this by checking if the body has any own keys.
+        const hasBody = req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0;
+        const bodyHash = hasBody ? sha256Hex(JSON.stringify(req.body)) : EMPTY_BODY_HASH;
         const canonical = buildCanonicalMessage(req.method, req.originalUrl, timestampStr, bodyHash);
         const signature = Buffer.from(signatureB64, 'base64url');
 
