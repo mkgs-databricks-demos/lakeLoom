@@ -66,6 +66,10 @@ interface LakebaseClient {
 const MAX_PAST_SKEW_SECONDS = 90;
 const MAX_FUTURE_SKEW_SECONDS = 30;
 
+// SHA-256 of empty byte string — used as bodyHash for requests with no body.
+// Per canonical-form spec: empty body → sha256('') not literal empty string.
+const EMPTY_BODY_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+
 // ── Middleware factory ───────────────────────────────────────────────────────
 
 export interface IosAuthOptions {
@@ -96,7 +100,10 @@ export function iosAuth(opts: IosAuthOptions) {
       }
 
       // ── 1. Token lookup ──────────────────────────────────────────────────
-      const tokenHash = sha256(sessionToken);
+      // The session token is base64url-encoded raw bytes. generateSessionToken()
+      // stores sha256(raw_bytes) in the DB, so we must decode back to raw bytes
+      // before hashing — NOT hash the base64url string directly.
+      const tokenHash = sha256(Buffer.from(sessionToken, 'base64url'));
       const { rows } = await lakebase.query(
         `SELECT id, user_id, workspace_id, device_pubkey, expires_at, revoked_at
          FROM app.paired_sessions
@@ -140,8 +147,15 @@ export function iosAuth(opts: IosAuthOptions) {
       }
 
       if (devicePubkey) {
-        // Compute body hash
-        const bodyHash = req.body ? sha256Hex(JSON.stringify(req.body)) : '';
+        // Compute body hash per canonical-form spec:
+        // - Request has meaningful body (POST/PATCH with content) → sha256(JSON.stringify(parsed body))
+        // - No body or empty body ({} from Express json() on GET) → EMPTY_BODY_HASH
+        //
+        // NOTE: Express json() middleware sets req.body = {} even for GET/DELETE.
+        // {} is truthy in JS but represents "no body" from the client's perspective.
+        // We detect this by checking if the body has any own keys.
+        const hasBody = req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0;
+        const bodyHash = hasBody ? sha256Hex(JSON.stringify(req.body)) : EMPTY_BODY_HASH;
         const canonical = buildCanonicalMessage(req.method, req.originalUrl, timestampStr, bodyHash);
         const signature = Buffer.from(signatureB64, 'base64url');
 
