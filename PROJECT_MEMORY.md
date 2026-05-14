@@ -408,3 +408,44 @@ All server components implemented: crypto lib, migration runner, `paired_session
 * **Job:** `orphan_byte_sweeper` in `resources/orphan_byte_sweeper.job.yml`
 * **Schedule:** Weekly Sunday 2am UTC (paused in dev via preset)
 * **Mode:** Report-only v1 — logs orphan files but does not delete. Threshold: 24h age.
+
+
+## iOS Auth Implementation Notes (Resolved 2026-05-14)
+
+### Token Hash Contract
+
+`generateSessionToken()` produces `{ token, hash }`:
+- `token` = `randomBytes(32).toString('base64url')` — sent to iOS via QR
+- `hash` = `sha256(raw_32_bytes)` — stored in `app.paired_sessions.token_hash`
+
+**iosAuth lookup:** Must decode token back to raw bytes before hashing:
+```typescript
+const tokenHash = sha256(Buffer.from(sessionToken, 'base64url'));
+```
+
+### Canonical Message Body Hash
+
+Per spec (locked 2026-05-13):
+- Body present: `sha256Hex(JSON.stringify(parsed_body))` (compact JSON)
+- Empty body: constant `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
+- **WARNING:** Express json() middleware sets `req.body = {}` on GET/DELETE. Use `Object.keys(req.body).length > 0` to detect actual body presence.
+
+### Public Key Format
+
+- **Server expects:** SPKI DER (SubjectPublicKeyInfo, 91 bytes, starts `0x30`)
+- **iOS sends:** `privateKey.publicKey.derRepresentation` (CryptoKit P256)
+- **NOT:** Raw X9.62 uncompressed point (65 bytes, starts `0x04`)
+- Server verification: `createPublicKey({ key: buffer, format: 'der', type: 'spki' })`
+
+### Post-Deploy Validation
+
+Test suite expanded to 10 tests. Test 10 performs full E2E pairing:
+QR → ECDSA keygen → signed confirm → authenticated GET with bound device key.
+CI/CD gate asserts all 10 pass.
+
+### IP Access List
+
+- Workspace IP access lists also apply to `*.databricksapps.com` (via auth sidecar token validation)
+- Current home network allowlist: `98.10.37.0/24` (ID: `f4dc1a12-f273-48a3-9732-70ed837b419e`, label: `lakeLoomZeroBus`)
+- Propagation: up to 10 minutes after modification
+- Symptom: 403 from sidecar even with valid M2M token
