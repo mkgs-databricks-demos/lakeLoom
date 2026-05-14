@@ -96,7 +96,10 @@ export function iosAuth(opts: IosAuthOptions) {
       }
 
       // ── 1. Token lookup ──────────────────────────────────────────────────
-      const tokenHash = sha256(sessionToken);
+      // The session token is base64url-encoded raw bytes. generateSessionToken()
+      // stores sha256(raw_bytes) in the DB, so we must decode back to raw bytes
+      // before hashing — NOT hash the base64url string directly.
+      const tokenHash = sha256(Buffer.from(sessionToken, 'base64url'));
       const { rows } = await lakebase.query(
         `SELECT id, user_id, workspace_id, device_pubkey, expires_at, revoked_at
          FROM app.paired_sessions
