@@ -66,6 +66,32 @@ struct PairingPayloadTests {
         #expect(payload.user.displayName == "Matthew Giglia")
     }
 
+    @Test("decode handles Data URI wrapper — `data:application/json;base64,<payload>`")
+    func decodeDataURIWrapper() throws {
+        // Live shape from lakeloom-ai/client/src/pages/pairing/PairingPage.tsx:
+        // `data:application/json;base64,${btoa(JSON.stringify(payload))}`
+        let base64 = Self.encodedQR(json: Self.sampleJSON, useBase64URL: false)
+        let dataURI = "data:application/json;base64,\(base64)"
+
+        let payload = try PairingPayload.decode(from: dataURI)
+        #expect(payload.version == 1)
+        #expect(payload.workspace.id == "7474657291520070")
+    }
+
+    @Test("decode handles Data URI variants (different MIMEs)")
+    func decodeDataURIVariantMIMEs() throws {
+        let base64 = Self.encodedQR(json: Self.sampleJSON, useBase64URL: false)
+        let variants = [
+            "data:text/plain;base64,\(base64)",
+            "data:application/octet-stream;base64,\(base64)",
+            "data:;base64,\(base64)",  // empty MIME is legal per RFC 2397
+        ]
+        for variant in variants {
+            let payload = try PairingPayload.decode(from: variant)
+            #expect(payload.version == 1)
+        }
+    }
+
     @Test("decode tolerates leading/trailing whitespace")
     func decodeTrimsWhitespace() throws {
         let qr = "  \n" + Self.encodedQR(json: Self.sampleJSON) + "\n  "

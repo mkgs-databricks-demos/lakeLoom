@@ -139,14 +139,30 @@ extension PairingPayload {
 
     /// Decodes a QR-scanned payload string.
     ///
-    /// The wire format is "base64-encoded JSON." We accept either
-    /// standard base64 (RFC 4648 §4) or base64url (§5) with or without
-    /// padding — Genie's encoder writes one of these and we'd rather
-    /// be lenient than tie to a specific variant on the iOS side. JSON
-    /// decoding uses `.iso8601` for `expires_at`.
+    /// Accepted wire formats (in order of attempt):
+    ///   1. **Data URI** — `data:application/json;base64,<payload>`
+    ///      (with any MIME type — we just split on the comma). This is
+    ///      what the live Databricks App renders today via
+    ///      `data:application/json;base64,${btoa(JSON.stringify(payload))}`
+    ///      in `lakeloom-ai/client/src/pages/pairing/PairingPage.tsx`.
+    ///   2. **Raw base64** (RFC 4648 §4).
+    ///   3. **base64url** (§5) with or without padding.
+    ///
+    /// We're deliberately lenient so iOS doesn't break the next time
+    /// Genie iterates on the encoder. JSON decoding uses `.iso8601` for
+    /// `expires_at`.
     public static func decode(from qrString: String) throws -> PairingPayload {
         let trimmed = qrString.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let jsonData = Self.decodeBase64Variants(trimmed) else {
+        // Strip an optional `data:<mime>[;base64],` prefix. If the QR
+        // contains a Data URI we want only the payload portion after
+        // the first comma.
+        let candidate: String
+        if trimmed.hasPrefix("data:"), let commaIdx = trimmed.firstIndex(of: ",") {
+            candidate = String(trimmed[trimmed.index(after: commaIdx)...])
+        } else {
+            candidate = trimmed
+        }
+        guard let jsonData = Self.decodeBase64Variants(candidate) else {
             throw DecodingError.invalidBase64
         }
         let decoder = JSONDecoder()
