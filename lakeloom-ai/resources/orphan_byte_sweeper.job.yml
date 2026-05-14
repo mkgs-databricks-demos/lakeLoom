@@ -6,7 +6,7 @@
 resources:
   jobs:
     orphan_byte_sweeper:
-      name: "[${bundle.target}] Orphan Byte Sweeper"
+      name: "[lakeLoom] Orphan Byte Sweeper"
       tags:
         project: ${var.tags_project}
         purpose: maintenance

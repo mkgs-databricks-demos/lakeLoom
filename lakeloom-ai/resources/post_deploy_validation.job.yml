@@ -10,7 +10,7 @@
 resources:
   jobs:
     post_deploy_validation:
-      name: "[${bundle.target}] Post-Deploy Validation"
+      name: "[lakeLoom] Post-Deploy Validation"
       tags:
         project: ${var.tags_project}
         purpose: ci-validation

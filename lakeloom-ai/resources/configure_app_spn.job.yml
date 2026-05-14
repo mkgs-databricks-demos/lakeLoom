@@ -9,7 +9,7 @@
 resources:
   jobs:
     configure_app_spn:
-      name: "[${bundle.target}] Configure App SPN Access"
+      name: "[lakeLoom] Configure App SPN Access"
       tags:
         project: ${var.tags_project}
         purpose: admin-action

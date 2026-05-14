@@ -9,7 +9,7 @@
  * so the user doesn't lose their scroll position on archive/restore actions).
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, type FormEvent } from 'react';
 import { Plus, Search, Archive, RotateCcw, Pencil, FolderOpen, Loader2 } from 'lucide-react';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -98,7 +98,7 @@ export function ProjectsPage() {
   const [editingProject, setEditingProject] = useState<Project | null>(null);
 
   // Debounce search input to avoid hammering the API
-  const searchTimeout = useRef<ReturnType<typeof setTimeout>>();
+  const searchTimeout = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [debouncedSearch, setDebouncedSearch] = useState('');
 
   useEffect(() => {
@@ -397,7 +397,7 @@ function CreateProjectModal({ onClose, onCreated }: { onClose: () => void; onCre
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
 
@@ -521,7 +521,7 @@ function EditProjectModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
 
