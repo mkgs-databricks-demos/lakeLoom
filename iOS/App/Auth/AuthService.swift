@@ -366,7 +366,9 @@ public actor AuthService: AuthServicing {
             user: user,
             isDefault: active.isDefault,
             signedInAt: active.signedInAt,
-            identityRefreshedAt: nowProvider()
+            identityRefreshedAt: nowProvider(),
+            appBaseURL: active.appBaseURL,
+            authMethod: active.authMethod
         )
         try await keychain.saveCredential(updated)
         if let index = workspacesCache.firstIndex(where: { $0.id == active.id }) {
@@ -465,6 +467,11 @@ public actor AuthService: AuthServicing {
     ) async throws -> WorkspaceCredential {
         let workspaceID = Self.derivedWorkspaceID(from: normalizedURL)
         let now = nowProvider()
+        // NOTE: this OAuth U2M code path is being deleted in commit 3
+        // of the Module 01 rewrite. The appBaseURL/authMethod values
+        // here are placeholders that don't reach Keychain in practice —
+        // the only caller (signIn(workspaceURL:presenting:)) is also
+        // slated for deletion.
         let credential = WorkspaceCredential(
             id: workspaceID,
             workspaceURL: normalizedURL,
@@ -474,7 +481,9 @@ public actor AuthService: AuthServicing {
             user: user,
             isDefault: workspacesCache.isEmpty,
             signedInAt: now,
-            identityRefreshedAt: now
+            identityRefreshedAt: now,
+            appBaseURL: normalizedURL,
+            authMethod: .qrPaired(pairedSessionID: "<placeholder>", sessionExpiresAt: now)
         )
         let accessToken = AccessToken(
             value: tokens.accessToken,

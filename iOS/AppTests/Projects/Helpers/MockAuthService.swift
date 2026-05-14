@@ -133,7 +133,12 @@ extension WorkspaceCredential {
             ),
             isDefault: true,
             signedInAt: Date(timeIntervalSince1970: 1_700_000_000),
-            identityRefreshedAt: Date(timeIntervalSince1970: 1_700_000_000)
+            identityRefreshedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            appBaseURL: URL(string: "https://lakeloom-ai.aws.databricksapps.com") ?? URL(fileURLWithPath: "/"),
+            authMethod: .qrPaired(
+                pairedSessionID: "paired-fixture",
+                sessionExpiresAt: Date(timeIntervalSince1970: 1_700_604_800)
+            )
         )
     }
 }

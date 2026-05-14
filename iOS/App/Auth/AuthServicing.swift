@@ -95,6 +95,13 @@ public struct WorkspaceCredential: Sendable, Identifiable, Equatable, Hashable, 
     public let isDefault: Bool
     public let signedInAt: Date
     public let identityRefreshedAt: Date
+    /// The Databricks App's HTTPS base URL for this workspace,
+    /// delivered via the QR pairing payload's `app.base_url` field.
+    /// Every iOS → App API call is built against this prefix.
+    public let appBaseURL: URL
+    /// How this credential was issued, plus auth-method-specific
+    /// metadata (e.g. paired-session id + expiry for QR pairing).
+    public let authMethod: AuthMethod
 
     public init(
         id: String,
@@ -105,7 +112,9 @@ public struct WorkspaceCredential: Sendable, Identifiable, Equatable, Hashable, 
         user: UserIdentity,
         isDefault: Bool,
         signedInAt: Date,
-        identityRefreshedAt: Date
+        identityRefreshedAt: Date,
+        appBaseURL: URL,
+        authMethod: AuthMethod
     ) {
         self.id = id
         self.workspaceURL = workspaceURL
@@ -116,6 +125,43 @@ public struct WorkspaceCredential: Sendable, Identifiable, Equatable, Hashable, 
         self.isDefault = isDefault
         self.signedInAt = signedInAt
         self.identityRefreshedAt = identityRefreshedAt
+        self.appBaseURL = appBaseURL
+        self.authMethod = authMethod
+    }
+}
+
+/// How a ``WorkspaceCredential`` was issued. Forward-compatible enum;
+/// each case carries the metadata that's only meaningful for that
+/// auth path. v1 only supports QR pairing.
+public enum AuthMethod: Sendable, Equatable, Hashable, Codable {
+
+    /// Issued via the QR-pair flow against the lakeLoom Databricks
+    /// App. The `pairedSessionID` is the App-assigned UUID for this
+    /// device's `app.paired_sessions` row (i.e. the value returned in
+    /// `POST /api/pairing/confirm`'s `paired_session_id` field).
+    /// `sessionExpiresAt` is the 7-day expiry the App sets.
+    case qrPaired(pairedSessionID: String, sessionExpiresAt: Date)
+}
+
+extension AuthMethod {
+    /// The session-expiry timestamp, regardless of which case. Used by
+    /// the in-app banner that nudges the user to re-pair before the
+    /// 7-day window elapses.
+    public var sessionExpiresAt: Date {
+        switch self {
+        case .qrPaired(_, let expiresAt):
+            return expiresAt
+        }
+    }
+
+    /// The paired-session UUID iOS uses when sending requests. Same
+    /// regardless of case for now; case-bound in case a future auth
+    /// method doesn't have an analog.
+    public var pairedSessionID: String {
+        switch self {
+        case .qrPaired(let pairedSessionID, _):
+            return pairedSessionID
+        }
     }
 }
 

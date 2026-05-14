@@ -19,14 +19,18 @@ public struct LiveKeychainStore: KeychainStore {
         static func credential(workspaceID: String) -> String { "workspace.\(workspaceID).credential" }
         static func accessToken(workspaceID: String) -> String { "workspace.\(workspaceID).access_token" }
         static func refreshToken(workspaceID: String) -> String { "workspace.\(workspaceID).refresh_token" }
+        static func sessionToken(workspaceID: String) -> String { "workspace.\(workspaceID).session_token" }
+        static func xcodeSPN(workspaceID: String) -> String { "workspace.\(workspaceID).xcode_spn" }
         static let workspacesIndex = "workspaces.index"
         static let activeWorkspaceID = "active_workspace_id"
     }
 
-    /// Schema version for the stored ``WorkspaceCredential`` DTO. Bump when
-    /// the on-disk shape changes; the load path can perform an in-place
-    /// migration or surface ``KeychainError/unsupportedSchemaVersion``.
-    public static let credentialSchemaVersion: Int = 1
+    /// Schema version for the stored ``WorkspaceCredential`` DTO.
+    /// v2 adds `appBaseURL` + `authMethod` fields for the QR-pair flow;
+    /// v1 records are rejected at load time with
+    /// ``KeychainError/unsupportedSchemaVersion``, which AuthService
+    /// handles by dropping the credential and forcing a re-pair.
+    public static let credentialSchemaVersion: Int = 2
 
     public let service: String
 
@@ -113,6 +117,46 @@ public struct LiveKeychainStore: KeychainStore {
     public func deleteTokens(workspaceID: String) async throws {
         try deleteIfExists(account: Account.accessToken(workspaceID: workspaceID))
         try deleteIfExists(account: Account.refreshToken(workspaceID: workspaceID))
+        try deleteIfExists(account: Account.sessionToken(workspaceID: workspaceID))
+        try deleteIfExists(account: Account.xcodeSPN(workspaceID: workspaceID))
+    }
+
+    // MARK: QR-pair credentials
+
+    public func loadSessionToken(workspaceID: String) async throws -> String {
+        let data = try loadData(account: Account.sessionToken(workspaceID: workspaceID))
+        guard let value = String(data: data, encoding: .utf8) else {
+            throw KeychainError.decodeFailed(reason: "session token is not valid UTF-8")
+        }
+        return value
+    }
+
+    public func saveSessionToken(_ token: String, workspaceID: String) async throws {
+        guard let data = token.data(using: .utf8) else {
+            throw KeychainError.encodeFailed(reason: "session token is not encodable as UTF-8")
+        }
+        try saveData(data, account: Account.sessionToken(workspaceID: workspaceID))
+    }
+
+    public func loadXcodeSPNCredentials(workspaceID: String) async throws -> XcodeSPNCredentials {
+        let data = try loadData(account: Account.xcodeSPN(workspaceID: workspaceID))
+        let decoder = JSONDecoder()
+        do {
+            return try decoder.decode(XcodeSPNCredentials.self, from: data)
+        } catch {
+            throw KeychainError.decodeFailed(reason: String(describing: error))
+        }
+    }
+
+    public func saveXcodeSPNCredentials(_ credentials: XcodeSPNCredentials, workspaceID: String) async throws {
+        let encoder = JSONEncoder()
+        let data: Data
+        do {
+            data = try encoder.encode(credentials)
+        } catch {
+            throw KeychainError.encodeFailed(reason: String(describing: error))
+        }
+        try saveData(data, account: Account.xcodeSPN(workspaceID: workspaceID))
     }
 
     // MARK: Workspaces index and active selection
@@ -267,6 +311,8 @@ private struct WorkspaceCredentialDTO: Codable {
     let isDefault: Bool
     let signedInAt: Date
     let identityRefreshedAt: Date
+    let appBaseURL: URL
+    let authMethod: AuthMethod
     let schemaVersion: Int
 
     init(credential: WorkspaceCredential, schemaVersion: Int) {
@@ -279,6 +325,8 @@ private struct WorkspaceCredentialDTO: Codable {
         self.isDefault = credential.isDefault
         self.signedInAt = credential.signedInAt
         self.identityRefreshedAt = credential.identityRefreshedAt
+        self.appBaseURL = credential.appBaseURL
+        self.authMethod = credential.authMethod
         self.schemaVersion = schemaVersion
     }
 
@@ -292,7 +340,9 @@ private struct WorkspaceCredentialDTO: Codable {
             user: user,
             isDefault: isDefault,
             signedInAt: signedInAt,
-            identityRefreshedAt: identityRefreshedAt
+            identityRefreshedAt: identityRefreshedAt,
+            appBaseURL: appBaseURL,
+            authMethod: authMethod
         )
     }
 }
