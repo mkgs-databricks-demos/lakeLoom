@@ -325,7 +325,7 @@ The SDK's `Endpoint` object does NOT have a `hostname` attribute. Use the REST A
 * ~~App bundle grants its own SPN READ on `lakeloom_credentials` and CAN_USE to the Xcode SPN.~~ **DONE — `configure_app_spn` job task 1.**
 * ~~QR-pair endpoint implementation depends on both SPNs having valid `client_secret` values.~~ **DONE — all endpoints implemented.**
 * ~~Inform Isaac (via `hey_isaac/`) about `screenshots` and `documents` volumes and the corresponding App upload endpoints iOS will need to call.~~ **DONE 2026-05-12**
-* App SPN needs WRITE_VOLUME on `session_audio`, `screenshots`, and `documents` for proxied uploads from iOS.
+* ~~App SPN needs WRITE_VOLUME on `session_audio`, `screenshots`, and `documents` for proxied uploads from iOS.~~ **DONE 2026-05-14 — forEach task in `configure_app_spn` job (Task 3).**
 * ~~Await Isaac's response on filename conventions (timestamps vs UUIDs) before finalizing App upload handlers.~~ **DONE — UUIDv7 filenames, MIME-derived extensions. Deployed 2026-05-14.**
 * **Next feature branch:** Orphan-byte sweeper — scheduled job to scan UC Volumes for files without a matching `app.uploads` row.
 * ~~Await Isaac's confirmation: (1) HEIC vs JPEG/PNG from iOS, (2) base64url vs standard base64 for `device_pubkey`.~~ **DONE 2026-05-14 — iOS sends JPEG only (no HEIC), base64url no-padding confirmed.**
