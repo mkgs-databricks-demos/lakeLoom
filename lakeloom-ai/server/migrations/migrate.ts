@@ -9,6 +9,8 @@
  */
 
 import { migration001 } from './001_paired_sessions';
+import { migration002 } from './002_capture_sessions';
+import { migration003 } from './003_uploads';
 
 // ── Migration registry ───────────────────────────────────────────────────────
 // Add new migrations here in order. The `name` must be unique and stable.
@@ -18,7 +20,7 @@ export interface Migration {
   up: string; // SQL to apply
 }
 
-const migrations: Migration[] = [migration001];
+const migrations: Migration[] = [migration001, migration002, migration003];
 
 // ── Lakebase query interface ─────────────────────────────────────────────────
 

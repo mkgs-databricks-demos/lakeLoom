@@ -169,11 +169,11 @@ export async function setupPairingRoutes(appkit: AppKitContext): Promise<void> {
           // Push SSE event to browser
           const userId = req.user!.userId;
           pushEvent(userId, 'device_paired', {
-            device_id: sessionId,
+            paired_session_id: sessionId,
             device_label,
           });
 
-          res.json({ device_id: sessionId });
+          res.json({ paired_session_id: sessionId });
         } catch (err) {
           next(err);
         }

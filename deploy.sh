@@ -113,6 +113,7 @@ APP_NAME=""
 APP_SOURCE_PATH=""
 APP_SPN_CLIENT_ID=""
 CONFIGURE_APP_SPN_JOB="configure_app_spn"
+POST_DEPLOY_VALIDATION_JOB="post_deploy_validation"
 
 # --------------------------------------------------------------------------- #
 # Defaults
@@ -124,6 +125,7 @@ VALIDATE_ONLY=false
 DESTROY=false
 RUN_SETUP=false
 SKIP_CHECKS=false
+SKIP_VALIDATION=false
 
 # --------------------------------------------------------------------------- #
 # Usage
@@ -138,6 +140,7 @@ Options:
   --app              Deploy only the application bundle (skip infra).
   --run-setup        Run the platform bootstrap job after deploying infra.
   --skip-checks      Skip infrastructure readiness checks before app deploy.
+  --skip-validation   Skip post-deploy validation (endpoint tests).
   --validate         Validate bundles without deploying.
   --destroy          Destroy deployed resources for the target.
   -h, --help         Show this help message.
@@ -169,6 +172,7 @@ while [[ $# -gt 0 ]]; do
     --app)          DEPLOY_INFRA=false; DEPLOY_APP=true;  shift ;;
     --run-setup)    RUN_SETUP=true; shift ;;
     --skip-checks)  SKIP_CHECKS=true; shift ;;
+    --skip-validation) SKIP_VALIDATION=true; shift ;;
     --validate)     VALIDATE_ONLY=true; shift ;;
     --destroy)      DESTROY=true; shift ;;
     -h|--help)      usage ;;
@@ -1031,6 +1035,29 @@ run_configure_app_spn() {
 }
 
 # --------------------------------------------------------------------------- #
+# run_post_deploy_validation — run the post-deploy validation job to verify
+#                              all API endpoints are reachable and responding.
+#
+# Runs the notebook-based test suite via the bundle CLI. The notebook:
+#   - Discovers app URL via SDK
+#   - Tests all endpoints (health, pairing, captures, uploads)
+#   - Raises AssertionError on any failure (job run shows as FAILED)
+#
+# Non-fatal — warns on failure but does not block deploy.sh exit.
+# --------------------------------------------------------------------------- #
+run_post_deploy_validation() {
+  log "Running post-deploy validation (job: ${POST_DEPLOY_VALIDATION_JOB})"
+
+  local bundle_dir="${SCRIPT_DIR}/${APP_BUNDLE}"
+  (cd_bundle "${bundle_dir}" && databricks bundle run "${POST_DEPLOY_VALIDATION_JOB}" --target "${TARGET}") || {
+    warn "Post-deploy validation FAILED. Check the job run for details."
+    warn "Re-run manually: databricks bundle run ${POST_DEPLOY_VALIDATION_JOB} --target ${TARGET}"
+    return 1
+  }
+  ok "Post-deploy validation passed — all endpoints responding"
+}
+
+# --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
 log "lakeLoom — Bundle Deployment"
@@ -1039,6 +1066,7 @@ echo "  Infra bundle:  ${DEPLOY_INFRA}"
 echo "  App bundle:    ${DEPLOY_APP}"
 echo "  Run setup:     ${RUN_SETUP}"
 echo "  Skip checks:   ${SKIP_CHECKS}"
+echo "  Skip validation: ${SKIP_VALIDATION}"
 echo "  Validate only: ${VALIDATE_ONLY}"
 echo "  Destroy:       ${DESTROY}"
 
@@ -1093,6 +1121,13 @@ if [[ "${DEPLOY_APP}" == true ]] && [[ "${VALIDATE_ONLY}" != true ]] && [[ "${DE
   resolve_app_spn_id
   run_configure_app_spn
   deploy_app_source
+fi
+
+# Step 7: Post-deploy validation — verify API endpoints are reachable
+# Runs the test notebook as a job to confirm the app is serving correctly
+# after source deployment. Non-fatal — warns but does not roll back.
+if [[ "${DEPLOY_APP}" == true ]] && [[ "${VALIDATE_ONLY}" != true ]] && [[ "${DESTROY}" != true ]] && [[ "${SKIP_VALIDATION}" != true ]]; then
+  run_post_deploy_validation
 fi
 
 log "Done."
