@@ -266,7 +266,7 @@ async function resolveCaptureContext(
   req: Request,
   lakebase: LakebaseClient,
 ): Promise<{ projectId: string; captureSessionId: string | null }> {
-  const captureSessionId = req.params.capture_session_id;
+  const captureSessionId = req.params.capture_session_id as string;
 
   // Look up the capture to get project_id and validate state
   const { rows } = await lakebase.query(
@@ -294,7 +294,7 @@ async function resolveDocumentContext(
   req: Request,
   _lakebase: LakebaseClient,
 ): Promise<{ projectId: string; captureSessionId: string | null }> {
-  const projectId = req.params.project_id;
+  const projectId = req.params.project_id as string;
   if (!projectId) {
     throw validationError('project_id is required.');
   }
