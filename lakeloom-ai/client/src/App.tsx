@@ -11,6 +11,7 @@ import { Suspense, lazy } from 'react';
 // ── Route-level code splitting ────────────────────────────────────────────────
 // Each page is loaded on demand. Reduces initial bundle from ~1.7 MB to the
 // shell + whichever page the user navigates to first.
+const ProjectsPage = lazy(() => import('./pages/projects/ProjectsPage').then(m => ({ default: m.ProjectsPage })));
 const AnalyticsPage = lazy(() => import('./pages/analytics/AnalyticsPage').then(m => ({ default: m.AnalyticsPage })));
 const LakebasePage = lazy(() => import('./pages/lakebase/LakebasePage').then(m => ({ default: m.LakebasePage })));
 const FilesPage = lazy(() => import('./pages/files/FilesPage').then(m => ({ default: m.FilesPage })));
@@ -28,35 +29,32 @@ function PageLoader() {
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   `px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
     isActive
-      ? 'bg-primary text-primary-foreground'
-      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+      ? 'bg-[var(--accent-primary,#FF3621)] text-white'
+      : 'text-[var(--text-secondary,#5A6F77)] hover:bg-[var(--surface-tertiary,#EEEDE9)] hover:text-[var(--text-primary,#1B3139)]'
   }`;
 
 function Layout() {
   return (
-    <div className="min-h-screen bg-background flex flex-col">
-      <header className="border-b px-6 py-3 flex items-center gap-4">
-        <h1 className="text-lg font-semibold text-foreground">lakeloom-ai</h1>
+    <div className="min-h-screen bg-[var(--surface-primary,#fff)] flex flex-col">
+      <header className="border-b border-[var(--border-default,#DCE0E2)] px-6 py-3 flex items-center gap-4">
+        <h1 className="text-lg font-bold text-[var(--text-primary,#1B3139)]">lakeLoom</h1>
         <nav className="flex gap-1">
           <NavLink to="/" end className={navLinkClass}>
-            Home
+            Projects
           </NavLink>
           <NavLink to="/pairing" className={navLinkClass}>
             Pair iPhone
           </NavLink>
-          <NavLink to="/analytics" className={navLinkClass}>
-            Analytics
-          </NavLink>
-          <NavLink to="/lakebase" className={navLinkClass}>
-            Lakebase
-          </NavLink>
           <NavLink to="/files" className={navLinkClass}>
             Files
+          </NavLink>
+          <NavLink to="/analytics" className={navLinkClass}>
+            Analytics
           </NavLink>
         </nav>
       </header>
 
-      <main className="flex-1 p-6">
+      <main className="flex-1">
         <Suspense fallback={<PageLoader />}>
           <Outlet />
         </Suspense>
@@ -87,29 +85,29 @@ function RouteErrorFallback() {
   }
 
   return (
-    <div className="min-h-screen bg-background p-4">
+    <div className="min-h-screen bg-[var(--surface-primary,#fff)] p-4">
       <Card className="max-w-2xl mx-auto mt-8">
         <CardHeader>
-          <CardTitle className="text-destructive">{title}</CardTitle>
+          <CardTitle className="text-[var(--accent-error,#BD2B26)]">{title}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
             <div>
-              <h3 className="font-semibold mb-2">Error Message:</h3>
-              <pre className="bg-muted p-3 rounded text-sm overflow-auto">{message}</pre>
+              <h3 className="font-semibold mb-2 text-[var(--text-primary,#1B3139)]">Error Message:</h3>
+              <pre className="bg-[var(--surface-tertiary,#EEEDE9)] p-3 rounded text-sm overflow-auto">{message}</pre>
             </div>
             {stack && (
               <div>
-                <h3 className="font-semibold mb-2">Stack Trace:</h3>
-                <pre className="bg-muted p-3 rounded text-sm overflow-auto max-h-96">{stack}</pre>
+                <h3 className="font-semibold mb-2 text-[var(--text-primary,#1B3139)]">Stack Trace:</h3>
+                <pre className="bg-[var(--surface-tertiary,#EEEDE9)] p-3 rounded text-sm overflow-auto max-h-96">{stack}</pre>
               </div>
             )}
             <button
               type="button"
               onClick={() => window.location.assign('/')}
-              className="text-sm text-primary underline underline-offset-4 hover:text-primary/80"
+              className="text-sm text-[var(--accent-info,#2272B4)] underline underline-offset-4 hover:opacity-80"
             >
-              Return to Home
+              Return to Projects
             </button>
           </div>
         </CardContent>
@@ -123,7 +121,7 @@ const router = createBrowserRouter([
     element: <Layout />,
     errorElement: <RouteErrorFallback />,
     children: [
-      { path: '/', element: <HomePage /> },
+      { path: '/', element: <ProjectsPage /> },
       { path: '/pairing', element: <PairingPage /> },
       { path: '/analytics', element: <AnalyticsPage /> },
       { path: '/lakebase', element: <LakebasePage /> },
@@ -134,50 +132,4 @@ const router = createBrowserRouter([
 
 export default function App() {
   return <RouterProvider router={router} />;
-}
-
-function HomePage() {
-  return (
-    <div className="max-w-2xl mx-auto space-y-6 mt-8">
-      <div className="text-center">
-        <h2 className="text-3xl font-bold mb-2 text-foreground">
-          Welcome to your Databricks App
-        </h2>
-        <p className="text-lg text-muted-foreground">
-          Powered by Databricks AppKit
-        </p>
-      </div>
-
-      <Card className="shadow-lg">
-        <CardHeader>
-          <CardTitle>Getting Started</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <p className="text-sm text-muted-foreground">Your app is ready. Explore the resources below to continue building.</p>
-          <ul className="space-y-2 text-sm">
-            <li>
-              <a
-                href="https://github.com/databricks/appkit"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary underline underline-offset-4 hover:text-primary/80"
-              >
-                AppKit on GitHub →
-              </a>
-            </li>
-            <li>
-              <a
-                href="https://databricks.github.io/appkit/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary underline underline-offset-4 hover:text-primary/80"
-              >
-                AppKit documentation →
-              </a>
-            </li>
-          </ul>
-        </CardContent>
-      </Card>
-    </div>
-  );
 }

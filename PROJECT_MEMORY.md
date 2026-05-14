@@ -388,3 +388,23 @@ All server components implemented: crypto lib, migration runner, `paired_session
 * **Client ID:** `686d32bf-a6a4-461b-a18b-82489eecdc15`
 * **Variable:** `${var.app_spn_id}` in `databricks.yml`
 * **Secrets:** All 8 env vars confirmed present at runtime via `valueFrom` bindings in `app.yaml`
+
+### Project Management (Phase 1): COMPLETE (2026-05-14)
+* **Migration 004:** `app.projects` table — UUIDv7 PK, `client_generated_id` idempotency key, `workspace_id` + `archived` + `updated_at DESC` composite indexes, GIN trigram index on `name` (pg_trgm extension confirmed working on Lakebase), REPLICA IDENTITY FULL.
+* **Routes:** 6 CRUD endpoints at `/api/v1/projects/*` — List (cursor-based pagination), Get, Create (idempotent), Edit, Archive, Restore. All use `dualAuth()` middleware (iOS Layer 2 OR browser on-behalf-of-user).
+* **Pagination:** Cursor-based using composite `(updated_at DESC, id DESC)`. Opaque base64url-encoded JSON cursor. Default page size 25, max 100. Server returns `next_cursor` + `has_more`.
+* **Browser auth middleware:** `browser-auth.ts` — extracts identity from `X-Forwarded-Email` / `X-Forwarded-User` headers (injected by platform sidecar). `dualAuth()` detects iOS vs browser and delegates accordingly.
+* **Client UI:** `ProjectsPage.tsx` — card grid with create/edit modals, search (debounced 300ms), archive/restore, "Load more" button for pagination. Databricks brand tokens (DM Sans, semantic colors, motion).
+* **Test 9:** Added to `pairing-api-test` notebook — validates all 6 routes are registered and dualAuth active.
+* **Lakebase extension support confirmed:** `CREATE EXTENSION IF NOT EXISTS pg_trgm` succeeded. Positive signal for future `pgvector` use.
+
+### QR Pairing Host Fix: COMPLETE (2026-05-14)
+* **Bug:** `app.base_url` in QR payload encoded `https://localhost:8000` because Express reads the container's loopback address from `req.headers.host`. iPhone tried to connect to its own loopback → ECONNREFUSED.
+* **Fix:** Read `x-forwarded-host` (public hostname from platform reverse proxy) and `x-forwarded-proto` (scheme). Falls back to `req.headers.host` for local-dev/Simulator.
+* **Verified:** QR now returns `https://lakeloom-ai-dev-7474657291520070.aws.databricksapps.com`.
+* **Isaac notified:** `hey_isaac/2026-05-14_pairing-qr-host-fix-ack.md` — no iOS-side change needed.
+
+### Orphan Byte Sweeper: DEPLOYED (2026-05-14)
+* **Job:** `orphan_byte_sweeper` in `resources/orphan_byte_sweeper.job.yml`
+* **Schedule:** Weekly Sunday 2am UTC (paused in dev via preset)
+* **Mode:** Report-only v1 — logs orphan files but does not delete. Threshold: 24h age.

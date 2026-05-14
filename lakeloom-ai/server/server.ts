@@ -4,6 +4,7 @@ import { setupPairingRoutes } from './routes/pairing/pairing-routes';
 import { setupCaptureRoutes } from './routes/captures/capture-routes';
 import { setupUploadRoutes } from './routes/uploads/upload-routes';
 import { setupEventRoutes } from './routes/events/event-routes';
+import { setupProjectRoutes } from './routes/projects/project-routes';
 import { runMigrations } from './migrations/migrate';
 import { initSecrets } from './services/secrets-service';
 import { shutdown as shutdownZerobus } from './services/zerobus-service';
@@ -24,7 +25,7 @@ createApp({
     });
 
     // ── Run Lakebase migrations ───────────────────────────────────────────
-    // Creates app schema + paired_sessions + capture_sessions + uploads tables.
+    // Creates app schema + paired_sessions + capture_sessions + uploads + projects tables.
     try {
       await runMigrations(appkit.lakebase);
     } catch (err) {
@@ -45,6 +46,7 @@ createApp({
     await setupCaptureRoutes(appkit);
     await setupUploadRoutes(appkit);
     await setupEventRoutes(appkit);
+    await setupProjectRoutes(appkit);
 
     // ── Error handler (must be last) ──────────────────────────────────────
     appkit.server.extend((app) => {
