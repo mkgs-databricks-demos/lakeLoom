@@ -40,17 +40,23 @@ struct RequestSignerCanonicalFormTests {
         #expect(canonical == "POST\n/api/x\n100\nabc")
     }
 
-    @Test("body hash is empty string for nil body")
-    func bodyHashEmptyForNilBody() {
-        #expect(RequestSigner.bodyHash(for: nil) == "")
+    /// SHA-256 of zero bytes — what the canonical form uses for any
+    /// bodyless (or empty-body) request. Locked in Genie's
+    /// 2026-05-13_upload-traceability-response.md.
+    private static let sha256OfEmpty =
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+    @Test("body hash for nil body is sha256 of empty bytes")
+    func bodyHashForNilBody() {
+        #expect(RequestSigner.bodyHash(for: nil) == Self.sha256OfEmpty)
     }
 
-    @Test("body hash is empty string for empty Data — NOT sha256 of empty string")
-    func bodyHashEmptyForEmptyData() {
-        // Important: empty body ≠ "hash of empty string" (which would
-        // be e3b0c44...). The spec says use "" so the App can match
-        // without ambiguity.
-        #expect(RequestSigner.bodyHash(for: Data()) == "")
+    @Test("body hash for empty Data is sha256 of empty bytes")
+    func bodyHashForEmptyData() {
+        // Matches Genie's server-side `hashlib.sha256(b'').hexdigest()`
+        // — both nil and Data() must yield the same canonical hash so
+        // signed bodyless requests verify on the App side.
+        #expect(RequestSigner.bodyHash(for: Data()) == Self.sha256OfEmpty)
     }
 
     @Test("body hash is lowercase hex sha256")
@@ -139,7 +145,7 @@ struct RequestSignerSignTests {
             method: "GET",
             pathAndQuery: "/api/x",
             timestamp: h1[RequestSigner.timestampHeader]!,
-            bodyHash: ""
+            bodyHash: RequestSigner.bodyHash(for: nil)
         )
         let pub = await store.currentPublicKey()
         let s1 = try P256.Signing.ECDSASignature(

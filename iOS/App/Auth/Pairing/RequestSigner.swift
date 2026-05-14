@@ -77,10 +77,16 @@ public struct RequestSigner: Sendable {
         "\(method.uppercased())\n\(pathAndQuery)\n\(timestamp)\n\(bodyHash)"
     }
 
-    /// `""` for nil/empty body, otherwise lowercase-hex SHA256.
+    /// Lowercase-hex SHA-256 of the body bytes. For nil/empty bodies,
+    /// this is SHA-256 of zero bytes
+    /// (`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`)
+    /// — same as Genie's server-side `hashlib.sha256(b'').hexdigest()`.
+    /// The original spec used `""` for empty bodies, but the contract
+    /// locked in Genie's 2026-05-13 upload-traceability response moved
+    /// to SHA-256-of-empty-bytes; iOS matches that here.
     public static func bodyHash(for body: Data?) -> String {
-        guard let body, !body.isEmpty else { return "" }
-        let digest = SHA256.hash(data: body)
+        let bytes = body ?? Data()
+        let digest = SHA256.hash(data: bytes)
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 }
