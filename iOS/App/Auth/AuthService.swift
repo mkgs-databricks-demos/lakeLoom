@@ -181,6 +181,15 @@ public actor AuthService: AuthServicing {
         await logger.info("signin.start", metadata: ["device_label": .redacted(label: "device_label")])
         recordSignInAttempt()
 
+        // Best-effort: log this device's outbound public IP so the
+        // user can configure the workspace IP allowlist that gates
+        // the Databricks App. Doesn't block sign-in if the lookup
+        // fails (no network, ipify down, etc.). Runs concurrently
+        // with the rest of the flow.
+        Task.detached { [logger] in
+            await Self.logPublicIP(logger: logger)
+        }
+
         // 1. Decode QR payload.
         let payload: PairingPayload
         do {
@@ -201,7 +210,13 @@ public actor AuthService: AuthServicing {
             "signin.qr_decoded",
             metadata: [
                 "workspace_host": .string(payload.workspace.url.host ?? "<no-host>"),
-                "user": .redacted(label: "scim_id")
+                "user": .redacted(label: "scim_id"),
+                // Same prefix shape as M2MTokenClient's m2m.token.attempt
+                // — visually compare these two log lines to confirm the
+                // QR-delivered client_id is what's exchanged for the
+                // M2M token. Both should match the workspace UI's
+                // Xcode SPN application_id.
+                "xcode_client_id_prefix": .string(String(payload.xcodeSPN.clientID.prefix(12)))
             ]
         )
 
@@ -440,6 +455,45 @@ public actor AuthService: AuthServicing {
     }
 
     // MARK: - Pure helpers
+
+    /// Hits `https://api.ipify.org?format=text` to learn this device's
+    /// outbound public IP, then logs it. Useful for configuring the
+    /// workspace IP allowlist that gates the Databricks App. Cellular
+    /// connections typically return a CGN address that's part of the
+    /// carrier's pool (a range; allowlisting it grants traffic from any
+    /// device on that carrier — generally too broad). Wi-Fi behind a
+    /// home/office router returns that network's NAT'd public IP, which
+    /// is the right unit for an allowlist entry.
+    ///
+    /// Best-effort — failure is logged at .debug and never propagates.
+    /// nonisolated so it can run from a Task.detached without dragging
+    /// the actor in.
+    nonisolated static func logPublicIP(logger: AppLogger) async {
+        guard let url = URL(string: "https://api.ipify.org?format=text") else { return }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 5
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                await logger.debug("signin.public_ip_lookup_failed", metadata: ["reason": .string("non-200")])
+                return
+            }
+            let ip = (String(data: data, encoding: .utf8) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            await logger.info(
+                "signin.public_ip",
+                metadata: [
+                    "public_ip": .string(ip.isEmpty ? "<empty>" : ip),
+                    "hint": .string("add to workspace IP allowlist if the App rejects with 403")
+                ]
+            )
+        } catch {
+            await logger.debug(
+                "signin.public_ip_lookup_failed",
+                metadata: ["reason": .string(error.localizedDescription)]
+            )
+        }
+    }
 
     static func derivedWorkspaceID(from url: URL) -> String {
         // Until SCIM `meta.location` parsing is wired up (Module 01 §5.7
