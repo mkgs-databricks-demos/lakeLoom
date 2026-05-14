@@ -4,6 +4,8 @@
 
 ![lakeLoom AI Apps](media/lakeLoomAIapps.png)
 
+---
+
 ## Overview
 
 **lakeLoom** is a rapid-MVP capture tool built on the Databricks platform. It enables field teams to record requirements — audio, screenshots, and documents — directly from iOS devices and stream them into a governed lakehouse architecture. The capture pipeline flows from iPhone through a Databricks App (AppKit) into Unity Catalog Volumes and Lakebase (Postgres), with full traceability from device to data asset.

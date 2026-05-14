@@ -328,7 +328,7 @@ The SDK's `Endpoint` object does NOT have a `hostname` attribute. Use the REST A
 * App SPN needs WRITE_VOLUME on `session_audio`, `screenshots`, and `documents` for proxied uploads from iOS.
 * ~~Await Isaac's response on filename conventions (timestamps vs UUIDs) before finalizing App upload handlers.~~ **DONE — UUIDv7 filenames, MIME-derived extensions. Deployed 2026-05-14.**
 * **Next feature branch:** Orphan-byte sweeper — scheduled job to scan UC Volumes for files without a matching `app.uploads` row.
-* Await Isaac's confirmation: (1) HEIC vs JPEG/PNG from iOS, (2) base64url vs standard base64 for `device_pubkey`.
+* ~~Await Isaac's confirmation: (1) HEIC vs JPEG/PNG from iOS, (2) base64url vs standard base64 for `device_pubkey`.~~ **DONE 2026-05-14 — iOS sends JPEG only (no HEIC), base64url no-padding confirmed.**
 
 ## App Bundle (lakeloom-ai) — Implementation Status
 
@@ -349,6 +349,18 @@ All server components implemented: crypto lib, migration runner, `paired_session
 * **Pairing confirm response:** `device_id` → `paired_session_id`
 * **Timestamp canonical form locked:** `METHOD\nPATH\nUNIX_SECONDS\nBODY_SHA256_HEX` (in `ios-auth.ts` comment)
 * **Dependencies added:** `busboy ^1.6.0`, `uuid ^11.1.0`, `@types/busboy ^1.5.4`
+
+### Photos Endpoint & Per-Endpoint MIME Filtering: COMPLETE (2026-05-14)
+* **New endpoint:** `POST /api/captures/:capture_session_id/photos` — camera photos (whiteboards, physical artifacts)
+* **MIME filtering:** Each upload endpoint now declares its own `allowedMimes` list (previously one global map):
+  * Audio: `audio/wav`, `audio/m4a`, `audio/mp4`
+  * Screenshots: `image/png`, `image/jpeg`
+  * Photos: `image/jpeg` only
+  * Documents: `application/pdf`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document`
+* **HEIC dropped:** Removed `image/heic` from global MIME map. iOS captures JPEG natively via `AVCapturePhotoOutput`.
+* **`app.uploads.kind`:** New value `'photo'` — no migration needed (no CHECK constraint by design).
+* **`screenshots` UC Volume semantic widening:** This volume now holds "session images" — both screenshots (`kind='screenshot'`, PNG primary) and camera photos (`kind='photo'`, JPEG only). Differentiated by `kind` column in `app.uploads`, not by filesystem layout.
+* **base64url encoding confirmed:** `device_pubkey` on wire uses RFC 4648 §5 base64url with stripped padding. Node decoder `Buffer.from(x, 'base64url')` handles this natively. No code change needed.
 
 ### Post-Deploy Validation: COMPLETE (2026-05-14)
 * **Job:** `post_deploy_validation` in `resources/post_deploy_validation.job.yml`

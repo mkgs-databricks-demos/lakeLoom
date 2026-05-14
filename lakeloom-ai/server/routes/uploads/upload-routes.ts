@@ -7,11 +7,13 @@
  * Endpoints:
  *   POST /api/captures/:capture_session_id/audio        — Session audio recordings
  *   POST /api/captures/:capture_session_id/screenshots  — Session screen captures
+ *   POST /api/captures/:capture_session_id/photos       — Camera photos (whiteboards, artifacts)
  *   POST /api/projects/:project_id/documents            — Project reference documents
  *
  * Path layout (project-anchored, UUIDv7 filenames):
  *   audio:       /Volumes/.../session_audio/{project_id}/{capture_session_id}/{uuidv7}.{ext}
  *   screenshots: /Volumes/.../screenshots/{project_id}/{capture_session_id}/{uuidv7}.{ext}
+ *   photos:      /Volumes/.../screenshots/{project_id}/{capture_session_id}/{uuidv7}.{ext}
  *   documents:   /Volumes/.../documents/{project_id}/{uuidv7}.{ext}
  *
  * Upload flow (per Isaac's 9-step spec):
@@ -19,7 +21,7 @@
  *   2. Validate URL params (capture exists + state='active', or project exists)
  *   3. Parse multipart body (busboy). Reject if file field missing/empty.
  *   4. Generate UUIDv7 → upload_id (also the filename root)
- *   5. Derive extension from declared MIME type via allowlist
+ *   5. Validate MIME against per-endpoint allowlist, derive extension
  *   6. Stream file to UC Volume, compute SHA-256 during stream
  *   7. If iOS sent sha256_hex, compare. Mismatch → 400 + delete file.
  *   8. INSERT INTO app.uploads
@@ -47,6 +49,8 @@ interface AppKitContext {
 }
 
 // ── MIME allowlist ────────────────────────────────────────────────────────────
+// Global map: resolves MIME → file extension. Per-endpoint filtering is handled
+// by the `allowedMimes` option on each handler (see UploadHandlerOpts).
 
 const MIME_TO_EXT: Record<string, string> = {
   'audio/wav': 'wav',
@@ -54,7 +58,6 @@ const MIME_TO_EXT: Record<string, string> = {
   'audio/mp4': 'm4a',
   'image/png': 'png',
   'image/jpeg': 'jpg',
-  'image/heic': 'heic',
   'application/pdf': 'pdf',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
 };
@@ -131,14 +134,19 @@ function parseMultipart(req: Request): Promise<ParsedUpload> {
 
 // ── Upload handler factory ───────────────────────────────────────────────────
 
-type UploadKind = 'audio' | 'screenshot' | 'document';
+type UploadKind = 'audio' | 'screenshot' | 'photo' | 'document';
 
 interface UploadHandlerOpts {
   kind: UploadKind;
   volumeEnvVar: string;
   /**
+   * Per-endpoint MIME allowlist. Only these MIME types are accepted for this
+   * specific endpoint. If omitted, all MIMEs in MIME_TO_EXT are accepted.
+   */
+  allowedMimes?: string[];
+  /**
    * Resolves the project_id and capture_session_id for path construction.
-   * For audio/screenshots: looks up the capture to get project_id.
+   * For audio/screenshots/photos: looks up the capture to get project_id.
    * For documents: project_id from URL, no capture_session_id.
    */
   resolveContext: (
@@ -166,7 +174,18 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
       // ── Step 4: Generate UUIDv7 ──────────────────────────────────────────
       const uploadId = uuidv7();
 
-      // ── Step 5: Derive extension from MIME ───────────────────────────────
+      // ── Step 5: Validate MIME + derive extension ─────────────────────────
+      // Per-endpoint allowlist check (if configured)
+      if (opts.allowedMimes && !opts.allowedMimes.includes(parsed.fileMimeType)) {
+        res.status(415).json({
+          type: 'https://lakeloom/errors/unsupported_media_type',
+          title: 'Unsupported Media Type',
+          status: 415,
+          detail: `MIME type '${parsed.fileMimeType}' is not accepted by this endpoint. Allowed: ${opts.allowedMimes.join(', ')}.`,
+        });
+        return;
+      }
+
       const ext = MIME_TO_EXT[parsed.fileMimeType];
       if (!ext) {
         res.status(415).json({
@@ -233,8 +252,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
           ],
         );
       } catch (insertErr) {
-        // Orphan cleanup: attempt to delete the volume file
-        console.error('[upload] DB insert failed, attempting orphan cleanup:', insertErr);
+        // DB insert failed — attempt to clean up the orphan file on the Volume
         try {
           await (wc.files as any).delete(volumeFilePath);
           console.log('[upload] Orphan file deleted:', volumeFilePath);
@@ -314,17 +332,42 @@ export async function setupUploadRoutes(appkit: AppKitContext): Promise<void> {
       '/api/captures/:capture_session_id/audio',
       auth,
       createUploadHandler(
-        { kind: 'audio', volumeEnvVar: 'DATABRICKS_VOLUME_SESSION_AUDIO', resolveContext: resolveCaptureContext },
+        {
+          kind: 'audio',
+          volumeEnvVar: 'DATABRICKS_VOLUME_SESSION_AUDIO',
+          allowedMimes: ['audio/wav', 'audio/m4a', 'audio/mp4'],
+          resolveContext: resolveCaptureContext,
+        },
         lakebase,
       ),
     );
 
-    // Screenshot uploads
+    // Screenshot uploads — PNG primary (UIScreen.snapshot), JPEG fallback
     app.post(
       '/api/captures/:capture_session_id/screenshots',
       auth,
       createUploadHandler(
-        { kind: 'screenshot', volumeEnvVar: 'DATABRICKS_VOLUME_SCREENSHOTS', resolveContext: resolveCaptureContext },
+        {
+          kind: 'screenshot',
+          volumeEnvVar: 'DATABRICKS_VOLUME_SCREENSHOTS',
+          allowedMimes: ['image/png', 'image/jpeg'],
+          resolveContext: resolveCaptureContext,
+        },
+        lakebase,
+      ),
+    );
+
+    // Photo uploads — camera captures (whiteboards, physical artifacts). JPEG only.
+    app.post(
+      '/api/captures/:capture_session_id/photos',
+      auth,
+      createUploadHandler(
+        {
+          kind: 'photo',
+          volumeEnvVar: 'DATABRICKS_VOLUME_SCREENSHOTS',
+          allowedMimes: ['image/jpeg'],
+          resolveContext: resolveCaptureContext,
+        },
         lakebase,
       ),
     );
@@ -334,7 +377,12 @@ export async function setupUploadRoutes(appkit: AppKitContext): Promise<void> {
       '/api/projects/:project_id/documents',
       auth,
       createUploadHandler(
-        { kind: 'document', volumeEnvVar: 'DATABRICKS_VOLUME_DOCUMENTS', resolveContext: resolveDocumentContext },
+        {
+          kind: 'document',
+          volumeEnvVar: 'DATABRICKS_VOLUME_DOCUMENTS',
+          allowedMimes: ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+          resolveContext: resolveDocumentContext,
+        },
         lakebase,
       ),
     );
