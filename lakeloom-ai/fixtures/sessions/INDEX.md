@@ -2,6 +2,7 @@
 
 | Date | Summary | File |
 |------|---------|------|
+| 2026-05-14 | Photos endpoint, App SPN volume grants, orphan-byte sweeper, Isaac ack | [photos-grants-sweeper](./2026-05-14_photos-grants-sweeper.md) |
 | 2026-05-14 | Upload traceability: tables, routes, multipart, CI/CD validation job, deploy.sh Step 7 | [upload-traceability-implementation](./2026-05-14_upload-traceability-implementation.md) |
 | 2026-05-13 | Job split (git_source fix), serverless env version, pairing API test notebook, endpoints validated | [job-split-and-api-test](./2026-05-13_job-split-and-api-test.md) |
 | 2026-05-13 | QR-pair auth implementation, bundle restructure, configure_app_spn job | [qr-pair-auth-and-bundle-restructure](./2026-05-13_qr-pair-auth-and-bundle-restructure.md) |
