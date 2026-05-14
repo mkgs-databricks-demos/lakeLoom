@@ -71,10 +71,30 @@ All 7 tests pass:
 
 Key validation: no 302 redirects (SPN passes sidecar), no 404s (all routes registered), all Layer 2 rejections return RFC 9457 problem+json.
 
-## Open Items
+## CI/CD Additions (post-deployment)
 
-1. **Orphan-byte sweeper** — Scheduled job to scan volumes for files not in `app.uploads`
-2. **`upload.created` ZeroBus event** — Bronze pipeline discussion (deferred)
-3. **HEIC confirmation** — Awaiting Isaac's answer on format
-4. **base64url vs standard base64** — Awaiting Isaac's answer on `device_pubkey` encoding
-5. **Browser-auth tests** — Tests 1–2 need manual browser validation (notebook can't simulate session cookies)
+After initial deployment, added CI/CD automation:
+
+### deploy.sh Changes
+* **Step 7:** `run_post_deploy_validation()` — runs `databricks bundle run post_deploy_validation` after source deploy
+* **`--skip-validation` flag** — skips Step 7 for rapid iteration when endpoints haven't changed
+* **Constant:** `POST_DEPLOY_VALIDATION_JOB="post_deploy_validation"`
+* Non-fatal: warns on failure but doesn't block deploy.sh exit
+
+### Bundle Job
+* `resources/post_deploy_validation.job.yml` — single notebook task on serverless
+* Deployed and ran successfully (7/7 tests pass)
+
+### Notebook Enhancements
+* `test_results` dict initialized in config cell, populated by each test
+* Final gate cell: prints timestamped summary, raises `AssertionError` on any FAIL or missing test
+
+## Next Feature Branch
+
+**Orphan-byte sweeper** — scheduled job to scan UC Volumes for files without a matching `app.uploads` row. Low priority until production traffic begins.
+
+## Open Items (blocked on Isaac)
+
+1. **HEIC confirmation** — Does iOS send HEIC or convert to JPEG/PNG before upload?
+2. **base64url vs standard base64** — Which encoding does `LiveDeviceKeyStore` use for `device_pubkey`?
+3. **`upload.created` ZeroBus event** — Bronze pipeline discussion (deferred)

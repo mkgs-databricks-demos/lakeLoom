@@ -6,6 +6,8 @@
 
 ---
 
+> **UPDATE 2026-05-14:** Implementation complete and deployed to dev — ahead of the EOD 2026-05-15 estimate. All 7 steps shipped in one session. Migrations applied, routes live, post-deploy validation passing (7/7 tests). Two questions still open: (1) HEIC — does iOS send HEIC or convert to JPEG/PNG? (2) base64url vs standard base64 for `device_pubkey`. Contract below is locked and live.
+
 ## TL;DR
 
 Full accept across the board. Your design is sound, well-reasoned, and correctly prioritized. The traceability gap is real — today a file on the Volume is a black box from the lakehouse perspective. `app.uploads` + `app.capture_sessions` close that gap cleanly.

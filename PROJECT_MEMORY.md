@@ -64,6 +64,7 @@ lakeLoom/
 │   ├── resources/                  # App resource definitions
 │   │   ├── lakeloom_ai.app.yml
 │   │   ├── configure_app_spn.job.yml
+│   │   ├── post_deploy_validation.job.yml
 │   │   └── update_secrets_acls.job.yml
 │   └── fixtures/
 │       ├── sessions/               # App session summaries
@@ -325,7 +326,9 @@ The SDK's `Endpoint` object does NOT have a `hostname` attribute. Use the REST A
 * ~~QR-pair endpoint implementation depends on both SPNs having valid `client_secret` values.~~ **DONE — all endpoints implemented.**
 * ~~Inform Isaac (via `hey_isaac/`) about `screenshots` and `documents` volumes and the corresponding App upload endpoints iOS will need to call.~~ **DONE 2026-05-12**
 * App SPN needs WRITE_VOLUME on `session_audio`, `screenshots`, and `documents` for proxied uploads from iOS.
-* Await Isaac's response on filename conventions (timestamps vs UUIDs) before finalizing App upload handlers.
+* ~~Await Isaac's response on filename conventions (timestamps vs UUIDs) before finalizing App upload handlers.~~ **DONE — UUIDv7 filenames, MIME-derived extensions. Deployed 2026-05-14.**
+* **Next feature branch:** Orphan-byte sweeper — scheduled job to scan UC Volumes for files without a matching `app.uploads` row.
+* Await Isaac's confirmation: (1) HEIC vs JPEG/PNG from iOS, (2) base64url vs standard base64 for `device_pubkey`.
 
 ## App Bundle (lakeloom-ai) — Implementation Status
 
@@ -336,6 +339,23 @@ All server components implemented: crypto lib, migration runner, `paired_session
 * `PairingPage.tsx` state machine implemented (loading → qr → paired → gated → error)
 * `qrcode.react` rendering correctly (confirmed 2026-05-13)
 * API test notebook validates: Xcode SPN token acquired, sidecar pass-through works, Layer 2 rejection correct
+
+
+### Upload Traceability & Capture Sessions: COMPLETE (2026-05-14)
+* **Migrations:** `002_capture_sessions.ts` (state machine table, 4 partial indexes, REPLICA IDENTITY FULL), `003_uploads.ts` (UUIDv7 PK, 6 partial indexes incl. sha256, REPLICA IDENTITY FULL)
+* **Capture lifecycle routes:** POST/PATCH/GET `/api/captures/`, GET `/api/projects/:id/captures` — iosAuth middleware, state enforcement
+* **Upload routes rewritten:** multipart (busboy), SHA-256 streaming integrity, UUIDv7 filenames, MIME allowlist (415 for unknowns), `app.uploads` INSERT, orphan cleanup on failure
+* **Route renames:** `/api/sessions/` → `/api/captures/` (zero clients deployed, zero migration cost)
+* **Pairing confirm response:** `device_id` → `paired_session_id`
+* **Timestamp canonical form locked:** `METHOD\nPATH\nUNIX_SECONDS\nBODY_SHA256_HEX` (in `ios-auth.ts` comment)
+* **Dependencies added:** `busboy ^1.6.0`, `uuid ^11.1.0`, `@types/busboy ^1.5.4`
+
+### Post-Deploy Validation: COMPLETE (2026-05-14)
+* **Job:** `post_deploy_validation` in `resources/post_deploy_validation.job.yml`
+* **Notebook:** `src/tests/pairing-api-test.ipynb` — 7 endpoint tests, CI/CD gate cell raises AssertionError on failure
+* **deploy.sh Step 7:** `run_post_deploy_validation()` — runs after source deploy, non-fatal (warns but doesn't block)
+* **Flag:** `--skip-validation` skips Step 7 for rapid iteration
+* **Tests cover:** healthz, browser-auth pairing (expected 401), SPN token acquisition, Layer 1 pass-through, capture lifecycle, upload routes
 
 ### Lakebase Schema Permissions: COMPLETE
 * `configure_app_spn` job succeeded (2026-05-13) — both tasks passed
