@@ -342,3 +342,224 @@ Reusable components serving multiple features:
 | `server/routes/pairing/` | DONE | Keep as-is, surface in Device panel |
 | `server/routes/lakebase/` | `todo-routes.ts` | Replace with project routes |
 | `server/services/sse-service.ts` | DONE | Reuse for live transcript streaming |
+
+---
+
+## Databricks Brand Design System
+
+All UI components MUST follow Databricks brand guidelines. This section is the binding specification for every visual element built in this app.
+
+### Design Principles (Three Pillars)
+
+Every design decision must satisfy all three:
+
+1. **Distilled** — Clean, minimalistic, focused. Remove anything that doesn't serve meaning. Favor whitespace. If it can be removed without losing clarity, remove it.
+2. **Bold** — Striking and confident. Use color palette decisively, size headings generously, create strong visual focal points.
+3. **Fresh** — Modern and evolving. Use contemporary patterns, balance consistency with relevance.
+
+**Self-check before shipping any component:** Can I remove anything? Does it make a confident impression? Does it feel current?
+
+---
+
+### Typography
+
+**Fonts:**
+- **DM Sans** — all UI text (headings, body, labels, navigation)
+- **DM Mono** — code blocks, API paths, technical identifiers only
+
+**Font files:** `/Shared/brandfolder/DM Sans/` and `/Shared/brandfolder/DM Mono/`
+
+**CSS font stacks:**
+```css
+font-family: "DM Sans", "Inter", system-ui, -apple-system, sans-serif;
+font-family: "DM Mono", "JetBrains Mono", "Fira Code", "SF Mono", monospace;
+```
+
+**Type scale (px):** 10 / 12 / 14 / 16 / 20 / 24 / 32 / 40 / 48 / 56
+
+**Weights:** Regular (400) body, Medium (500) labels/nav/subheadings, Bold (700) headings/CTAs
+
+**Line heights:** 150% (1.5) body copy, 120% (1.2) headings
+
+**Hierarchy pattern:** Eyebrow (Medium, small, muted) → Heading (Bold, large, Navy 800) → Body (Regular, 16px, Gray Text) → CTA (Medium, small, Lava 600 + arrow)
+
+---
+
+### Color Palette
+
+**Primary brand colors:**
+
+| Name | Hex | Role |
+|------|-----|------|
+| Lava 600 | `#FF3621` | Primary accent — CTAs, highlights |
+| Navy 800 | `#1B3139` | Dark surfaces, primary text (light mode) |
+| Oat Medium | `#EEEDE9` | Light surface backgrounds |
+| Oat Light | `#F9F7F4` | Lightest surfaces |
+| White | `#FFFFFF` | Clean white backgrounds |
+
+**Functional grays:**
+
+| Name | Hex | Role |
+|------|-----|------|
+| Gray Nav | `#303F47` | Sidebar/nav backgrounds |
+| Gray Text | `#5A6F77` | Body text, secondary labels |
+| Gray Lines | `#DCE0E2` | Dividers, borders, separators |
+
+**Semantic roles:**
+
+| Role | Color | Hex |
+|------|-------|-----|
+| Primary CTA | Lava 600 | `#FF3621` |
+| Success | Green 600 | `#00A972` |
+| Warning | Yellow 600 | `#FFAB00` |
+| Error | Lava 700 | `#BD2B26` |
+| Info / links | Blue 600 | `#2272B4` |
+| Muted / disabled | Navy 400 | `#90A5B1` |
+
+**Rules:**
+- Navy, Oat, White for large backgrounds — Lava is accent only, never background
+- One accent family per view — don't combine multiple saturated hues at equal weight
+- Tints/shades of analogous colors add depth without competing
+
+---
+
+### Dark / Light Mode
+
+The app MUST support both modes via semantic CSS custom properties. Use `prefers-color-scheme` with a manual `.dark` class toggle for user override.
+
+**Semantic tokens (swap between modes):**
+
+| Token | Light | Dark |
+|-------|-------|------|
+| `--surface-primary` | White `#FFFFFF` | Navy 800 `#1B3139` |
+| `--surface-secondary` | Oat Light `#F9F7F4` | Navy 900 `#0B2026` |
+| `--surface-tertiary` | Oat Medium `#EEEDE9` | Navy 700 `#143D4A` |
+| `--surface-raised` | White `#FFFFFF` | Navy 700 `#143D4A` |
+| `--text-primary` | Navy 800 `#1B3139` | White `#FFFFFF` |
+| `--text-secondary` | Gray Text `#5A6F77` | Navy 400 `#90A5B1` |
+| `--border-default` | Gray Lines `#DCE0E2` | Navy 600 `#1B5162` |
+| `--border-focus` | Blue 600 `#2272B4` | Blue 400 `#8ACAFF` |
+| `--accent-primary` | Lava 600 `#FF3621` | Lava 500 `#FF5F46` |
+| `--accent-error` | Lava 700 `#BD2B26` | Lava 500 `#FF5F46` |
+| `--accent-success` | Green 700 `#00875C` | Green 600 `#00A972` |
+| `--accent-warning` | Yellow 700 `#BA7B23` | Yellow 600 `#FFAB00` |
+| `--accent-info` | Blue 600 `#2272B4` | Blue 400 `#8ACAFF` |
+
+**Implementation:** Include ThemeProvider (React context + localStorage persistence) and use semantic tokens in ALL Tailwind classes — never raw hex values.
+
+---
+
+### Motion & Animation
+
+**Duration scale:**
+
+| Token | Duration | Use |
+|-------|----------|-----|
+| `--motion-fast` | 100ms | Button press, toggle, tooltip |
+| `--motion-normal` | 200ms | Dropdown, accordion, tab switch |
+| `--motion-moderate` | 300ms | Modal enter, sidebar collapse |
+| `--motion-slow` | 400ms | Page transitions, skeleton reveal |
+
+**Easing curves:**
+- `--ease-out: cubic-bezier(0.16, 1, 0.3, 1)` — entrances (default)
+- `--ease-in: cubic-bezier(0.7, 0, 0.84, 0)` — exits
+- `--ease-in-out: cubic-bezier(0.45, 0, 0.55, 1)` — position changes
+
+**Rules:**
+- Exits faster than entrances (asymmetry rule)
+- Max 2 properties animated simultaneously
+- Never animate layout properties (`width`/`height`) — use `transform` + `opacity`
+- Respect `prefers-reduced-motion: reduce` (set all durations to 0ms)
+- Stagger lists: 50ms between items, max 5 staggered, same duration and easing
+
+---
+
+### Accessibility Requirements (Non-Negotiable)
+
+**Contrast ratios (WCAG 2.1 AA minimum):**
+- Body text (< 18px): ≥ 4.5:1
+- Large text (≥ 18px or ≥ 14px bold): ≥ 3.0:1
+- UI components and icons: ≥ 3.0:1
+
+**Key constraint:** Lava 600 on white = 3.6:1 — AA-large only. Use for buttons and headings (≥ 14px bold), NOT body text. For body links use Blue 600 (5.1:1 on white).
+
+**Focus indicators:** 2px solid ring, 2px offset, Blue 600 (light) / Blue 400 (dark). Every interactive element must have visible `:focus-visible` styling.
+
+**Additional requirements:**
+- All interactive elements: minimum 44px tap target
+- Form inputs: visible labels (not placeholder-only)
+- Error states: color + icon + text (never color alone)
+- Images: meaningful `alt` text
+- Keyboard navigation: full tab order, Escape to close modals
+- Screen reader: ARIA labels on icon-only buttons
+
+---
+
+### Component Specifications
+
+All shared components follow the recipes from the brand component system. Key specs:
+
+**Button:** 4 variants (primary/secondary/ghost/danger), 3 sizes (sm/md/lg), `rounded-lg`, DM Sans Medium, `--motion-fast` transitions.
+
+**Card:** `--surface-raised` bg, 1px `--border-default`, `rounded-xl` (12px), `px-6 py-4`, optional `shadow-sm`.
+
+**Badge/StatusBadge:** `rounded-full`, DM Sans Medium 12px, 5 semantic variants (default/success/warning/error/info) with subtle background tints.
+
+**Input:** `--surface-raised` bg, 1px `--border-default`, `rounded-lg`, DM Sans Regular 14px, 2px focus ring `--border-focus`.
+
+**Modal:** Centered, `--surface-raised`, `rounded-xl`, `shadow-xl`, backdrop `--surface-overlay`, scale-up + fade entrance (300ms), Escape/backdrop-click to close, focus trapped inside.
+
+**DataTable:** Header `--surface-secondary` with uppercase 12px labels, row hover `--surface-tertiary` (100ms), 1px bottom `--border-subtle`, `px-4 py-3` cells.
+
+**EmptyState:** 64px icon container with `--surface-tertiary` bg, DM Sans Semibold 18px title, 14px secondary description, max-width 28rem, `py-16`.
+
+**Toast:** Fixed bottom-right, `--surface-raised`, 3px left accent border per variant, slide-up entrance (200ms), auto-dismiss 5s.
+
+---
+
+### Tailwind CSS v4 Theme Configuration
+
+The app uses Tailwind v4 with `@theme` blocks. All Databricks brand tokens MUST be registered:
+
+```css
+@theme {
+  /* Colors — full palette scales */
+  --color-dbx-lava: #FF3621;
+  --color-dbx-navy: #1B3139;
+  --color-dbx-oat: #EEEDE9;
+  --color-dbx-oat-light: #F9F7F4;
+
+  /* Semantic surfaces, text, borders, accents via CSS custom properties */
+  --color-surface-primary: var(--surface-primary);
+  --color-surface-secondary: var(--surface-secondary);
+  --color-surface-tertiary: var(--surface-tertiary);
+  --color-surface-raised: var(--surface-raised);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-border-default: var(--border-default);
+  --color-accent-primary: var(--accent-primary);
+
+  /* Motion */
+  --duration-fast: 100ms;
+  --duration-normal: 200ms;
+  --duration-moderate: 300ms;
+  --duration-slow: 400ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+}
+```
+
+---
+
+### Spacing & Layout Constants
+
+| Token | Value | Use |
+|-------|-------|-----|
+| Page padding | `px-6 py-6` (24px) | Main content area |
+| Section gap | `gap-6` (24px) | Between major sections |
+| Card gap | `gap-4` (16px) | Between cards in a grid |
+| Component inner gap | `gap-3` (12px) | Within a card |
+| Form field gap | `gap-4` (16px) | Between form fields |
+| Button group gap | `gap-3` (12px) | Between buttons |
+| Grid columns | `grid-cols-1 md:grid-cols-2 lg:grid-cols-4` | Stats grid |
+| Max content width | `max-w-7xl mx-auto` (1280px) | Page container |
