@@ -66,6 +66,10 @@ interface LakebaseClient {
 const MAX_PAST_SKEW_SECONDS = 90;
 const MAX_FUTURE_SKEW_SECONDS = 30;
 
+// SHA-256 of empty byte string — used as bodyHash for requests with no body.
+// Per canonical-form spec: empty body → sha256('') not literal empty string.
+const EMPTY_BODY_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+
 // ── Middleware factory ───────────────────────────────────────────────────────
 
 export interface IosAuthOptions {
@@ -143,8 +147,10 @@ export function iosAuth(opts: IosAuthOptions) {
       }
 
       if (devicePubkey) {
-        // Compute body hash
-        const bodyHash = req.body ? sha256Hex(JSON.stringify(req.body)) : '';
+        // Compute body hash per canonical-form spec:
+        // Present body → sha256(JSON.stringify(parsed body))
+        // Absent body  → sha256('') = EMPTY_BODY_HASH
+        const bodyHash = req.body ? sha256Hex(JSON.stringify(req.body)) : EMPTY_BODY_HASH;
         const canonical = buildCanonicalMessage(req.method, req.originalUrl, timestampStr, bodyHash);
         const signature = Buffer.from(signatureB64, 'base64url');
 
