@@ -1,0 +1,37 @@
+# Job resource — orphan byte sweeper (weekly maintenance)
+# Scans UC Volumes for files without a matching app.uploads row.
+# Report-only in v1 — logs orphan paths and sizes, does NOT auto-delete.
+# Scheduled: Sunday 2:00 AM UTC.
+
+resources:
+  jobs:
+    orphan_byte_sweeper:
+      name: "[${bundle.target}] Orphan Byte Sweeper"
+      tags:
+        project: ${var.tags_project}
+        purpose: maintenance
+        env: ${bundle.target}
+
+      schedule:
+        quartz_cron_expression: "0 0 2 ? * SUN *"
+        timezone_id: UTC
+
+      tasks:
+        - task_key: scan_volumes
+          notebook_task:
+            notebook_path: ../src/admin/orphan-byte-sweeper.ipynb
+            source: WORKSPACE
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              lakebase_project_id: ${var.lakebase_project_id}
+              lakebase_database_id: ${var.lakebase_database_id}
+          environment_key: default
+
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: ${var.serverless_environment_version}
+
+      max_concurrent_runs: 1
+      timeout_seconds: 1800

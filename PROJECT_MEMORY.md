@@ -315,7 +315,7 @@ The SDK's `Endpoint` object does NOT have a `hostname` attribute. Use the REST A
 
 1. Generate OAuth secret for ZeroBus SPN → store as `{client_secret_dbs_key}` in `lakeloom_credentials`.
 2. Generate OAuth secret for Xcode SPN → store as `{xcode_client_secret_dbs_key}` in `lakeloom_credentials`.
-3. After App bundle deploys: grant App SPN READ on `lakeloom_credentials` scope.
+3. ~~After App bundle deploys: grant App SPN READ on `lakeloom_credentials` scope.~~ **DONE — automated via `configure_app_spn` Task 1 (`update_secrets_acls`).**
 4. Deploy to `hls_fde` target when ready for production.
 
 ## Next Steps (post-infra)
@@ -327,7 +327,7 @@ The SDK's `Endpoint` object does NOT have a `hostname` attribute. Use the REST A
 * ~~Inform Isaac (via `hey_isaac/`) about `screenshots` and `documents` volumes and the corresponding App upload endpoints iOS will need to call.~~ **DONE 2026-05-12**
 * ~~App SPN needs WRITE_VOLUME on `session_audio`, `screenshots`, and `documents` for proxied uploads from iOS.~~ **DONE 2026-05-14 — forEach task in `configure_app_spn` job (Task 3).**
 * ~~Await Isaac's response on filename conventions (timestamps vs UUIDs) before finalizing App upload handlers.~~ **DONE — UUIDv7 filenames, MIME-derived extensions. Deployed 2026-05-14.**
-* **Next feature branch:** Orphan-byte sweeper — scheduled job to scan UC Volumes for files without a matching `app.uploads` row.
+* ~~**Next feature branch:** Orphan-byte sweeper — scheduled job to scan UC Volumes for files without a matching `app.uploads` row.~~ **DONE 2026-05-14 — `orphan_byte_sweeper` job, weekly Sunday 2am UTC, report-only v1.**
 * ~~Await Isaac's confirmation: (1) HEIC vs JPEG/PNG from iOS, (2) base64url vs standard base64 for `device_pubkey`.~~ **DONE 2026-05-14 — iOS sends JPEG only (no HEIC), base64url no-padding confirmed.**
 
 ## App Bundle (lakeloom-ai) — Implementation Status
@@ -372,7 +372,7 @@ All server components implemented: crypto lib, migration runner, `paired_session
 ### Lakebase Schema Permissions: COMPLETE
 * `configure_app_spn` job succeeded (2026-05-13) — both tasks passed
 * App migrations run successfully on startup (schema `app` + table `paired_sessions` created)
-* Note: `src/admin/grant-lakebase-schema-access` notebook cell 5 still has `endpoint.hostname` bug but the job ran successfully via a previous manual fix
+* ~~Note: `src/admin/grant-lakebase-schema-access` notebook cell 5 had `endpoint.hostname` bug~~ **FIXED — uses REST API dict path `ep["status"]["hosts"]["host"]` (correct).**
 
 ### configure_app_spn Job (two-job pattern)
 * **Orchestrator:** `configure_app_spn` (in `resources/configure_app_spn.job.yml`)
