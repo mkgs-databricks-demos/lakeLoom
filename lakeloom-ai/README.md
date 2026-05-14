@@ -13,19 +13,81 @@ A Databricks App powered by [AppKit](https://databricks.github.io/appkit/), feat
 - Databricks CLI (for deployment)
 - Access to a Databricks workspace
 
+## Workspace IP Access Lists
+
+Databricks Apps enforce workspace-level IP access lists. If your workspace has an
+allow list configured, any client IP (including iOS devices calling the App) must
+be in the allow list — otherwise the auth sidecar returns **403 Forbidden** even
+when the Bearer token is valid.
+
+### Check existing access lists
+
+```
+databricks ip-access-lists list
+```
+
+Example output:
+
+```
+ALLOW   ENABLED
+f4dc1a12-f273-48a3-9732-70ed837b419e  lakeLoomZeroBus  98.10.37.0/24
+```
+
+### Create a new allow list
+
+Replace the label, list_type, and ip_addresses with your values:
+
+```
+databricks ip-access-lists create --json '{"label": "lakeLoomZeroBus", "list_type": "ALLOW", "ip_addresses": ["98.10.37.0/24"]}'
+```
+
+### Edit an existing allow list
+
+Use the list ID from the list command above:
+
+```
+databricks ip-access-lists update <LIST_ID> --json '{"label": "lakeLoomZeroBus", "list_type": "ALLOW", "ip_addresses": ["98.10.37.0/24"], "enabled": true}'
+```
+
+For our home network, the list ID is `f4dc1a12-f273-48a3-9732-70ed837b419e`
+and the current CIDR is `98.10.37.0/24` (full /24 subnet).
+
+### Common CIDR ranges for home networks
+
+| CIDR | IPs | Use case |
+| --- | --- | --- |
+| /28 | 16 | Single static allocation |
+| /24 | 256 | Full subnet (recommended for home ISPs) |
+| /22 | 1024 | Covers ISP DHCP rotation across neighboring subnets |
+
+> **Note:** Changes to IP access lists can take **up to 10 minutes** to propagate.
+> During propagation, the App auth sidecar may transiently reject valid tokens
+> with 403. If you see 403 errors immediately after an update, wait and retry.
+
+### Diagnosing 403 from iOS
+
+If the iPhone gets HTTP 403 on `/api/pairing/confirm` but the M2M token
+acquisition succeeded (hits the workspace OIDC endpoint directly), the likely
+cause is the App sidecar rejecting the request due to IP access list enforcement.
+
+1. Check the phone's public IP: the iOS app logs it as `signin.public_ip`
+2. Verify it falls within an enabled ALLOW list
+3. Wait for propagation if the list was recently modified
+4. Confirm with `databricks ip-access-lists list`
+
 ## Databricks Authentication
 
 ### Local Development
 
 For local development, configure your environment variables by creating a `.env` file:
 
-```bash
+```
 cp .env.example .env
 ```
 
 Edit `.env` and set the environment variables you need:
 
-```env
+```
 DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
 DATABRICKS_APP_PORT=8000
 # ... other environment variables, depending on the plugins you use
@@ -43,7 +105,7 @@ The Databricks CLI requires authentication to deploy and manage apps. Configure 
 
 Interactive browser-based authentication with short-lived tokens:
 
-```bash
+```
 databricks auth login --host https://your-workspace.cloud.databricks.com
 ```
 
@@ -53,7 +115,7 @@ This will open your browser to complete authentication. The CLI saves credential
 
 Use multiple profiles for different workspaces:
 
-```ini
+```
 [DEFAULT]
 host = https://dev-workspace.cloud.databricks.com
 
@@ -65,7 +127,7 @@ client_secret = prod-client-secret
 
 Deploy using a specific profile:
 
-```bash
+```
 databricks bundle deploy --profile production
 ```
 
@@ -75,7 +137,7 @@ databricks bundle deploy --profile production
 
 ### Install Dependencies
 
-```bash
+```
 npm install
 ```
 
@@ -83,7 +145,7 @@ npm install
 
 Run the app in development mode with hot reload:
 
-```bash
+```
 npm run dev
 ```
 
@@ -93,7 +155,7 @@ The app will be available at the URL shown in the console output.
 
 Build both client and server for production:
 
-```bash
+```
 npm run build
 ```
 
@@ -106,7 +168,7 @@ This creates:
 
 Run the production build:
 
-```bash
+```
 npm start
 ```
 
@@ -114,7 +176,7 @@ npm start
 
 There are a few commands to help you with code quality:
 
-```bash
+```
 # Type checking
 npm run typecheck
 
@@ -133,7 +195,7 @@ npm run format:fix
 
 Update `databricks.yml` with your workspace settings:
 
-```yaml
+```
 targets:
   default:
     workspace:
@@ -144,7 +206,7 @@ Make sure to replace all placeholder values in `databricks.yml` with your actual
 
 ### 2. Validate Bundle
 
-```bash
+```
 databricks bundle validate
 ```
 
@@ -152,7 +214,7 @@ databricks bundle validate
 
 Deploy to the default target:
 
-```bash
+```
 databricks bundle deploy
 ```
 
@@ -160,7 +222,7 @@ databricks bundle deploy
 
 Start the deployed app:
 
-```bash
+```
 databricks bundle run <APP_NAME> -t dev
 ```
 
@@ -169,7 +231,7 @@ databricks bundle run <APP_NAME> -t dev
 1. Configure the production target in `databricks.yml`
 2. Deploy to production:
 
-```bash
+```
 databricks bundle deploy -t prod
 ```
 
