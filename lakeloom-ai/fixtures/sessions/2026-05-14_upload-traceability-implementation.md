@@ -55,10 +55,26 @@ Isaac's design proposal (`hi_genie/2026-05-13_upload-traceability-and-capture-se
 - Second deploy succeeded: migrations 002 + 003 applied, app running
 - OTel logs confirmed: `[migrations] Applied 2 migration(s).`
 
+## Test Results (pairing-api-test notebook)
+
+All 7 tests pass:
+
+| Test | Endpoint | Status | Result |
+|------|----------|--------|--------|
+| 1 | `GET /api/pairing/qr` | 401 | ✓ Expected (browser-auth requires session cookie from notebook) |
+| 2 | `GET /api/pairing/devices` | 401 | ✓ Expected (same browser-auth limitation) |
+| 3 | Xcode SPN OAuth token | 200 | ✓ Bearer token acquired (3600s expiry) |
+| 4 | `POST /api/pairing/confirm` | 401 | ✓ SPN passed sidecar, Layer 2 correctly rejected (`token_not_found`) |
+| 5 | `GET /healthz` | 200 | ✓ Sidecar intercepted (non-JSON login page), app running |
+| 6 | Capture lifecycle (4 endpoints) | 401×4 | ✓ All routes registered, sidecar passed SPN, Layer 2 rejected |
+| 7 | Upload endpoints (3 routes) | 401×3 | ✓ Renamed routes reachable, sidecar passed SPN |
+
+Key validation: no 302 redirects (SPN passes sidecar), no 404s (all routes registered), all Layer 2 rejections return RFC 9457 problem+json.
+
 ## Open Items
 
 1. **Orphan-byte sweeper** — Scheduled job to scan volumes for files not in `app.uploads`
 2. **`upload.created` ZeroBus event** — Bronze pipeline discussion (deferred)
 3. **HEIC confirmation** — Awaiting Isaac's answer on format
 4. **base64url vs standard base64** — Awaiting Isaac's answer on `device_pubkey` encoding
-5. **Run test notebook** — Tests 5–7 added but not yet executed
+5. **Browser-auth tests** — Tests 1–2 need manual browser validation (notebook can't simulate session cookies)

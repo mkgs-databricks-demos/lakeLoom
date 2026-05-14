@@ -1,0 +1,28 @@
+# Job resource — post-deploy validation
+# Runs the pairing-api-test notebook after every deployment to validate:
+#   - App is running and reachable
+#   - Auth sidecar passes SPN tokens (Layer 1)
+#   - All API routes registered (captures, uploads, pairing)
+#   - Health endpoint responds
+# Triggered by deploy.sh after successful app deploy + migration.
+# Raises AssertionError (non-zero exit) on any test failure.
+
+resources:
+  jobs:
+    post_deploy_validation:
+      name: "[${bundle.target}] Post-Deploy Validation"
+      tags:
+        project: ${var.tags_project}
+        purpose: ci-validation
+        env: ${bundle.target}
+      tasks:
+        - task_key: api_endpoint_tests
+          notebook_task:
+            notebook_path: ../src/tests/pairing-api-test.ipynb
+          environment_key: default
+
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: ${var.serverless_environment_version}
+      max_concurrent_runs: 1
