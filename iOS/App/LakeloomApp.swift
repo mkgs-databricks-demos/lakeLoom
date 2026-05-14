@@ -43,7 +43,8 @@ struct LakeloomApp: App {
             wrappedValue: AppCoordinator(
                 auth: auth,
                 projects: projects,
-                coreDataStack: coreDataStack
+                coreDataStack: coreDataStack,
+                endpointResolver: endpointResolver
             )
         )
     }

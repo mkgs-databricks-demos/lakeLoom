@@ -25,7 +25,7 @@ struct AppCoordinatorBootstrapTests {
             defaults: InMemoryDefaultsStore()
         )
         let stack = try await makeStack()
-        let coordinator = AppCoordinator(auth: auth, projects: projects, coreDataStack: stack)
+        let coordinator = AppCoordinator(auth: auth, projects: projects, coreDataStack: stack, endpointResolver: LiveAppEndpointResolver())
 
         await coordinator.bootstrap()
 
@@ -51,7 +51,7 @@ struct AppCoordinatorBootstrapTests {
             defaults: InMemoryDefaultsStore()
         )
         let stack = try await makeStack()
-        let coordinator = AppCoordinator(auth: auth, projects: projects, coreDataStack: stack)
+        let coordinator = AppCoordinator(auth: auth, projects: projects, coreDataStack: stack, endpointResolver: LiveAppEndpointResolver())
 
         await coordinator.bootstrap()
 
@@ -80,7 +80,7 @@ struct AppCoordinatorBootstrapTests {
             defaults: InMemoryDefaultsStore()
         )
         let stack = try await makeStack()
-        let coordinator = AppCoordinator(auth: auth, projects: projects, coreDataStack: stack)
+        let coordinator = AppCoordinator(auth: auth, projects: projects, coreDataStack: stack, endpointResolver: LiveAppEndpointResolver())
 
         await coordinator.bootstrap()
 
@@ -110,7 +110,7 @@ struct AppCoordinatorBootstrapTests {
             defaults: InMemoryDefaultsStore()
         )
         let stack = try await makeStack()
-        let coordinator = AppCoordinator(auth: auth, projects: projects, coreDataStack: stack)
+        let coordinator = AppCoordinator(auth: auth, projects: projects, coreDataStack: stack, endpointResolver: LiveAppEndpointResolver())
 
         await coordinator.bootstrap()
 
@@ -137,7 +137,7 @@ struct AppCoordinatorBootstrapTests {
             defaults: InMemoryDefaultsStore()
         )
         let stack = try await makeStack()
-        let coordinator = AppCoordinator(auth: auth, projects: projects, coreDataStack: stack)
+        let coordinator = AppCoordinator(auth: auth, projects: projects, coreDataStack: stack, endpointResolver: LiveAppEndpointResolver())
 
         await coordinator.bootstrap()
         let phaseAfterFirst = coordinator.phase
@@ -171,7 +171,7 @@ struct AppCoordinatorOnboardingTests {
             defaults: InMemoryDefaultsStore()
         )
         let stack = try await makeStack()
-        let coordinator = AppCoordinator(auth: auth, projects: projects, coreDataStack: stack)
+        let coordinator = AppCoordinator(auth: auth, projects: projects, coreDataStack: stack, endpointResolver: LiveAppEndpointResolver())
 
         await coordinator.bootstrap()
         await coordinator.acknowledgeConsent()

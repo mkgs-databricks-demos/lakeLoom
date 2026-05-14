@@ -36,6 +36,12 @@ extension AppCoordinator {
                 qrText: qrText,
                 deviceLabel: deviceLabel
             )
+            // Seed the endpoint resolver with the freshly-paired App URL
+            // so ProjectService's subsequent calls route correctly.
+            await endpointResolver.seed(
+                workspaceID: credential.id,
+                appBaseURL: credential.appBaseURL
+            )
             onboarding = .identityConfirmation(credential)
         } catch let error as AuthError {
             onboarding = .qrScan(inProgress: false, lastError: Self.message(for: error))

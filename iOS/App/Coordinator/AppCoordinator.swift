@@ -35,6 +35,7 @@ public final class AppCoordinator {
     let auth: any AuthServicing
     let projects: any ProjectServicing
     let coreDataStack: any CoreDataStacking
+    let endpointResolver: any AppEndpointResolving
     let logger: AppLogger
     let nowProvider: @Sendable () -> Date
 
@@ -48,12 +49,14 @@ public final class AppCoordinator {
         auth: any AuthServicing,
         projects: any ProjectServicing,
         coreDataStack: any CoreDataStacking,
+        endpointResolver: any AppEndpointResolving,
         logger: AppLogger = AppLogger(category: .coordinator),
         nowProvider: @Sendable @escaping () -> Date = Date.init
     ) {
         self.auth = auth
         self.projects = projects
         self.coreDataStack = coreDataStack
+        self.endpointResolver = endpointResolver
         self.logger = logger
         self.nowProvider = nowProvider
     }
@@ -92,6 +95,16 @@ public final class AppCoordinator {
         // don't need recovery).
         if let live = auth as? AuthService {
             await live.start()
+        }
+
+        // Seed the endpoint resolver with QR-delivered App URLs for each
+        // hydrated workspace. Subsequent ProjectAPIClient calls hit the
+        // cache directly instead of falling back to URL derivation.
+        for credential in await auth.workspaces {
+            await endpointResolver.seed(
+                workspaceID: credential.id,
+                appBaseURL: credential.appBaseURL
+            )
         }
 
         // Subscribe to auth events so forced sign-outs (refresh failures)
