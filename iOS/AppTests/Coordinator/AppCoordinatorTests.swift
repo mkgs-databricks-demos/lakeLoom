@@ -37,8 +37,8 @@ struct AppCoordinatorBootstrapTests {
         }
     }
 
-    @Test("consent acknowledged + no active workspace → onboarding(.workspaceURL)")
-    func consentButNoWorkspaceRoutesToWorkspaceURL() async throws {
+    @Test("consent acknowledged + no active workspace → onboarding(.qrScan)")
+    func consentButNoWorkspaceRoutesToQRScan() async throws {
         ConsentVersion.recordAcknowledgement()
         defer { ConsentVersion.clearForTesting() }
 
@@ -56,10 +56,10 @@ struct AppCoordinatorBootstrapTests {
         await coordinator.bootstrap()
 
         #expect(coordinator.phase == .onboarding)
-        if case .workspaceURL = coordinator.onboarding {
+        if case .qrScan = coordinator.onboarding {
             #expect(Bool(true))
         } else {
-            Issue.record("expected .workspaceURL, got \(String(describing: coordinator.onboarding))")
+            Issue.record("expected .qrScan, got \(String(describing: coordinator.onboarding))")
         }
     }
 
@@ -157,7 +157,7 @@ struct AppCoordinatorOnboardingTests {
         return stack
     }
 
-    @Test("acknowledgeConsent transitions consent → workspaceURL")
+    @Test("acknowledgeConsent transitions consent → qrScan")
     func acknowledgeConsentAdvances() async throws {
         ConsentVersion.clearForTesting()
         defer { ConsentVersion.clearForTesting() }
@@ -176,64 +176,11 @@ struct AppCoordinatorOnboardingTests {
         await coordinator.bootstrap()
         await coordinator.acknowledgeConsent()
 
-        if case .workspaceURL = coordinator.onboarding {
+        if case .qrScan = coordinator.onboarding {
             #expect(Bool(true))
             #expect(ConsentVersion.hasAcknowledgedCurrent)
         } else {
-            Issue.record("expected .workspaceURL after acknowledge")
-        }
-    }
-
-    @Test("submitWorkspaceURL → oauthLogin on validation success")
-    func submitWorkspaceURLAdvancesOnSuccess() async throws {
-        ConsentVersion.recordAcknowledgement()
-        defer { ConsentVersion.clearForTesting() }
-
-        let auth = MockAuthService()
-        let api = ScriptedProjectAPIClient()
-        let projects = ProjectService(
-            auth: auth,
-            endpointResolver: LiveAppEndpointResolver(),
-            api: api,
-            defaults: InMemoryDefaultsStore()
-        )
-        let stack = try await makeStack()
-        let coordinator = AppCoordinator(auth: auth, projects: projects, coreDataStack: stack)
-
-        await coordinator.bootstrap()
-        await coordinator.submitWorkspaceURL("acme.cloud.databricks.com")
-
-        if case .oauthLogin(let url, _, _) = coordinator.onboarding {
-            #expect(url.host == "acme.cloud.databricks.com")
-        } else {
-            Issue.record("expected .oauthLogin")
-        }
-    }
-
-    @Test("goBackInOnboarding from oauthLogin returns to workspaceURL with prefill")
-    func goBackFromOAuth() async throws {
-        ConsentVersion.recordAcknowledgement()
-        defer { ConsentVersion.clearForTesting() }
-
-        let auth = MockAuthService()
-        let api = ScriptedProjectAPIClient()
-        let projects = ProjectService(
-            auth: auth,
-            endpointResolver: LiveAppEndpointResolver(),
-            api: api,
-            defaults: InMemoryDefaultsStore()
-        )
-        let stack = try await makeStack()
-        let coordinator = AppCoordinator(auth: auth, projects: projects, coreDataStack: stack)
-
-        await coordinator.bootstrap()
-        await coordinator.submitWorkspaceURL("acme.cloud.databricks.com")
-        await coordinator.goBackInOnboarding()
-
-        if case .workspaceURL(let prefill) = coordinator.onboarding {
-            #expect(prefill == "acme.cloud.databricks.com")
-        } else {
-            Issue.record("expected .workspaceURL after back")
+            Issue.record("expected .qrScan after acknowledge")
         }
     }
 }
@@ -246,10 +193,10 @@ struct AppCoordinatorErrorRenderingTests {
     func projectErrorMessages() {
         #expect(AppCoordinator.message(for: .duplicateName(existingProjectID: "p-1"))
                 .contains("already exists"))
-        #expect(AppCoordinator.message(for: .networkUnavailable)
+        #expect(AppCoordinator.message(for: ProjectError.networkUnavailable)
                 .contains("network"))
-        #expect(AppCoordinator.message(for: .timeout) == "Request timed out.")
-        #expect(AppCoordinator.message(for: .validationFailed(reason: "name empty"))
+        #expect(AppCoordinator.message(for: ProjectError.timeout) == "Request timed out.")
+        #expect(AppCoordinator.message(for: ProjectError.validationFailed(reason: "name empty"))
                 == "name empty")
     }
 
@@ -258,37 +205,6 @@ struct AppCoordinatorErrorRenderingTests {
         #expect(AppCoordinator.errorCode(for: .duplicateName(existingProjectID: "p")) == "duplicate_name")
         #expect(AppCoordinator.errorCode(for: .networkUnavailable) == "network_unavailable")
         #expect(AppCoordinator.errorCode(for: .timeout) == "timeout")
-    }
-}
-
-@Suite("WorkspaceURLNormalizer")
-struct WorkspaceURLNormalizerTests {
-
-    @Test("prepends https:// when missing")
-    func prependsScheme() {
-        let url = WorkspaceURLNormalizer.normalize("acme.cloud.databricks.com")
-        #expect(url.scheme == "https")
-        #expect(url.host == "acme.cloud.databricks.com")
-    }
-
-    @Test("strips path / query / fragment")
-    func stripsPathQueryFragment() {
-        let url = WorkspaceURLNormalizer.normalize("https://acme.cloud.databricks.com/foo/bar?x=1#frag")
-        #expect(url.path.isEmpty)
-        #expect(url.query == nil)
-        #expect(url.fragment == nil)
-    }
-
-    @Test("lowercases the host")
-    func lowercasesHost() {
-        let url = WorkspaceURLNormalizer.normalize("https://ACME.cloud.databricks.com")
-        #expect(url.host == "acme.cloud.databricks.com")
-    }
-
-    @Test("trims surrounding whitespace")
-    func trimsWhitespace() {
-        let url = WorkspaceURLNormalizer.normalize("  acme.cloud.databricks.com  \n")
-        #expect(url.host == "acme.cloud.databricks.com")
     }
 }
 

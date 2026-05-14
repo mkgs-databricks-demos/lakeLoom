@@ -117,7 +117,7 @@ public final class AppCoordinator {
         }
 
         guard let workspace = await auth.activeWorkspace else {
-            await beginOnboarding(at: .workspaceURL(prefill: nil))
+            await beginOnboarding(at: .qrScan(inProgress: false, lastError: nil))
             return
         }
 
@@ -237,7 +237,7 @@ public final class AppCoordinator {
                transitioning == nil {
                 await handleForcedSignOut(workspaceID: workspaceID)
             }
-        case .signedIn, .switchedWorkspace, .identityRefreshed:
+        case .signedIn, .switchedWorkspace:
             // These fire as part of actions we drove ourselves — the
             // action handler already updated state.
             break
@@ -255,6 +255,21 @@ public final class AppCoordinator {
     }
 
     // MARK: Error rendering
+
+    static func message(for error: AuthError) -> String {
+        switch error {
+        case .noActiveWorkspace: return "No paired workspace."
+        case .unknownWorkspace(let id): return "Unknown workspace: \(id)"
+        case .userCancelled: return "Pairing cancelled."
+        case .invalidPairingPayload(let reason): return "QR code not recognized: \(reason)"
+        case .pairingFailed(let reason): return "Pairing failed: \(reason)"
+        case .refreshFailed: return "Session expired. Pair again to continue."
+        case .deviceKeyFailed(let reason): return "Device key error: \(reason)"
+        case .keychainFailed(let status): return "Keychain error (\(status))"
+        case .networkUnavailable: return "No network connection."
+        case .unexpectedResponse(let reason): return "Unexpected response: \(reason)"
+        }
+    }
 
     static func message(for error: ProjectError) -> String {
         switch error {

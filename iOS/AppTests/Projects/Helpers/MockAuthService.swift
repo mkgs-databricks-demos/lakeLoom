@@ -1,4 +1,3 @@
-import AuthenticationServices
 import Foundation
 
 @testable import LakeloomApp
@@ -79,16 +78,11 @@ public actor MockAuthService: AuthServicing {
         )
     }
 
-    @MainActor
-    public func signIn(
-        workspaceURL: URL,
-        presenting: ASWebAuthenticationPresentationContextProviding
+    public func signInViaPairing(
+        qrText: String,
+        deviceLabel: String
     ) async throws -> WorkspaceCredential {
-        throw AuthError.unexpectedResponse(reason: "MockAuthService.signIn not implemented")
-    }
-
-    public func validateWorkspaceURL(_ workspaceURL: URL) async throws {
-        // No-op for tests.
+        throw AuthError.unexpectedResponse(reason: "MockAuthService.signInViaPairing not implemented")
     }
 
     public func switchWorkspace(to workspaceID: String) async throws {
@@ -106,10 +100,6 @@ public actor MockAuthService: AuthServicing {
     public func signOutAll() async throws {
         workspacesCache.removeAll()
         activeID = nil
-    }
-
-    public func refreshIdentity() async throws -> UserIdentity {
-        throw AuthError.unexpectedResponse(reason: "MockAuthService.refreshIdentity not implemented")
     }
 }
 
