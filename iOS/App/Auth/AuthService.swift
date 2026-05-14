@@ -216,7 +216,11 @@ public actor AuthService: AuthServicing {
                 // QR-delivered client_id is what's exchanged for the
                 // M2M token. Both should match the workspace UI's
                 // Xcode SPN application_id.
-                "xcode_client_id_prefix": .string(String(payload.xcodeSPN.clientID.prefix(12)))
+                "xcode_client_id_prefix": .string(String(payload.xcodeSPN.clientID.prefix(12))),
+                // Surfaces whether Genie's x-forwarded-host fix made it
+                // into this QR. Should be the public databricksapps.com
+                // URL, NOT https://localhost:8000.
+                "app_base_url": .string(payload.app.baseURL.absoluteString)
             ]
         )
 

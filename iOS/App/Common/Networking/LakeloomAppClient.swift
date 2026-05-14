@@ -331,9 +331,13 @@ public actor LiveLakeloomAppClient: LakeloomAppClient {
         default:
             let problem = Self.parseProblemDetails(data)
             let detail = problem.detail ?? problem.title ?? "HTTP \(http.statusCode)"
+            // Full URL so it's obvious which host the request actually
+            // hit — useful when diagnosing whether the QR delivered the
+            // right app.base_url vs a stale/wrong one.
             await logger.error(
                 "app.request.http_error",
                 metadata: [
+                    "url": .string(url.absoluteString),
                     "path": .string(path),
                     "http_status": .int(Int64(http.statusCode)),
                     "detail": .string(detail)
