@@ -1,8 +1,8 @@
-# lakeLoom AI
+# lakeLoom
 ---
 ### Weave Requirements Into Rapid Databricks MVPs with Genie Code Ready Architecture and Session Plans
 
-![lakeLoom AI Apps](media/lakeLoomAIapps.png)
+<img src="media/lakeloom-ios-icon.png" alt="lakeLoom AI Apps" width="480"/>
 
 ---
 
