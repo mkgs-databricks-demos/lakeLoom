@@ -81,6 +81,40 @@ public actor InMemoryKeychainStore: KeychainStore {
     public func deleteTokens(workspaceID: String) async throws {
         entries.removeValue(forKey: Self.accessTokenKey(workspaceID: workspaceID))
         entries.removeValue(forKey: Self.refreshTokenKey(workspaceID: workspaceID))
+        entries.removeValue(forKey: Self.sessionTokenKey(workspaceID: workspaceID))
+        entries.removeValue(forKey: Self.xcodeSPNKey(workspaceID: workspaceID))
+    }
+
+    public func loadSessionToken(workspaceID: String) async throws -> String {
+        let data = try data(for: Self.sessionTokenKey(workspaceID: workspaceID))
+        guard let value = String(data: data, encoding: .utf8) else {
+            throw KeychainError.decodeFailed(reason: "session token is not valid UTF-8")
+        }
+        return value
+    }
+
+    public func saveSessionToken(_ token: String, workspaceID: String) async throws {
+        guard let data = token.data(using: .utf8) else {
+            throw KeychainError.encodeFailed(reason: "session token is not encodable as UTF-8")
+        }
+        entries[Self.sessionTokenKey(workspaceID: workspaceID)] = data
+    }
+
+    public func loadXcodeSPNCredentials(workspaceID: String) async throws -> XcodeSPNCredentials {
+        let data = try data(for: Self.xcodeSPNKey(workspaceID: workspaceID))
+        do {
+            return try JSONDecoder().decode(XcodeSPNCredentials.self, from: data)
+        } catch {
+            throw KeychainError.decodeFailed(reason: String(describing: error))
+        }
+    }
+
+    public func saveXcodeSPNCredentials(_ credentials: XcodeSPNCredentials, workspaceID: String) async throws {
+        do {
+            entries[Self.xcodeSPNKey(workspaceID: workspaceID)] = try JSONEncoder().encode(credentials)
+        } catch {
+            throw KeychainError.encodeFailed(reason: String(describing: error))
+        }
     }
 
     public func loadWorkspacesIndex() async throws -> [String] {
@@ -137,6 +171,8 @@ public actor InMemoryKeychainStore: KeychainStore {
     private static func credentialKey(workspaceID: String) -> String { "credential:\(workspaceID)" }
     private static func accessTokenKey(workspaceID: String) -> String { "access:\(workspaceID)" }
     private static func refreshTokenKey(workspaceID: String) -> String { "refresh:\(workspaceID)" }
+    private static func sessionTokenKey(workspaceID: String) -> String { "session:\(workspaceID)" }
+    private static func xcodeSPNKey(workspaceID: String) -> String { "xcode_spn:\(workspaceID)" }
     private static let indexKey = "workspaces.index"
     private static let activeKey = "active.id"
 

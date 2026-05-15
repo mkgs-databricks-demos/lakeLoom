@@ -1,5 +1,5 @@
-import AuthenticationServices
 import Foundation
+import UIKit
 
 /// Onboarding-flow methods for ``AppCoordinator``. Each method maps to
 /// a user action in one specific ``OnboardingState``; invalid actions
@@ -13,57 +13,52 @@ extension AppCoordinator {
     public func acknowledgeConsent() async {
         guard case .onboarding = phase, case .consent = onboarding else { return }
         ConsentVersion.recordAcknowledgement(at: Date())
-        onboarding = .workspaceURL(prefill: nil)
+        onboarding = .qrScan(inProgress: false, lastError: nil)
     }
 
-    // MARK: Step 2 — workspace URL
+    // MARK: Step 2 — QR scan + pair
 
-    public func submitWorkspaceURL(_ urlString: String) async {
-        guard case .onboarding = phase, case .workspaceURL = onboarding else { return }
-        let normalized = WorkspaceURLNormalizer.normalize(urlString)
-        do {
-            try await auth.validateWorkspaceURL(normalized)
-            onboarding = .oauthLogin(workspaceURL: normalized, inProgress: false, lastError: nil)
-        } catch let error as AuthError {
-            onboarding = .workspaceURL(prefill: urlString)
-            lastError = .authError(error)
-        } catch {
-            onboarding = .workspaceURL(prefill: urlString)
-            lastError = .unknown(reason: error.localizedDescription)
-        }
-    }
-
-    // MARK: Step 3 — OAuth
-
-    @MainActor
-    public func startOAuthSignIn(presenting: ASWebAuthenticationPresentationContextProviding) async {
-        guard case .onboarding = phase,
-              case .oauthLogin(let url, _, _) = onboarding else { return }
-        onboarding = .oauthLogin(workspaceURL: url, inProgress: true, lastError: nil)
+    /// Called by ``QRScanStepView`` when AVFoundation decodes a QR
+    /// string from the camera. Drives the entire sign-in via
+    /// ``AuthServicing/signInViaPairing(qrText:deviceLabel:)``.
+    public func submitQRCode(_ qrText: String) async {
+        guard case .onboarding = phase, case .qrScan(let inProgress, _) = onboarding else { return }
+        // Debounce — if a sign-in is already in flight from a previous
+        // scan, ignore further scans until the App responds.
+        guard !inProgress else { return }
+        onboarding = .qrScan(inProgress: true, lastError: nil)
         transitioning = .signingIn
         defer { transitioning = nil }
 
+        let deviceLabel = await Self.currentDeviceLabel()
         do {
-            let credential = try await auth.signIn(workspaceURL: url, presenting: presenting)
+            let credential = try await auth.signInViaPairing(
+                qrText: qrText,
+                deviceLabel: deviceLabel
+            )
+            // Seed the endpoint resolver with the freshly-paired App URL
+            // so ProjectService's subsequent calls route correctly.
+            await endpointResolver.seed(
+                workspaceID: credential.id,
+                appBaseURL: credential.appBaseURL
+            )
             onboarding = .identityConfirmation(credential)
-        } catch AuthError.userCancelled {
-            onboarding = .oauthLogin(workspaceURL: url, inProgress: false, lastError: nil)
         } catch let error as AuthError {
-            onboarding = .oauthLogin(
-                workspaceURL: url,
-                inProgress: false,
-                lastError: error.localizedDescription
-            )
+            onboarding = .qrScan(inProgress: false, lastError: Self.message(for: error))
         } catch {
-            onboarding = .oauthLogin(
-                workspaceURL: url,
-                inProgress: false,
-                lastError: error.localizedDescription
-            )
+            onboarding = .qrScan(inProgress: false, lastError: error.localizedDescription)
         }
     }
 
-    // MARK: Step 4 — identity confirmation
+    /// Returns the user's device name (e.g. "Matthew's iPhone"),
+    /// hopping to the main actor since `UIDevice.current.name` is
+    /// `@MainActor` in Swift 6.
+    @MainActor
+    private static func currentDeviceLabel() async -> String {
+        UIDevice.current.name
+    }
+
+    // MARK: Step 3 — identity confirmation
 
     public func confirmIdentity() async {
         guard case .onboarding = phase,
@@ -81,13 +76,12 @@ extension AppCoordinator {
     public func useDifferentAccount() async {
         guard case .onboarding = phase,
               case .identityConfirmation(let credential) = onboarding else { return }
-        // Sign out and return to the workspace URL step. We keep the
-        // host pre-filled so the user doesn't have to retype it.
+        // Sign out and return to the QR scan step.
         try? await auth.signOut(workspaceID: credential.id)
-        onboarding = .workspaceURL(prefill: credential.workspaceURL.host)
+        onboarding = .qrScan(inProgress: false, lastError: nil)
     }
 
-    // MARK: Step 5 — project picker
+    // MARK: Step 4 — project picker
 
     public func selectProject(_ projectID: String) async {
         guard case .onboarding = phase,
@@ -115,7 +109,7 @@ extension AppCoordinator {
         await loadProjectsForOnboarding(workspace: workspace)
     }
 
-    // MARK: Step 6 — project create
+    // MARK: Step 5 — project create
 
     public func createProject(name: String, description: String?) async {
         guard case .onboarding = phase,
@@ -157,14 +151,12 @@ extension AppCoordinator {
         await loadProjectsForOnboarding(workspace: workspace)
     }
 
-    // MARK: Step 7 — finalize
+    // MARK: Step 6 — finalize
 
     private func finalizeOnboarding(
         workspace: WorkspaceCredential,
         project: ProjectMetadata
     ) async {
-        // Persist the chosen project as the workspace's default for
-        // next launch, then build the active context.
         do {
             try await projects.setDefault(projectID: project.id, workspaceID: workspace.id)
         } catch {
@@ -189,21 +181,19 @@ extension AppCoordinator {
         guard case .onboarding = phase, let current = onboarding else { return }
         switch current {
         case .consent:
-            // Already at the start; no-op.
             break
-        case .workspaceURL:
-            // No further back from here.
+        case .qrScan:
+            // No further back from the scanner; bouncing back to consent
+            // would lose the ack timestamp which is recorded forever.
             break
-        case .oauthLogin(let url, _, _):
-            onboarding = .workspaceURL(prefill: url.host)
         case .identityConfirmation(let credential):
             try? await auth.signOut(workspaceID: credential.id)
-            onboarding = .workspaceURL(prefill: credential.workspaceURL.host)
+            onboarding = .qrScan(inProgress: false, lastError: nil)
         case .projectPicker(let workspace, _, _, _):
-            // Going back from the picker signs out and returns to the
-            // workspace URL step. UI should warn before triggering.
+            // Going back from the picker signs out and returns to QR scan.
+            // UI should warn before triggering.
             try? await auth.signOut(workspaceID: workspace.id)
-            onboarding = .workspaceURL(prefill: workspace.workspaceURL.host)
+            onboarding = .qrScan(inProgress: false, lastError: nil)
         case .projectCreate(let workspace, _, _):
             onboarding = .projectPicker(
                 workspace: workspace,
@@ -213,35 +203,7 @@ extension AppCoordinator {
             )
             await loadProjectsForOnboarding(workspace: workspace)
         case .finalizingOnboarding:
-            // Final step has no back; ignore.
             break
         }
-    }
-}
-
-// MARK: - Workspace URL normalization
-
-/// Cleans up a workspace URL the user typed: prepends `https://`,
-/// strips path / query / fragment, lowercases the host. Intentionally
-/// permissive — anything that parses to a host gets through; the OIDC
-/// discovery probe is the actual gate.
-enum WorkspaceURLNormalizer {
-    static func normalize(_ raw: String) -> URL {
-        var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.lowercased().hasPrefix("http://") && !trimmed.lowercased().hasPrefix("https://") {
-            trimmed = "https://\(trimmed)"
-        }
-        guard let parsed = URL(string: trimmed),
-              let host = parsed.host,
-              !host.isEmpty
-        else {
-            // Return a structurally-correct URL with the raw host;
-            // AuthService.validateWorkspaceURL will reject it cleanly.
-            return URL(string: "https://invalid.invalid") ?? URL(fileURLWithPath: "/")
-        }
-        var components = URLComponents()
-        components.scheme = "https"
-        components.host = host.lowercased()
-        return components.url ?? parsed
     }
 }

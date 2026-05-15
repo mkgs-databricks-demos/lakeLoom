@@ -16,7 +16,12 @@ struct InMemoryKeychainStoreTests {
             user: UserIdentity(userID: "u-1", userName: "u@a.com", displayName: "U", email: "u@a.com", active: true),
             isDefault: true,
             signedInAt: Date(timeIntervalSince1970: 1_700_000_000),
-            identityRefreshedAt: Date(timeIntervalSince1970: 1_700_000_010)
+            identityRefreshedAt: Date(timeIntervalSince1970: 1_700_000_010),
+            appBaseURL: URL(string: "https://lakeloom-ai.aws.databricksapps.com")!,
+            authMethod: .qrPaired(
+                pairedSessionID: "paired-1",
+                sessionExpiresAt: Date(timeIntervalSince1970: 1_700_604_810)
+            )
         )
     }
 

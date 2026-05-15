@@ -74,7 +74,12 @@ struct IdentityConfirmationStepView: View {
         ),
         isDefault: true,
         signedInAt: Date(),
-        identityRefreshedAt: Date()
+        identityRefreshedAt: Date(),
+        appBaseURL: URL(string: "https://lakeloom-ai-dev-7474657291520070.aws.databricksapps.com")!,
+        authMethod: .qrPaired(
+            pairedSessionID: "preview-session",
+            sessionExpiresAt: Date().addingTimeInterval(7 * 24 * 3_600)
+        )
     )
     return IdentityConfirmationStepView(
         credential: credential,

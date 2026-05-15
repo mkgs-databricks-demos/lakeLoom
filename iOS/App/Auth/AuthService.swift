@@ -1,55 +1,33 @@
-import AuthenticationServices
 import Foundation
-
-/// Configuration baked into the app binary.
-///
-/// `clientID` is the published Databricks OAuth client ID. PKCE replaces
-/// the client_secret; `clientID` is not a secret. The redirect URI is
-/// composed at runtime against the in-app loopback HTTP listener, so
-/// it isn't part of the static config.
-public struct AuthConfig: Sendable {
-    public let clientID: String
-    public let scopes: [String]
-
-    public init(clientID: String, scopes: [String] = ["all-apis", "offline_access"]) {
-        self.clientID = clientID
-        self.scopes = scopes
-    }
-}
 
 /// Production ``AuthServicing`` actor.
 ///
-/// All mutable state — workspaces, active workspace ID, in-flight refresh
-/// tasks — is actor-isolated. Public methods serialize through the actor
-/// executor. The OAuth interactive flow is the only `@MainActor` part;
-/// it hops back into the actor for persistence.
+/// All mutable state — workspaces, active workspace ID, diagnostics —
+/// is actor-isolated. Public methods serialize through the actor
+/// executor.
 ///
-/// See Module 01 §4 (concurrency model) and §6 (refresh flow).
+/// Token logic lives in ``LakeloomAppClient`` (Layer 0 M2M cache +
+/// near-expiry refresh); AuthService is the coordinator that wires
+/// the QR-pair flow, persistence, and event broadcast.
 public actor AuthService: AuthServicing {
 
     // MARK: Dependencies
 
-    private let config: AuthConfig
-    private let oauth: OAuthClient
+    private let lakeloomApp: any LakeloomAppClient
+    private let deviceKeyStore: any DeviceKeyStoring
     private let keychain: KeychainStore
-    private let identity: DatabricksIdentityClient
     private let nowProvider: @Sendable () -> Date
     private let logger: AppLogger
 
     // MARK: State
 
-    /// Cached workspace metadata. Mirrors what's persisted in Keychain so
-    /// callers get sync semantics through the actor executor without an
-    /// I/O hop on every read. Refreshed on sign-in / sign-out / switch.
+    /// Cached workspace metadata. Mirrors what's persisted in Keychain
+    /// so callers get sync semantics through the actor executor.
+    /// Refreshed on sign-in / sign-out / switch.
     private var workspacesCache: [WorkspaceCredential] = []
 
-    /// Active workspace ID. nil before first sign-in.
+    /// Active workspace ID. Nil before first pairing.
     private var activeWorkspaceID: String?
-
-    /// Per-workspace in-flight refresh task. Concurrent callers awaiting
-    /// the same refresh share the result instead of triggering N parallel
-    /// network calls.
-    private var refreshTasks: [String: Task<AccessToken, any Error>] = [:]
 
     /// Counters surfaced via ``diagnostics()``.
     private var diagnosticsState = AuthDiagnostics.zero
@@ -64,63 +42,81 @@ public actor AuthService: AuthServicing {
     // MARK: Init
 
     public init(
-        config: AuthConfig,
-        oauth: OAuthClient,
+        lakeloomApp: any LakeloomAppClient,
+        deviceKeyStore: any DeviceKeyStoring,
         keychain: KeychainStore,
-        identity: DatabricksIdentityClient,
         logger: AppLogger = AppLogger(category: .auth),
         nowProvider: @Sendable @escaping () -> Date = Date.init
     ) {
-        self.config = config
-        self.oauth = oauth
+        self.lakeloomApp = lakeloomApp
+        self.deviceKeyStore = deviceKeyStore
         self.keychain = keychain
-        self.identity = identity
         self.logger = logger
         self.nowProvider = nowProvider
     }
 
     // MARK: Lifecycle
 
-    /// Loads persisted workspaces and active selection from Keychain.
-    /// Idempotent. Call once at app launch from AppCoordinator's bootstrap.
+    /// Loads persisted workspaces and re-configures ``LakeloomAppClient``
+    /// for each one. Idempotent. Called by AppCoordinator's bootstrap.
     public func start() async {
         guard !started else { return }
         started = true
+
+        let ids: [String]
         do {
-            let ids = try await keychain.loadWorkspacesIndex()
-            var loaded: [WorkspaceCredential] = []
-            for id in ids {
-                do {
-                    let credential = try await keychain.loadCredential(workspaceID: id)
-                    loaded.append(credential)
-                } catch {
-                    await logger.warning(
-                        "dropping unreadable credential",
-                        metadata: [
-                            "workspace_id": .uuidPrefix(id),
-                            "reason": .errorCode(String(describing: type(of: error)))
-                        ]
-                    )
-                }
-            }
-            workspacesCache = loaded
-            activeWorkspaceID = try await keychain.loadActiveWorkspaceID()
-            // If the cached active ID points at a workspace we couldn't load,
-            // promote the first available workspace (or clear).
-            if let active = activeWorkspaceID, !workspacesCache.contains(where: { $0.id == active }) {
-                if let next = workspacesCache.first {
-                    activeWorkspaceID = next.id
-                    try? await keychain.saveActiveWorkspaceID(next.id)
-                } else {
-                    activeWorkspaceID = nil
-                    try? await keychain.clearActiveWorkspaceID()
-                }
-            }
+            ids = try await keychain.loadWorkspacesIndex()
         } catch {
             await logger.error(
-                "failed to load persisted state",
+                "auth.start.index_load_failed",
                 metadata: ["reason": .errorCode(String(describing: type(of: error)))]
             )
+            return
+        }
+
+        var loaded: [WorkspaceCredential] = []
+        for id in ids {
+            do {
+                let credential = try await keychain.loadCredential(workspaceID: id)
+                let session = try await keychain.loadSessionToken(workspaceID: id)
+                let xcodeSPN = try await keychain.loadXcodeSPNCredentials(workspaceID: id)
+                await lakeloomApp.configure(
+                    workspaceID: id,
+                    config: LakeloomAppClientConfig(
+                        workspaceURL: credential.workspaceURL,
+                        appBaseURL: credential.appBaseURL,
+                        xcodeSPN: xcodeSPN,
+                        sessionToken: session
+                    )
+                )
+                loaded.append(credential)
+            } catch {
+                await logger.warning(
+                    "auth.start.dropping_unreadable_credential",
+                    metadata: [
+                        "workspace_id": .uuidPrefix(id),
+                        "reason": .errorCode(String(describing: type(of: error)))
+                    ]
+                )
+            }
+        }
+        workspacesCache = loaded
+
+        do {
+            activeWorkspaceID = try await keychain.loadActiveWorkspaceID()
+        } catch {
+            activeWorkspaceID = nil
+        }
+        // If the cached active ID points at a workspace we couldn't load,
+        // promote the first available workspace (or clear).
+        if let active = activeWorkspaceID, !workspacesCache.contains(where: { $0.id == active }) {
+            if let next = workspacesCache.first {
+                activeWorkspaceID = next.id
+                try? await keychain.saveActiveWorkspaceID(next.id)
+            } else {
+                activeWorkspaceID = nil
+                try? await keychain.clearActiveWorkspaceID()
+            }
         }
     }
 
@@ -140,8 +136,7 @@ public actor AuthService: AuthServicing {
             let (stream, continuation) = AsyncStream<AuthEvent>.makeStream()
             let id = UUID()
             // Synchronous registration: by the time `await service.events`
-            // returns the subscriber is already in the broadcast set, so
-            // immediately-following events reach this subscriber.
+            // returns the subscriber is already in the broadcast set.
             eventContinuations[id] = continuation
             continuation.onTermination = { [weak self] _ in
                 guard let self else { return }
@@ -155,155 +150,175 @@ public actor AuthService: AuthServicing {
         guard let workspaceID = activeWorkspaceID else {
             throw AuthError.noActiveWorkspace
         }
-
-        if let inflight = refreshTasks[workspaceID] {
-            do {
-                return try await inflight.value
-            } catch {
-                throw mapAuthError(error)
-            }
-        }
-
-        // Fast path: cached token is fresh and forceRefresh wasn't requested.
-        if !forceRefresh {
-            do {
-                let stored = try await keychain.loadAccessToken(workspaceID: workspaceID)
-                if !stored.isExpired(now: nowProvider()) {
-                    return stored
-                }
-            } catch KeychainError.itemNotFound {
-                // Fall through to refresh.
-            } catch {
-                throw mapAuthError(error)
-            }
-        }
-
-        // Slow path: dedup-on-workspace-id refresh task.
-        let task = Task<AccessToken, any Error> { [self] in
-            try await performRefresh(workspaceID: workspaceID)
-        }
-        refreshTasks[workspaceID] = task
-        defer { refreshTasks[workspaceID] = nil }
+        // `forceRefresh` is preserved for the protocol contract, but the
+        // M2M cache inside LakeloomAppClient transparently re-acquires
+        // on near-expiry — we never need to bypass it.
+        _ = forceRefresh
+        let bearer: String
         do {
-            return try await task.value
-        } catch {
+            bearer = try await lakeloomApp.currentBearer(workspaceID: workspaceID)
+        } catch let error as LakeloomAppError {
             throw mapAuthError(error)
+        } catch {
+            throw AuthError.unexpectedResponse(reason: error.localizedDescription)
         }
+        // We don't have a server-supplied exact expiry on this path —
+        // LakeloomAppClient holds it internally for its caching needs.
+        // Callers of `currentToken()` only need the value + workspaceID;
+        // the AccessToken `expiresAt` field is informational, so we
+        // synthesize a near-term "good for at least 60s" expiry.
+        return AccessToken(
+            value: bearer,
+            expiresAt: nowProvider().addingTimeInterval(60),
+            workspaceID: workspaceID
+        )
     }
 
-    @MainActor
-    public func signIn(
-        workspaceURL: URL,
-        presenting: ASWebAuthenticationPresentationContextProviding
+    public func signInViaPairing(
+        qrText: String,
+        deviceLabel: String
     ) async throws -> WorkspaceCredential {
-        await logger.info(
-            "signin.start",
-            metadata: ["workspace_host": .string(workspaceURL.host ?? "<no-host>")]
-        )
+        await logger.info("signin.start", metadata: ["device_label": .redacted(label: "device_label")])
+        recordSignInAttempt()
 
-        let normalizedURL: URL
-        do {
-            normalizedURL = try Self.normalize(workspaceURL: workspaceURL)
-        } catch let error as AuthError {
-            await logger.error(
-                "signin.url_normalize_failed",
-                metadata: ["raw_url": .string(workspaceURL.absoluteString)],
-                errorCode: "invalid_workspace_url"
-            )
-            throw error
-        } catch {
-            await logger.error(
-                "signin.url_normalize_failed",
-                metadata: ["raw_url": .string(workspaceURL.absoluteString)],
-                errorCode: "invalid_workspace_url"
-            )
-            throw AuthError.invalidWorkspaceURL(workspaceURL.absoluteString)
+        // Best-effort: log this device's outbound public IP so the
+        // user can configure the workspace IP allowlist that gates
+        // the Databricks App. Doesn't block sign-in if the lookup
+        // fails (no network, ipify down, etc.). Runs concurrently
+        // with the rest of the flow.
+        Task.detached { [logger] in
+            await Self.logPublicIP(logger: logger)
         }
 
-        await self.recordSignInAttempt()
-
-        let tokens: OAuthTokenResponse
+        // 1. Decode QR payload.
+        let payload: PairingPayload
         do {
-            tokens = try await oauth.performAuthorizationCodeFlow(
-                workspaceURL: normalizedURL,
-                clientID: config.clientID,
-                scopes: config.scopes,
-                presenting: presenting
-            )
-        } catch let error as OAuthError {
-            await self.recordSignInOutcome(error: error)
+            payload = try PairingPayload.decode(from: qrText)
+        } catch let error as PairingPayload.DecodingError {
+            recordSignInOutcome(error: AuthError.invalidPairingPayload(reason: String(describing: error)))
             await logger.error(
-                "signin.oauth_failed",
+                "signin.qr_decode_failed",
                 metadata: ["reason": .string(String(describing: error))],
-                errorCode: String(describing: error).split(separator: "(").first.map(String.init) ?? "oauth_failed"
+                errorCode: "invalid_pairing_payload"
             )
-            throw mapAuthError(error)
+            throw AuthError.invalidPairingPayload(reason: String(describing: error))
         } catch {
-            await self.recordSignInOutcome(error: nil)
-            await logger.error(
-                "signin.oauth_unexpected",
-                metadata: ["reason": .string(error.localizedDescription)],
-                errorCode: "oauth_failed"
-            )
-            throw AuthError.oauthFailed(reason: error.localizedDescription)
+            recordSignInOutcome(error: nil)
+            throw AuthError.invalidPairingPayload(reason: error.localizedDescription)
         }
-        await logger.info("signin.oauth_ok")
-
-        // Fetch identity using the freshly-issued bearer.
-        let me: SCIMMeResponse
-        do {
-            me = try await identity.fetchMe(workspaceURL: normalizedURL, bearerToken: tokens.accessToken)
-        } catch let error as IdentityClientError {
-            await self.recordSignInOutcome(error: nil)
-            await logger.error(
-                "signin.identity_failed",
-                metadata: ["reason": .string(String(describing: error))],
-                errorCode: "identity_fetch_failed"
-            )
-            throw mapAuthError(error)
-        } catch {
-            await self.recordSignInOutcome(error: nil)
-            await logger.error(
-                "signin.identity_unexpected",
-                metadata: ["reason": .string(error.localizedDescription)],
-                errorCode: "identity_fetch_failed"
-            )
-            throw AuthError.identityFetchFailed(reason: error.localizedDescription)
-        }
-        await logger.info("signin.identity_ok")
-
-        // Hop into actor isolation to persist + activate.
-        let credential = try await self.persistNewSignIn(
-            normalizedURL: normalizedURL,
-            user: me.toUserIdentity(),
-            tokens: tokens
-        )
         await logger.info(
-            "signin.persisted",
+            "signin.qr_decoded",
             metadata: [
-                "workspace_id": .uuidPrefix(credential.id),
-                "user_id": .uuidPrefix(credential.user.userID)
+                "workspace_host": .string(payload.workspace.url.host ?? "<no-host>"),
+                "user": .redacted(label: "scim_id"),
+                // Same prefix shape as M2MTokenClient's m2m.token.attempt
+                // — visually compare these two log lines to confirm the
+                // QR-delivered client_id is what's exchanged for the
+                // M2M token. Both should match the workspace UI's
+                // Xcode SPN application_id.
+                "xcode_client_id_prefix": .string(String(payload.xcodeSPN.clientID.prefix(12))),
+                // Surfaces whether Genie's x-forwarded-host fix made it
+                // into this QR. Should be the public databricksapps.com
+                // URL, NOT https://localhost:8000.
+                "app_base_url": .string(payload.app.baseURL.absoluteString)
             ]
         )
-        return credential
-    }
 
-    public func validateWorkspaceURL(_ workspaceURL: URL) async throws {
-        let normalized: URL
+        // 2. Generate / load device pubkey (Secure Enclave).
+        let devicePubKeyDER: Data
         do {
-            normalized = try Self.normalize(workspaceURL: workspaceURL)
-        } catch let error as AuthError {
-            throw error
+            devicePubKeyDER = try await deviceKeyStore.publicKeyDER()
+        } catch let error as DeviceKeyStoreError {
+            recordSignInOutcome(error: nil)
+            await logger.error(
+                "signin.device_key_failed",
+                metadata: ["reason": .string(String(describing: error))],
+                errorCode: "device_key_failed"
+            )
+            throw AuthError.deviceKeyFailed(reason: String(describing: error))
         } catch {
-            throw AuthError.invalidWorkspaceURL(workspaceURL.absoluteString)
+            recordSignInOutcome(error: nil)
+            throw AuthError.deviceKeyFailed(reason: error.localizedDescription)
         }
+
+        // 3. Configure LakeloomAppClient for this workspace so the
+        // /api/pairing/confirm call (and all future calls) can sign +
+        // mint M2M against the new payload.
+        let workspaceID = Self.derivedWorkspaceID(from: payload.workspace.url)
+        await lakeloomApp.configure(
+            workspaceID: workspaceID,
+            config: LakeloomAppClientConfig(
+                workspaceURL: payload.workspace.url,
+                appBaseURL: payload.app.baseURL,
+                xcodeSPN: XcodeSPNCredentials(payload.xcodeSPN),
+                sessionToken: payload.session.token
+            )
+        )
+
+        // 4. POST /api/pairing/confirm.
+        struct ConfirmRequest: Encodable {
+            let device_pubkey: String
+            let device_label: String
+        }
+        struct ConfirmResponse: Decodable {
+            let paired_session_id: String
+            let paired_at: Date?
+            let expires_at: Date?
+        }
+        let bodyData: Data
         do {
-            _ = try await oauth.discoverEndpoints(workspaceURL: normalized)
-        } catch let error as OAuthError {
+            let encoder = JSONEncoder()
+            bodyData = try encoder.encode(ConfirmRequest(
+                device_pubkey: devicePubKeyDER.base64URLEncodedString(),
+                device_label: deviceLabel
+            ))
+        } catch {
+            recordSignInOutcome(error: nil)
+            throw AuthError.unexpectedResponse(reason: "could not encode confirm body: \(error)")
+        }
+
+        let response: ConfirmResponse
+        do {
+            response = try await lakeloomApp.request(
+                workspaceID: workspaceID,
+                method: .post,
+                path: "/api/pairing/confirm",
+                body: bodyData,
+                decode: ConfirmResponse.self
+            )
+        } catch let error as LakeloomAppError {
+            await lakeloomApp.removeConfiguration(workspaceID: workspaceID)
+            recordSignInOutcome(error: nil)
+            await logger.error(
+                "signin.confirm_failed",
+                metadata: ["reason": .string(String(describing: error))],
+                errorCode: "pairing_failed"
+            )
             throw mapAuthError(error)
         } catch {
-            throw AuthError.invalidWorkspaceURL(workspaceURL.absoluteString)
+            await lakeloomApp.removeConfiguration(workspaceID: workspaceID)
+            recordSignInOutcome(error: nil)
+            throw AuthError.pairingFailed(reason: error.localizedDescription)
         }
+        await logger.info(
+            "signin.confirm_ok",
+            metadata: ["paired_session_id": .uuidPrefix(response.paired_session_id)]
+        )
+
+        // 5. Persist to Keychain and broadcast.
+        let credential = try await persistPairing(
+            payload: payload,
+            pairedSessionID: response.paired_session_id,
+            workspaceID: workspaceID
+        )
+
+        recordSignInOutcome(error: nil)
+        broadcast(.signedIn(credential))
+        await logger.info(
+            "signin.persisted",
+            metadata: ["workspace_id": .uuidPrefix(credential.id)]
+        )
+        return credential
     }
 
     public func switchWorkspace(to workspaceID: String) async throws {
@@ -322,6 +337,7 @@ public actor AuthService: AuthServicing {
         try await keychain.deleteTokens(workspaceID: workspaceID)
         workspacesCache.removeAll { $0.id == workspaceID }
         try await keychain.saveWorkspacesIndex(workspacesCache.map(\.id))
+        await lakeloomApp.removeConfiguration(workspaceID: workspaceID)
 
         if activeWorkspaceID == workspaceID {
             if let next = workspacesCache.first {
@@ -341,39 +357,6 @@ public actor AuthService: AuthServicing {
             try await signOut(workspaceID: id)
         }
         try await keychain.clearAll()
-    }
-
-    public func refreshIdentity() async throws -> UserIdentity {
-        guard let active = activeWorkspace else {
-            throw AuthError.noActiveWorkspace
-        }
-        let token = try await currentToken(forceRefresh: false)
-        let me: SCIMMeResponse
-        do {
-            me = try await identity.fetchMe(workspaceURL: active.workspaceURL, bearerToken: token.value)
-        } catch let error as IdentityClientError {
-            throw mapAuthError(error)
-        } catch {
-            throw AuthError.identityFetchFailed(reason: error.localizedDescription)
-        }
-        let user = me.toUserIdentity()
-        let updated = WorkspaceCredential(
-            id: active.id,
-            workspaceURL: active.workspaceURL,
-            workspaceName: active.workspaceName,
-            cloud: active.cloud,
-            region: active.region,
-            user: user,
-            isDefault: active.isDefault,
-            signedInAt: active.signedInAt,
-            identityRefreshedAt: nowProvider()
-        )
-        try await keychain.saveCredential(updated)
-        if let index = workspacesCache.firstIndex(where: { $0.id == active.id }) {
-            workspacesCache[index] = updated
-        }
-        broadcast(.identityRefreshed(updated))
-        return user
     }
 
     /// Snapshot of the diagnostic counters.
@@ -408,7 +391,7 @@ public actor AuthService: AuthServicing {
         )
     }
 
-    private func recordSignInOutcome(error: OAuthError?) {
+    private func recordSignInOutcome(error: AuthError?) {
         let cancelledDelta = error == .userCancelled ? 1 : 0
         let failedDelta = error.map { $0 == .userCancelled ? 0 : 1 } ?? 0
         let succeededDelta = error == nil ? 1 : 0
@@ -426,68 +409,43 @@ public actor AuthService: AuthServicing {
         )
     }
 
-    private func recordRefreshOutcome(workspaceID: String, success: Bool) {
-        if success {
-            diagnosticsState = AuthDiagnostics(
-                signInsAttempted: diagnosticsState.signInsAttempted,
-                signInsSucceeded: diagnosticsState.signInsSucceeded,
-                signInsCancelled: diagnosticsState.signInsCancelled,
-                signInsFailed: diagnosticsState.signInsFailed,
-                refreshesAttempted: diagnosticsState.refreshesAttempted + 1,
-                refreshesSucceeded: diagnosticsState.refreshesSucceeded + 1,
-                refreshesFailed: diagnosticsState.refreshesFailed,
-                lastSuccessfulRefreshAt: nowProvider(),
-                lastRefreshFailureAt: diagnosticsState.lastRefreshFailureAt,
-                perWorkspaceRefreshFailures: diagnosticsState.perWorkspaceRefreshFailures
-            )
-        } else {
-            var failures = diagnosticsState.perWorkspaceRefreshFailures
-            failures[workspaceID, default: 0] += 1
-            diagnosticsState = AuthDiagnostics(
-                signInsAttempted: diagnosticsState.signInsAttempted,
-                signInsSucceeded: diagnosticsState.signInsSucceeded,
-                signInsCancelled: diagnosticsState.signInsCancelled,
-                signInsFailed: diagnosticsState.signInsFailed,
-                refreshesAttempted: diagnosticsState.refreshesAttempted + 1,
-                refreshesSucceeded: diagnosticsState.refreshesSucceeded,
-                refreshesFailed: diagnosticsState.refreshesFailed + 1,
-                lastSuccessfulRefreshAt: diagnosticsState.lastSuccessfulRefreshAt,
-                lastRefreshFailureAt: nowProvider(),
-                perWorkspaceRefreshFailures: failures
-            )
-        }
-    }
-
-    private func persistNewSignIn(
-        normalizedURL: URL,
-        user: UserIdentity,
-        tokens: OAuthTokenResponse
+    private func persistPairing(
+        payload: PairingPayload,
+        pairedSessionID: String,
+        workspaceID: String
     ) async throws -> WorkspaceCredential {
-        let workspaceID = Self.derivedWorkspaceID(from: normalizedURL)
         let now = nowProvider()
+        let identity = UserIdentity(
+            userID: payload.user.scimID,
+            userName: payload.user.userName,
+            displayName: payload.user.displayName,
+            email: payload.user.userName.contains("@") ? payload.user.userName : nil,
+            active: true
+        )
         let credential = WorkspaceCredential(
             id: workspaceID,
-            workspaceURL: normalizedURL,
-            workspaceName: Self.derivedWorkspaceName(from: normalizedURL),
-            cloud: Self.derivedCloud(from: normalizedURL),
+            workspaceURL: payload.workspace.url,
+            workspaceName: payload.workspace.name,
+            cloud: payload.workspace.cloudCase,
             region: nil,
-            user: user,
+            user: identity,
             isDefault: workspacesCache.isEmpty,
             signedInAt: now,
-            identityRefreshedAt: now
-        )
-        let accessToken = AccessToken(
-            value: tokens.accessToken,
-            expiresAt: now.addingTimeInterval(TimeInterval(max(tokens.expiresIn - 60, 60))),
-            workspaceID: workspaceID
+            identityRefreshedAt: now,
+            appBaseURL: payload.app.baseURL,
+            authMethod: .qrPaired(
+                pairedSessionID: pairedSessionID,
+                sessionExpiresAt: payload.session.expiresAt
+            )
         )
 
         try await keychain.saveCredential(credential)
-        try await keychain.saveAccessToken(accessToken)
-        if let refreshToken = tokens.refreshToken {
-            try await keychain.saveRefreshToken(refreshToken, workspaceID: workspaceID)
-        }
-        // Update the workspaces index in a stable order: existing then new.
+        try await keychain.saveSessionToken(payload.session.token, workspaceID: workspaceID)
+        try await keychain.saveXcodeSPNCredentials(
+            XcodeSPNCredentials(payload.xcodeSPN),
+            workspaceID: workspaceID
+        )
+
         if let index = workspacesCache.firstIndex(where: { $0.id == workspaceID }) {
             workspacesCache[index] = credential
         } else {
@@ -497,125 +455,76 @@ public actor AuthService: AuthServicing {
         activeWorkspaceID = workspaceID
         try await keychain.saveActiveWorkspaceID(workspaceID)
 
-        recordSignInOutcome(error: nil)
-        broadcast(.signedIn(credential))
         return credential
-    }
-
-    private func performRefresh(workspaceID: String) async throws -> AccessToken {
-        let credential = try await keychain.loadCredential(workspaceID: workspaceID)
-        let refreshToken = try await keychain.loadRefreshToken(workspaceID: workspaceID)
-        let response: OAuthTokenResponse
-        do {
-            response = try await oauth.refreshTokens(
-                workspaceURL: credential.workspaceURL,
-                clientID: config.clientID,
-                refreshToken: refreshToken
-            )
-        } catch let error as OAuthError {
-            recordRefreshOutcome(workspaceID: workspaceID, success: false)
-            if error.isInvalidGrant {
-                // Clear tokens but keep the credential record so the UI can
-                // surface "Re-login required" without losing the workspace.
-                try? await keychain.deleteTokens(workspaceID: workspaceID)
-            }
-            throw error
-        } catch {
-            recordRefreshOutcome(workspaceID: workspaceID, success: false)
-            throw error
-        }
-        let now = nowProvider()
-        let access = AccessToken(
-            value: response.accessToken,
-            expiresAt: now.addingTimeInterval(TimeInterval(max(response.expiresIn - 60, 60))),
-            workspaceID: workspaceID
-        )
-        try await keychain.saveAccessToken(access)
-        if let newRefresh = response.refreshToken {
-            try await keychain.saveRefreshToken(newRefresh, workspaceID: workspaceID)
-        }
-        recordRefreshOutcome(workspaceID: workspaceID, success: true)
-        return access
     }
 
     // MARK: - Pure helpers
 
-    static func normalize(workspaceURL: URL) throws -> URL {
-        guard
-            let host = workspaceURL.host,
-            !host.isEmpty
-        else {
-            throw AuthError.invalidWorkspaceURL(workspaceURL.absoluteString)
+    /// Hits `https://api.ipify.org?format=text` to learn this device's
+    /// outbound public IP, then logs it. Useful for configuring the
+    /// workspace IP allowlist that gates the Databricks App. Cellular
+    /// connections typically return a CGN address that's part of the
+    /// carrier's pool (a range; allowlisting it grants traffic from any
+    /// device on that carrier — generally too broad). Wi-Fi behind a
+    /// home/office router returns that network's NAT'd public IP, which
+    /// is the right unit for an allowlist entry.
+    ///
+    /// Best-effort — failure is logged at .debug and never propagates.
+    /// nonisolated so it can run from a Task.detached without dragging
+    /// the actor in.
+    nonisolated static func logPublicIP(logger: AppLogger) async {
+        guard let url = URL(string: "https://api.ipify.org?format=text") else { return }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 5
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                await logger.debug("signin.public_ip_lookup_failed", metadata: ["reason": .string("non-200")])
+                return
+            }
+            let ip = (String(data: data, encoding: .utf8) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            await logger.info(
+                "signin.public_ip",
+                metadata: [
+                    "public_ip": .string(ip.isEmpty ? "<empty>" : ip),
+                    "hint": .string("add to workspace IP allowlist if the App rejects with 403")
+                ]
+            )
+        } catch {
+            await logger.debug(
+                "signin.public_ip_lookup_failed",
+                metadata: ["reason": .string(error.localizedDescription)]
+            )
         }
-        // Build a clean https://<host> URL with no path / query / fragment.
-        var components = URLComponents()
-        components.scheme = "https"
-        components.host = host
-        guard let url = components.url else {
-            throw AuthError.invalidWorkspaceURL(workspaceURL.absoluteString)
-        }
-        return url
     }
 
     static func derivedWorkspaceID(from url: URL) -> String {
-        // Until SCIM `meta.location` parsing is wired up (Module 01 §5.7 open
-        // item), use the host as a stable opaque identifier. The bronze table
-        // accepts whatever string we send.
+        // Until SCIM `meta.location` parsing is wired up (Module 01 §5.7
+        // open item), use the host as a stable opaque identifier.
         url.host ?? url.absoluteString
-    }
-
-    static func derivedWorkspaceName(from url: URL) -> String {
-        url.host ?? url.absoluteString
-    }
-
-    static func derivedCloud(from url: URL) -> Cloud {
-        guard let host = url.host?.lowercased() else { return .unknown }
-        if host.contains("azuredatabricks") { return .azure }
-        if host.contains("gcp") { return .gcp }
-        return .aws
     }
 
     nonisolated private func mapAuthError(_ error: any Error) -> AuthError {
         if let authError = error as? AuthError { return authError }
-        if let oauthError = error as? OAuthError {
-            switch oauthError {
-            case .userCancelled: return .userCancelled
-            case .invalidGrant: return .refreshFailed(reason: "refresh_token expired or revoked; re-login required")
+        if let appError = error as? LakeloomAppError {
+            switch appError {
             case .networkUnavailable: return .networkUnavailable
-            case .timeout: return .oauthFailed(reason: "timeout")
-            case .stateMismatch: return .oauthFailed(reason: "state mismatch")
-            case .invalidWorkspaceURL(let reason): return .invalidWorkspaceURL(reason)
-            case .discoveryFailed(let reason): return .invalidWorkspaceURL(reason)
-            case .authorizationFailed(let reason),
-                 .tokenExchangeFailed(let reason),
-                 .unexpectedResponse(let reason):
-                return .oauthFailed(reason: reason)
-            case .unauthorizedClient: return .oauthFailed(reason: "unauthorized_client")
-            case .randomGenerationFailed(let status): return .keychainFailed(status)
-            }
-        }
-        if let identityError = error as? IdentityClientError {
-            switch identityError {
-            case .unauthorized: return .refreshFailed(reason: "identity 401 — re-login required")
-            case .forbidden: return .identityFetchFailed(reason: "forbidden")
-            case .networkUnavailable: return .networkUnavailable
-            case .timeout: return .identityFetchFailed(reason: "timeout")
-            case .serverUnavailable(let status): return .identityFetchFailed(reason: "HTTP \(status)")
-            case .decodeFailed(let reason): return .identityFetchFailed(reason: reason)
-            case .transport(let reason): return .identityFetchFailed(reason: reason)
-            case .unexpectedResponse(let reason): return .identityFetchFailed(reason: reason)
-            }
-        }
-        if let keychainError = error as? KeychainError {
-            switch keychainError {
-            case .osStatus(let status):
-                return .keychainFailed(status)
-            case .unsupportedSchemaVersion(let found, let supported):
-                return .unexpectedResponse(reason: "keychain schema v\(found), expected v\(supported)")
-            case .itemNotFound:
-                return .refreshFailed(reason: "credential or token not found")
-            case .decodeFailed(let reason), .encodeFailed(let reason):
+            case .timeout: return .unexpectedResponse(reason: "timeout")
+            case .tokenExchangeFailed(let reason): return .refreshFailed(reason: reason)
+            case .unauthorized(let kind, let detail):
+                switch kind {
+                case .tokenNotFound, .tokenExpired:
+                    return .refreshFailed(reason: detail)
+                case .signatureInvalid, .timestampSkew, .unknown:
+                    return .pairingFailed(reason: detail)
+                }
+            case .workspaceNotConfigured(let id):
+                return .unknownWorkspace(id)
+            case .transport(let reason), .decodeFailed(let reason):
                 return .unexpectedResponse(reason: reason)
+            case .httpError(let status, let detail):
+                return .pairingFailed(reason: "HTTP \(status): \(detail)")
             }
         }
         return .unexpectedResponse(reason: error.localizedDescription)

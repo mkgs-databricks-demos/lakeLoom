@@ -3,330 +3,262 @@ import Testing
 
 @testable import LakeloomApp
 
-@Suite("AuthService")
-@MainActor
+@Suite("AuthService — QR-pair flow")
 struct AuthServiceTests {
 
-    // MARK: Fixture helpers
+    // MARK: Fixtures
 
     private static let workspaceURL = URL(string: "https://acme.cloud.databricks.com")!
-    private static let clientID = "lakeloom-test-client"
+    private static let appBaseURL = URL(string: "https://lakeloom-ai-dev-1234.aws.databricksapps.com")!
 
-    private func makeService(
-        oauth: FakeOAuthClient = FakeOAuthClient(),
-        keychain: InMemoryKeychainStore = InMemoryKeychainStore(),
-        identity: StubDatabricksIdentityClient = StubDatabricksIdentityClient(),
+    private static func samplePayloadJSON(
+        workspaceHost: String = "acme.cloud.databricks.com",
+        appBase: String = "https://lakeloom-ai-dev-1234.aws.databricksapps.com"
+    ) -> String {
+        """
+        {
+          "v": 1,
+          "workspace": {
+            "url": "https://\(workspaceHost)",
+            "id": "1234",
+            "name": "ACME",
+            "cloud": "aws"
+          },
+          "user": {
+            "scim_id": "5f33",
+            "user_name": "user@example.com",
+            "display_name": "Test User"
+          },
+          "xcode_spn": {
+            "client_id": "xcode-client",
+            "client_secret": "xcode-secret"
+          },
+          "session": {
+            "token": "session-tok",
+            "expires_at": "2026-05-21T20:00:00Z"
+          },
+          "app": {
+            "base_url": "\(appBase)"
+          }
+        }
+        """
+    }
+
+    private static func encodedQR(json: String) -> String {
+        Data(json.utf8).base64EncodedString()
+    }
+
+    /// Builds an AuthService with all in-memory deps + a programmable
+    /// pairing-confirm response.
+    private static func makeService(
+        confirmResponseJSON: String? = nil,
+        confirmStatusCode: Int = 200,
         now: Date = Date(timeIntervalSince1970: 1_700_000_000)
-    ) -> (AuthService, FakeOAuthClient, InMemoryKeychainStore, StubDatabricksIdentityClient) {
-        let config = AuthConfig(clientID: Self.clientID)
+    ) async -> (
+        AuthService,
+        FakeLakeloomAppClient,
+        InMemoryDeviceKeyStore,
+        InMemoryKeychainStore
+    ) {
+        let lakeloom = FakeLakeloomAppClient()
+        let deviceKeys = InMemoryDeviceKeyStore()
+        let keychain = InMemoryKeychainStore()
+        if let body = confirmResponseJSON {
+            await lakeloom.enqueueResponse(
+                .success(Data(body.utf8))
+            )
+        }
         let service = AuthService(
-            config: config,
-            oauth: oauth,
+            lakeloomApp: lakeloom,
+            deviceKeyStore: deviceKeys,
             keychain: keychain,
-            identity: identity,
             nowProvider: { now }
         )
-        return (service, oauth, keychain, identity)
+        return (service, lakeloom, deviceKeys, keychain)
     }
 
-    private func successTokens(
-        accessToken: String = "atk-1",
-        refreshToken: String? = "rtk-1",
-        expiresIn: Int = 3600
-    ) -> OAuthTokenResponse {
-        OAuthTokenResponse(
-            accessToken: accessToken,
-            refreshToken: refreshToken,
-            tokenType: "Bearer",
-            expiresIn: expiresIn,
-            scope: "all-apis offline_access"
-        )
-    }
+    // MARK: signInViaPairing happy path
 
-    private func successMe(id: String = "user-1", userName: String = "u@example.com") -> SCIMMeResponse {
-        SCIMMeResponse(
-            id: id,
-            userName: userName,
-            displayName: "User One",
-            active: true,
-            emails: [.init(value: userName, primary: true)]
-        )
-    }
-
-    // MARK: signIn happy path
-
-    @Test("signIn persists credential, sets active workspace, broadcasts .signedIn")
+    @Test("signInViaPairing decodes QR, configures lakeloomApp, posts confirm, persists credentials")
     func signInHappyPath() async throws {
-        let (service, oauth, keychain, identity) = makeService()
-        oauth.enqueueAuthorization(.success(successTokens()))
-        identity.enqueue(.success(successMe()))
+        let confirmBody = """
+        {
+          "paired_session_id": "paired-uuid-1",
+          "paired_at": "2026-05-14T10:00:00Z",
+          "expires_at": "2026-05-21T20:00:00Z"
+        }
+        """
+        let (service, lakeloom, _, keychain) = await Self.makeService(
+            confirmResponseJSON: confirmBody
+        )
+        let qr = Self.encodedQR(json: Self.samplePayloadJSON())
 
-        let presenter = TestPresentationProvider()
-        let stream = await service.events
-        var iterator = stream.makeAsyncIterator()
-        async let firstEvent = iterator.next()
+        let credential = try await service.signInViaPairing(
+            qrText: qr,
+            deviceLabel: "Test iPhone"
+        )
 
-        let credential = try await service.signIn(workspaceURL: Self.workspaceURL, presenting: presenter)
-
-        #expect(credential.user.userID == "user-1")
-        #expect(credential.workspaceURL.host == "acme.cloud.databricks.com")
-        let active = await service.activeWorkspace
-        #expect(active?.id == credential.id)
-
-        let storedAccess = try await keychain.loadAccessToken(workspaceID: credential.id)
-        #expect(storedAccess.value == "atk-1")
-        let storedRefresh = try await keychain.loadRefreshToken(workspaceID: credential.id)
-        #expect(storedRefresh == "rtk-1")
-        let activeStored = try await keychain.loadActiveWorkspaceID()
-        #expect(activeStored == credential.id)
-        let index = try await keychain.loadWorkspacesIndex()
-        #expect(index == [credential.id])
-
-        let event = await firstEvent
-        if case .signedIn(let cred) = event {
-            #expect(cred.id == credential.id)
+        #expect(credential.id == "acme.cloud.databricks.com")
+        #expect(credential.workspaceName == "ACME")
+        #expect(credential.cloud == .aws)
+        #expect(credential.appBaseURL == Self.appBaseURL)
+        #expect(credential.user.userName == "user@example.com")
+        if case .qrPaired(let pairedID, _) = credential.authMethod {
+            #expect(pairedID == "paired-uuid-1")
         } else {
-            Issue.record("expected .signedIn event")
+            Issue.record("expected qrPaired auth method")
+        }
+
+        // Verify Keychain was populated.
+        let stored = try await keychain.loadCredential(workspaceID: credential.id)
+        #expect(stored.appBaseURL == Self.appBaseURL)
+        let sessionToken = try await keychain.loadSessionToken(workspaceID: credential.id)
+        #expect(sessionToken == "session-tok")
+        let xcodeSPN = try await keychain.loadXcodeSPNCredentials(workspaceID: credential.id)
+        #expect(xcodeSPN.clientID == "xcode-client")
+        #expect(xcodeSPN.clientSecret == "xcode-secret")
+
+        // Verify lakeloomApp was configured.
+        let configured = await lakeloom.configured[credential.id]
+        #expect(configured?.appBaseURL == Self.appBaseURL)
+        #expect(configured?.sessionToken == "session-tok")
+
+        // Verify exactly one /api/pairing/confirm request.
+        let calls = await lakeloom.requestCalls
+        #expect(calls.count == 1)
+        #expect(calls.first?.path == "/api/pairing/confirm")
+        #expect(calls.first?.method == .post)
+    }
+
+    // MARK: Error paths
+
+    @Test("signInViaPairing rejects malformed QR")
+    func invalidQR() async throws {
+        let (service, _, _, _) = await Self.makeService()
+        do {
+            _ = try await service.signInViaPairing(
+                qrText: "!!!definitely not base64!!!",
+                deviceLabel: "iPhone"
+            )
+            Issue.record("expected invalidPairingPayload")
+        } catch let error as AuthError {
+            switch error {
+            case .invalidPairingPayload: break
+            default: Issue.record("expected invalidPairingPayload, got \(error)")
+            }
         }
     }
 
-    @Test("signIn surfaces .userCancelled when ASWAS is dismissed")
-    func signInUserCancelled() async throws {
-        let (service, oauth, _, _) = makeService()
-        oauth.enqueueAuthorization(.failure(.userCancelled))
-        let presenter = TestPresentationProvider()
+    @Test("signInViaPairing surfaces App-side rejections as pairingFailed")
+    func confirmRejected() async throws {
+        let lakeloom = FakeLakeloomAppClient()
+        await lakeloom.enqueueResponse(.failure(
+            LakeloomAppError.httpError(status: 409, detail: "already_bound")
+        ))
+        let service = AuthService(
+            lakeloomApp: lakeloom,
+            deviceKeyStore: InMemoryDeviceKeyStore(),
+            keychain: InMemoryKeychainStore()
+        )
+        let qr = Self.encodedQR(json: Self.samplePayloadJSON())
+
         do {
-            _ = try await service.signIn(workspaceURL: Self.workspaceURL, presenting: presenter)
-            Issue.record("expected userCancelled to throw")
-        } catch AuthError.userCancelled {
-            #expect(Bool(true))
+            _ = try await service.signInViaPairing(qrText: qr, deviceLabel: "iPhone")
+            Issue.record("expected pairingFailed")
+        } catch let error as AuthError {
+            switch error {
+            case .pairingFailed(let reason):
+                #expect(reason.contains("409") || reason.contains("already_bound"))
+            default: Issue.record("expected pairingFailed, got \(error)")
+            }
         }
     }
 
-    // MARK: currentToken
+    @Test("signInViaPairing maps Layer 0 token failure to refreshFailed")
+    func tokenExchangeFailed() async throws {
+        let lakeloom = FakeLakeloomAppClient()
+        await lakeloom.enqueueResponse(.failure(
+            LakeloomAppError.tokenExchangeFailed(reason: "invalid_client")
+        ))
+        let service = AuthService(
+            lakeloomApp: lakeloom,
+            deviceKeyStore: InMemoryDeviceKeyStore(),
+            keychain: InMemoryKeychainStore()
+        )
+        let qr = Self.encodedQR(json: Self.samplePayloadJSON())
 
-    @Test("currentToken returns cached token when not near expiry")
-    func currentTokenReturnsCached() async throws {
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let (service, oauth, _, identity) = makeService(now: now)
-        // Sign in first; token has expiresIn=3600 so it's fresh at `now`.
-        oauth.enqueueAuthorization(.success(successTokens(accessToken: "fresh", expiresIn: 3600)))
-        identity.enqueue(.success(successMe()))
-        _ = try await service.signIn(workspaceURL: Self.workspaceURL, presenting: TestPresentationProvider())
-
-        let token = try await service.currentToken(forceRefresh: false)
-        #expect(token.value == "fresh")
-        let calls = oauth.calls
-        // Authorization happened; refresh did NOT.
-        #expect(calls.refreshCalls.isEmpty)
-    }
-
-    @Test("currentToken with forceRefresh triggers a refresh against the token endpoint")
-    func currentTokenForceRefresh() async throws {
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let (service, oauth, _, identity) = makeService(now: now)
-        oauth.enqueueAuthorization(.success(successTokens(accessToken: "stale", expiresIn: 3600)))
-        identity.enqueue(.success(successMe()))
-        _ = try await service.signIn(workspaceURL: Self.workspaceURL, presenting: TestPresentationProvider())
-
-        oauth.enqueueRefresh(.success(successTokens(accessToken: "fresh", refreshToken: "rtk-2", expiresIn: 3600)))
-        let token = try await service.currentToken(forceRefresh: true)
-        #expect(token.value == "fresh")
-        let calls = oauth.calls
-        #expect(calls.refreshCalls.count == 1)
-    }
-
-    @Test("concurrent currentToken(forceRefresh:) calls dedupe on a single refresh")
-    func currentTokenDedupesConcurrentRefresh() async throws {
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let (service, oauth, _, identity) = makeService(now: now)
-        oauth.enqueueAuthorization(.success(successTokens(accessToken: "stale", expiresIn: 3600)))
-        identity.enqueue(.success(successMe()))
-        _ = try await service.signIn(workspaceURL: Self.workspaceURL, presenting: TestPresentationProvider())
-
-        // Only one refresh outcome — if dedup fails the second call would
-        // throw because no second outcome is enqueued.
-        oauth.enqueueRefresh(.success(successTokens(accessToken: "fresh", expiresIn: 3600)))
-
-        async let a = service.currentToken(forceRefresh: true)
-        async let b = service.currentToken(forceRefresh: true)
-        let (tokenA, tokenB) = try await (a, b)
-        #expect(tokenA.value == "fresh")
-        #expect(tokenB.value == "fresh")
-        let calls = oauth.calls
-        #expect(calls.refreshCalls.count == 1)
-    }
-
-    @Test("invalid_grant on refresh clears tokens but keeps credential")
-    func invalidGrantClearsTokensKeepsCredential() async throws {
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
-        let (service, oauth, keychain, identity) = makeService(now: now)
-        oauth.enqueueAuthorization(.success(successTokens(accessToken: "stale", expiresIn: 30)))
-        identity.enqueue(.success(successMe()))
-        let credential = try await service.signIn(workspaceURL: Self.workspaceURL, presenting: TestPresentationProvider())
-
-        oauth.enqueueRefresh(.failure(.invalidGrant))
         do {
-            _ = try await service.currentToken(forceRefresh: true)
+            _ = try await service.signInViaPairing(qrText: qr, deviceLabel: "iPhone")
             Issue.record("expected refreshFailed")
-        } catch AuthError.refreshFailed {
-            #expect(Bool(true))
-        }
-
-        // Credential record should still be loadable.
-        let stillThere = try await keychain.loadCredential(workspaceID: credential.id)
-        #expect(stillThere.id == credential.id)
-        // But tokens are gone.
-        do {
-            _ = try await keychain.loadAccessToken(workspaceID: credential.id)
-            Issue.record("expected access token to be cleared")
-        } catch KeychainError.itemNotFound {
-            #expect(Bool(true))
-        }
-        do {
-            _ = try await keychain.loadRefreshToken(workspaceID: credential.id)
-            Issue.record("expected refresh token to be cleared")
-        } catch KeychainError.itemNotFound {
-            #expect(Bool(true))
+        } catch let error as AuthError {
+            switch error {
+            case .refreshFailed(let reason):
+                #expect(reason.contains("invalid_client"))
+            default: Issue.record("expected refreshFailed, got \(error)")
+            }
         }
     }
 
-    // MARK: signOut
+    // MARK: Sign-out + current token
 
-    @Test("signOut of active workspace promotes the next available")
-    func signOutPromotesNextWorkspace() async throws {
-        let (service, oauth, keychain, identity) = makeService()
-        // Sign in two workspaces.
-        oauth.enqueueAuthorization(.success(successTokens(accessToken: "a")))
-        identity.enqueue(.success(successMe(id: "u-a", userName: "a@a.com")))
-        let first = try await service.signIn(
-            workspaceURL: URL(string: "https://acme-a.cloud.databricks.com")!,
-            presenting: TestPresentationProvider()
+    @Test("signOut clears Keychain entries and drops lakeloomApp config")
+    func signOutCleansUp() async throws {
+        let confirmBody = """
+        { "paired_session_id": "p-1", "paired_at": null, "expires_at": null }
+        """
+        let (service, lakeloom, _, keychain) = await Self.makeService(
+            confirmResponseJSON: confirmBody
         )
+        let qr = Self.encodedQR(json: Self.samplePayloadJSON())
+        let credential = try await service.signInViaPairing(qrText: qr, deviceLabel: "iPhone")
 
-        oauth.enqueueAuthorization(.success(successTokens(accessToken: "b")))
-        identity.enqueue(.success(successMe(id: "u-b", userName: "b@b.com")))
-        let second = try await service.signIn(
-            workspaceURL: URL(string: "https://acme-b.cloud.databricks.com")!,
-            presenting: TestPresentationProvider()
-        )
-
-        let activeBefore = await service.activeWorkspace
-        #expect(activeBefore?.id == second.id)
-
-        try await service.signOut(workspaceID: second.id)
-        let activeAfter = await service.activeWorkspace
-        #expect(activeAfter?.id == first.id)
-        let stored = try await keychain.loadActiveWorkspaceID()
-        #expect(stored == first.id)
-    }
-
-    @Test("signOut of last workspace clears active selection")
-    func signOutLastWorkspaceClearsActive() async throws {
-        let (service, oauth, keychain, identity) = makeService()
-        oauth.enqueueAuthorization(.success(successTokens()))
-        identity.enqueue(.success(successMe()))
-        let credential = try await service.signIn(workspaceURL: Self.workspaceURL, presenting: TestPresentationProvider())
         try await service.signOut(workspaceID: credential.id)
+
+        let workspaces = await service.workspaces
+        #expect(workspaces.isEmpty)
         let active = await service.activeWorkspace
         #expect(active == nil)
-        let stored = try await keychain.loadActiveWorkspaceID()
-        #expect(stored == nil)
-    }
 
-    // MARK: switchWorkspace
+        // Verify lakeloomApp.removeConfiguration was called.
+        let removed = await lakeloom.removedConfigurations
+        #expect(removed.contains(credential.id))
 
-    @Test("switchWorkspace updates active and broadcasts .switchedWorkspace")
-    func switchWorkspaceBroadcasts() async throws {
-        let (service, oauth, _, identity) = makeService()
-        oauth.enqueueAuthorization(.success(successTokens()))
-        identity.enqueue(.success(successMe(id: "u-a")))
-        let first = try await service.signIn(
-            workspaceURL: URL(string: "https://acme-a.cloud.databricks.com")!,
-            presenting: TestPresentationProvider()
-        )
-        oauth.enqueueAuthorization(.success(successTokens()))
-        identity.enqueue(.success(successMe(id: "u-b")))
-        let second = try await service.signIn(
-            workspaceURL: URL(string: "https://acme-b.cloud.databricks.com")!,
-            presenting: TestPresentationProvider()
-        )
-
-        try await service.switchWorkspace(to: first.id)
-        let active = await service.activeWorkspace
-        #expect(active?.id == first.id)
-        // Round-trip: switch back.
-        try await service.switchWorkspace(to: second.id)
-        let active2 = await service.activeWorkspace
-        #expect(active2?.id == second.id)
-    }
-
-    @Test("switchWorkspace throws .unknownWorkspace for an unsigned-in id")
-    func switchUnknownWorkspaceFails() async throws {
-        let (service, _, _, _) = makeService()
+        // Verify Keychain entries are gone.
         do {
-            try await service.switchWorkspace(to: "nonexistent")
-            Issue.record("expected unknownWorkspace")
-        } catch AuthError.unknownWorkspace(let id) {
-            #expect(id == "nonexistent")
-        }
-    }
-
-    // MARK: validateWorkspaceURL
-
-    @Test("validateWorkspaceURL succeeds when discovery succeeds")
-    func validateOK() async throws {
-        let (service, _, _, _) = makeService()
-        try await service.validateWorkspaceURL(Self.workspaceURL)
-    }
-
-    @Test("validateWorkspaceURL maps discovery failure to invalidWorkspaceURL")
-    func validateFails() async throws {
-        let (service, oauth, _, _) = makeService()
-        oauth.setDiscoveryOutcome(.failure(.discoveryFailed(reason: "404 not found")))
-        do {
-            try await service.validateWorkspaceURL(Self.workspaceURL)
-            Issue.record("expected invalidWorkspaceURL")
-        } catch AuthError.invalidWorkspaceURL {
+            _ = try await keychain.loadSessionToken(workspaceID: credential.id)
+            Issue.record("expected itemNotFound")
+        } catch KeychainError.itemNotFound {
             #expect(Bool(true))
         }
     }
 
-    // MARK: normalize
+    @Test("currentToken delegates to lakeloomApp.currentBearer")
+    func currentTokenDelegates() async throws {
+        let confirmBody = """
+        { "paired_session_id": "p-1", "paired_at": null, "expires_at": null }
+        """
+        let (service, lakeloom, _, _) = await Self.makeService(
+            confirmResponseJSON: confirmBody
+        )
+        await lakeloom.setNextBearer("m2m-bearer-xyz")
+        let qr = Self.encodedQR(json: Self.samplePayloadJSON())
+        _ = try await service.signInViaPairing(qrText: qr, deviceLabel: "iPhone")
 
-    @Test("normalize strips path / query / fragment, keeps https + host")
-    func normalizeStripsPath() throws {
-        let messy = URL(string: "https://Acme.cloud.databricks.com/some/path?x=1#frag")!
-        let normalized = try AuthService.normalize(workspaceURL: messy)
-        #expect(normalized.scheme == "https")
-        #expect(normalized.host == "Acme.cloud.databricks.com")
-        #expect(normalized.path.isEmpty)
-        #expect(normalized.query == nil)
-        #expect(normalized.fragment == nil)
+        let token = try await service.currentToken()
+        #expect(token.value == "m2m-bearer-xyz")
     }
 
-    @Test("normalize throws for URL without a host")
-    func normalizeRejectsHostless() {
-        let bad = URL(string: "https:///oauth/callback")!
+    @Test("currentToken throws noActiveWorkspace when not paired")
+    func currentTokenNoWorkspace() async throws {
+        let (service, _, _, _) = await Self.makeService()
         do {
-            _ = try AuthService.normalize(workspaceURL: bad)
-            Issue.record("expected invalidWorkspaceURL")
-        } catch AuthError.invalidWorkspaceURL {
-            #expect(Bool(true))
-        } catch {
-            Issue.record("expected AuthError.invalidWorkspaceURL, got \(error)")
+            _ = try await service.currentToken()
+            Issue.record("expected noActiveWorkspace")
+        } catch let error as AuthError {
+            switch error {
+            case .noActiveWorkspace: break
+            default: Issue.record("expected noActiveWorkspace, got \(error)")
+            }
         }
-    }
-
-    // MARK: derivedCloud
-
-    @Test("derivedCloud detects azure, gcp, and defaults to aws")
-    func derivedCloud() {
-        let azure = URL(string: "https://acme.azuredatabricks.net")!
-        let gcp = URL(string: "https://acme.gcp.databricks.com")!
-        let aws = URL(string: "https://acme.cloud.databricks.com")!
-        #expect(AuthService.derivedCloud(from: azure) == .azure)
-        #expect(AuthService.derivedCloud(from: gcp) == .gcp)
-        #expect(AuthService.derivedCloud(from: aws) == .aws)
     }
 }
