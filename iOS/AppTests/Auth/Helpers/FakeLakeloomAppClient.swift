@@ -13,6 +13,7 @@ public actor FakeLakeloomAppClient: LakeloomAppClient {
         public let method: HTTPMethod
         public let path: String
         public let body: Data?
+        public let contentType: String?
     }
 
     public enum Outcome: Sendable {
@@ -52,7 +53,7 @@ public actor FakeLakeloomAppClient: LakeloomAppClient {
         body: Data?,
         decode: T.Type
     ) async throws -> T {
-        let data = try await requestRaw(workspaceID: workspaceID, method: method, path: path, body: body)
+        let data = try await requestRaw(workspaceID: workspaceID, method: method, path: path, body: body, contentType: nil)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         do {
@@ -66,13 +67,15 @@ public actor FakeLakeloomAppClient: LakeloomAppClient {
         workspaceID: String,
         method: HTTPMethod,
         path: String,
-        body: Data?
+        body: Data?,
+        contentType: String?
     ) async throws -> Data {
         requestCalls.append(RequestCall(
             workspaceID: workspaceID,
             method: method,
             path: path,
-            body: body
+            body: body,
+            contentType: contentType
         ))
         guard !responses.isEmpty else {
             throw LakeloomAppError.transport(reason: "FakeLakeloomAppClient: no response enqueued")

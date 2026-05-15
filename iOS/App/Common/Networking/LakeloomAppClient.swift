@@ -42,12 +42,15 @@ public protocol LakeloomAppClient: Sendable, AnyObject {
 
     /// Send an authenticated request and return the raw response body.
     /// Used by callers that want to control decoding themselves (e.g.
-    /// multipart streaming uploads).
+    /// multipart uploads). Pass a non-nil `contentType` to set the
+    /// request's `Content-Type` header — defaults to `application/json`
+    /// when nil and a body is provided.
     func requestRaw(
         workspaceID: String,
         method: HTTPMethod,
         path: String,
-        body: Data?
+        body: Data?,
+        contentType: String?
     ) async throws -> Data
 
     /// Returns the cached Layer 0 bearer token, minting a fresh one
@@ -56,6 +59,25 @@ public protocol LakeloomAppClient: Sendable, AnyObject {
     /// the standard ``request`` path (notably multipart uploads with
     /// custom streaming) can still get a valid token.
     func currentBearer(workspaceID: String) async throws -> String
+}
+
+public extension LakeloomAppClient {
+    /// Convenience overload that omits `contentType` — preserves the
+    /// pre-PR-3 call sites that didn't need to override it.
+    func requestRaw(
+        workspaceID: String,
+        method: HTTPMethod,
+        path: String,
+        body: Data?
+    ) async throws -> Data {
+        try await requestRaw(
+            workspaceID: workspaceID,
+            method: method,
+            path: path,
+            body: body,
+            contentType: nil
+        )
+    }
 }
 
 // MARK: - Config
@@ -215,7 +237,8 @@ public actor LiveLakeloomAppClient: LakeloomAppClient {
             workspaceID: workspaceID,
             method: method,
             path: path,
-            body: body
+            body: body,
+            contentType: nil
         )
         do {
             return try decoder.decode(T.self, from: data)
@@ -236,7 +259,8 @@ public actor LiveLakeloomAppClient: LakeloomAppClient {
         workspaceID: String,
         method: HTTPMethod,
         path: String,
-        body: Data?
+        body: Data?,
+        contentType: String?
     ) async throws -> Data {
         guard let config = configs[workspaceID] else {
             throw LakeloomAppError.workspaceNotConfigured(workspaceID)
@@ -279,9 +303,7 @@ public actor LiveLakeloomAppClient: LakeloomAppClient {
         }
         if let body {
             request.httpBody = body
-            if request.value(forHTTPHeaderField: "Content-Type") == nil {
-                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            }
+            request.setValue(contentType ?? "application/json", forHTTPHeaderField: "Content-Type")
         }
         request.timeoutInterval = 30
 
