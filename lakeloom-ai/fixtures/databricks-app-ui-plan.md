@@ -1,7 +1,7 @@
 # Databricks App UI — Feature Plan & Implementation Order
 
-**Date:** 2026-05-14
-**Status:** Planning — approved by Matthew, ready for implementation
+**Date:** 2026-05-14 (created) | **Last updated:** 2026-05-15
+**Status:** Phase 1 COMPLETE. Phase 2–7 planned and ready for implementation.
 **Principle:** The Databricks App does everything the iOS app does EXCEPT record audio.
 
 ---
@@ -21,30 +21,43 @@ Pair (browser) → Capture (iPhone) → Review (browser) → Process (browser) �
 
 ---
 
+## Milestone: End-to-End QR Pairing Validated (2026-05-15)
+
+Physical iPhone successfully paired against the deployed Databricks App. Full auth chain proven:
+QR scan → M2M token → `POST /api/pairing/confirm` → ECDSA device-key binding → project create → home screen.
+
+This validates the entire server-side auth stack (Layer 0+1), the `x-forwarded-host` fix (PR #20), the `sha256(Buffer)` token-hash fix (PR #21), and the canonical-form spec. iOS Module 01 is officially closed and merged (PR #18).
+
+**Known non-blocking issue:** First `GET /api/v1/projects` after pairing returns a warning on iOS (`project list failed during onboarding reason=unknown`). Subsequent `POST /api/v1/projects` works. Isaac investigating iOS-side — may surface an App-side need for `dualAuth` query-param handling.
+
+---
+
 ## Feature Areas (7 total)
 
-### 1. Project Management
+### 1. Project Management — ✅ COMPLETE (2026-05-14)
 
 Full CRUD for lakeLoom projects from the browser.
 
 **Server endpoints (iOS Module 06 contract):**
-- `GET /api/v1/projects` — list (filter by archive, search by name)
+- `GET /api/v1/projects` — list (cursor-based pagination, filter by archive, search by name)
 - `GET /api/v1/projects/:id` — fetch single
 - `POST /api/v1/projects` — create (idempotent via `client_generated_id`)
 - `PATCH /api/v1/projects/:id` — edit name/description
 - `PATCH /api/v1/projects/:id/archive` — soft delete
 - `PATCH /api/v1/projects/:id/restore` — unarchive
 
-**Browser UI:**
-- Project list view with search, archive filter toggle
+**Browser UI:** ✅ Shipped
+- Project list view with search (debounced 300ms), archive filter toggle
 - Create project modal (name + description)
 - Inline edit for name/description
 - Archive / restore actions
 - Per-project summary card (session count, file count, last activity, total size)
-- Default project indicator
+- Card grid layout with Databricks brand tokens (DM Sans, semantic colors, motion)
+- "Load more" button for cursor-based pagination
 
-**Lakebase table:** `app.projects` (new migration 004)
-- `id` UUID PK (UUIDv7)
+**Lakebase table:** `app.projects` (migration 004) — DEPLOYED
+- `id` UUID PK (UUIDv7, server-generated)
+- `client_generated_id` TEXT (idempotency key, UNIQUE per workspace)
 - `name` TEXT NOT NULL
 - `description` TEXT
 - `workspace_id` TEXT NOT NULL
@@ -52,7 +65,10 @@ Full CRUD for lakeLoom projects from the browser.
 - `created_by_username` TEXT NOT NULL
 - `archived` BOOLEAN DEFAULT false
 - `created_at` / `updated_at` TIMESTAMPTZ
+- GIN trigram index on `name` (pg_trgm extension confirmed working on Lakebase)
 - REPLICA IDENTITY FULL (Lakehouse Sync)
+
+**Auth:** `dualAuth()` middleware — accepts iOS Layer 2 OR browser on-behalf-of-user per request.
 
 **Dependencies:** None (foundational — everything else references `project_id`)
 
@@ -76,7 +92,7 @@ Review and manage capture sessions created from iOS.
 - Session label editing (add/update descriptive names post-capture)
 - Empty state when no captures exist yet (CTA: "Pair an iPhone to start capturing")
 
-**Dependencies:** Project Management (sessions belong to projects)
+**Dependencies:** Project Management (sessions belong to projects) — ✅ MET
 
 ---
 
@@ -142,10 +158,10 @@ Upload documents, screenshots, and photos directly from the browser (no iOS need
 - The upload handler detects browser vs iOS context and applies appropriate auth middleware
 - Both paths write to the same `app.uploads` table with full traceability
 
-**MIME allowlists (same as iOS):**
+**MIME allowlists (same as iOS — finalized 2026-05-14):**
 - Audio: NOT supported from browser (recording is iOS-only)
 - Screenshots: `image/png`, `image/jpeg`
-- Photos: `image/jpeg`
+- Photos: `image/jpeg` only (no HEIC — iOS captures JPEG natively via AVCapturePhotoOutput)
 - Documents: `application/pdf`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document`
 
 **Dependencies:** Capture Session Browser + Media Viewer (upload then view)
@@ -255,38 +271,17 @@ The value proposition — transform captures into actionable Databricks build ar
 
 The ordering optimizes for: (a) unblocking iOS Module 06, (b) delivering reviewable value early, (c) minimizing rework by building on stable foundations.
 
-| Phase | Feature | Rationale | Est. Effort |
-|-------|---------|-----------|-------------|
-| **Phase 1** | Project Management | Foundation — everything references project_id. Unblocks iOS Module 06. | 2–3 days |
-| **Phase 2** | Capture Session Browser | Second-most foundational. Users need to see what's been captured. | 2 days |
-| **Phase 3** | Media Viewer & Audio Playback | Core value: "I recorded on my phone, now I review on my laptop." | 3–4 days |
-| **Phase 4** | Browser-Side Uploads | Quick win — same handlers, just browser auth. | 1–2 days |
-| **Phase 5** | Device & Admin Panel | Independent. Provides operational confidence. Can interleave earlier. | 1–2 days |
-| **Phase 6** | Transcript Viewer | Depends on SDP pipeline (silver layer). Start with raw bronze queries. | 3–4 days |
-| **Phase 7** | Genie Code Session Planning | Capstone. Requires gold-layer tables and Agent design. Largest unknown. | 5–7 days |
+| Phase | Feature | Status | Est. Effort |
+|-------|---------|--------|-------------|
+| **Phase 1** | Project Management | ✅ COMPLETE (2026-05-14) | — |
+| **Phase 2** | Capture Session Browser | Ready | 2 days |
+| **Phase 3** | Media Viewer & Audio Playback | Ready (depends on Phase 2) | 3–4 days |
+| **Phase 4** | Browser-Side Uploads | Ready (depends on Phase 2+3) | 1–2 days |
+| **Phase 5** | Device & Admin Panel | Ready (independent) | 1–2 days |
+| **Phase 6** | Transcript Viewer | Blocked on SDP pipeline for silver; bronze queries v1 possible | 3–4 days |
+| **Phase 7** | Genie Code Session Planning | Blocked on gold-layer tables + Agent design | 5–7 days |
 
-**Total estimated: ~17–24 working days for full feature set.**
-
----
-
-## Phase 1 Detailed Breakdown (Project Management)
-
-### Day 1: Server + Migration
-1. Migration `004_projects.ts` — create `app.projects` table
-2. Server routes: `server/routes/projects/project-routes.ts`
-3. Validation (Zod schemas for create/update payloads)
-4. Browser auth middleware variant (on-behalf-of-user, not iOS Layer 2)
-
-### Day 2: Client UI
-5. Project list page (`client/src/pages/projects/`)
-6. Create project modal
-7. Edit inline
-8. Archive/restore
-
-### Day 3: Polish + Test
-9. Per-project summary stats (join to captures + uploads)
-10. Update post-deploy validation notebook with project endpoint tests
-11. Bundle validate + deploy
+**Remaining estimated: ~15–21 working days for Phases 2–7.**
 
 ---
 
@@ -294,18 +289,18 @@ The ordering optimizes for: (a) unblocking iOS Module 06, (b) delivering reviewa
 
 ```
 / (Home)
-├── /projects                    → Project list
+├── /projects                    → Project list (IMPLEMENTED)
 │   └── /projects/:id            → Project detail (sessions + documents + summary)
 │       ├── /projects/:id/captures/:cid  → Session detail (timeline + media)
 │       └── /projects/:id/generate       → AI generation status + artifacts
 ├── /devices                     → Paired devices management
-├── /pair                        → QR pairing page (EXISTING)
+├── /pair                        → QR pairing page (IMPLEMENTED)
 └── /admin                       → System health + diagnostics
 ```
 
 ---
 
-## Shared UI Components (Build During Phase 1–2)
+## Shared UI Components (Build During Phase 2–3)
 
 Reusable components serving multiple features:
 
@@ -326,6 +321,7 @@ Reusable components serving multiple features:
 2. **Should the browser see ALL users' projects or only the current user's?** → Suggest: current user by default, admin toggle for "all projects" view.
 3. **Transcript storage before SDP pipeline exists:** Query bronze directly for v1, switch to silver when pipeline ships.
 4. **Agent implementation:** Notebook-based (triggered via Jobs API) or in-process (App backend calls foundation model)? → Suggest: Jobs API — decouples compute, leverages existing serverless, produces auditable runs.
+5. **Non-blocking onboarding issue:** iOS `GET /api/v1/projects` fails on first call after pairing. Isaac investigating — may require `dualAuth` query-param canonicalization fix on App side.
 
 ---
 
@@ -333,15 +329,18 @@ Reusable components serving multiple features:
 
 | Existing | Status | Action |
 |----------|--------|--------|
-| `client/src/pages/pairing/` | DONE | Keep as-is |
-| `client/src/pages/lakebase/` | Stub | Repurpose → Project Management |
+| `client/src/pages/pairing/` | ✅ DONE | Keep as-is |
+| `client/src/pages/projects/` | ✅ DONE (Phase 1) | Extend with session list in Phase 2 |
+| `client/src/pages/lakebase/` | Stub | Repurpose → Admin/diagnostics |
 | `client/src/pages/files/` | Stub | Repurpose → Media Viewer |
 | `client/src/pages/analytics/` | Stub | Repurpose → Per-project dashboards |
-| `server/routes/captures/` | DONE | Extend with `?include=uploads` response shaping |
-| `server/routes/uploads/` | DONE | Add file streaming proxy endpoint |
-| `server/routes/pairing/` | DONE | Keep as-is, surface in Device panel |
-| `server/routes/lakebase/` | `todo-routes.ts` | Replace with project routes |
-| `server/services/sse-service.ts` | DONE | Reuse for live transcript streaming |
+| `server/routes/captures/` | ✅ DONE | Extend with `?include=uploads` response shaping |
+| `server/routes/uploads/` | ✅ DONE (audio, screenshots, photos, documents) | Add file streaming proxy endpoint |
+| `server/routes/projects/` | ✅ DONE | Keep as-is |
+| `server/routes/pairing/` | ✅ DONE | Surface in Device panel |
+| `server/routes/lakebase/` | `todo-routes.ts` | Remove (superseded by project routes) |
+| `server/services/sse-service.ts` | ✅ DONE | Reuse for live transcript streaming |
+| `server/middleware/browser-auth.ts` | ✅ DONE (`dualAuth()`) | Already handles iOS vs browser detection |
 
 ---
 

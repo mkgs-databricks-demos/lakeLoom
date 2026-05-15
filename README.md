@@ -45,3 +45,10 @@ The system uses a two-layer auth model: iOS devices authenticate via QR-code pai
 ```
 
 Run `./deploy.sh --help` for all options including `--infra`, `--skip-checks`, and `--destroy`.
+
+---
+
+## Open Telemetry 
+
+The `lakeloom-ai` Databricks App uses Open Telemetry for logs, traces and metrics sent directly to Unity Catalog.  Genie is able to query these directly using SQL against the target environments' catalog and schema. 
+

@@ -25,6 +25,7 @@ lakeLoom/
 ├── architecture/
 │   ├── hi_genie/                   # Read-only context from Isaac
 │   └── hey_isaac/                  # Outbound messages to Isaac
+│   └── LakeLoomMarkdowns/          # Module design specs (01–11)
 ├── lakeloom-infra/
 │   ├── databricks.yml              # Bundle config, variables, targets
 │   ├── README.md
@@ -55,20 +56,36 @@ lakeLoom/
 │       └── sessions/               # Infra session summaries
 ├── lakeloom-ai/
 │   ├── databricks.yml              # App bundle config
-│   ├── app.yml                     # AppKit app manifest
-│   ├── src/                        # App source (Node.js + React)
-│   │   ├── admin/                  # Admin notebooks for app-bundle jobs
-│   │   │   └── grant-lakebase-schema-access
-│   │   └── tests/                  # API test notebooks (OAuth-auth pattern)
-│   │       └── pairing-api-test
+│   ├── app.yaml                    # Databricks App runtime manifest (command, env vars)
+│   ├── package.json                # Node.js dependencies (AppKit 0.24.0, React 19, Zod, ZeroBus SDK)
+│   ├── server/                     # Express API (TypeScript)
+│   │   ├── server.ts              # Entry: secrets → migrations → routes → serve
+│   │   ├── lib/                   # crypto.ts, errors.ts (RFC 9457)
+│   │   ├── middleware/            # ios-auth.ts, browser-auth.ts + dualAuth()
+│   │   ├── migrations/            # 001–004 (paired_sessions → projects)
+│   │   ├── services/              # secrets, sse, zerobus stream pool
+│   │   └── routes/                # pairing, captures, uploads, events, projects
+│   ├── client/                     # React frontend (Vite + Tailwind v4)
+│   │   ├── src/                   # App.tsx, pages/ (pairing, projects, stubs)
+│   │   └── public/                # Favicons, manifest
+│   ├── shared/appkit-types/        # Shared TypeScript types
+│   ├── patches/zerobus-ingest-sdk/ # SDK patch (index.js, index.d.ts)
+│   ├── scripts/                    # patch-zerobus-sdk.mjs
+│   ├── tests/smoke.spec.ts         # Playwright smoke test
 │   ├── resources/                  # App resource definitions
 │   │   ├── lakeloom_ai.app.yml
 │   │   ├── configure_app_spn.job.yml
 │   │   ├── post_deploy_validation.job.yml
-│   │   └── update_secrets_acls.job.yml
+│   │   ├── update_secrets_acls.job.yml
+│   │   └── orphan_byte_sweeper.job.yml
 │   └── fixtures/
 │       ├── sessions/               # App session summaries
-│       └── Genie Code Starter Session
+│       └── databricks-app-ui-plan.md  # Browser UI feature plan
+├── iOS/                            # Native iOS client (Xcode, Swift)
+│   ├── project.yml, Makefile, Brewfile
+│   ├── App/                        # Swift sources (Auth, Coordinator, Projects, Persistence, Telemetry, Views)
+│   ├── AppTests/                   # Unit tests
+│   └── session_summaries/
 ```
 ## App Bundle (lakeloom-ai)
 
@@ -93,6 +110,7 @@ lakeLoom/
 * `src/lib/secret_scope.py` — named to avoid collision with Python stdlib `secrets` module.
 * **Isaac notified** (2026-05-12) about `screenshots` and `documents` volumes via `lakeLoom/architecture/hey_isaac/2026-05-12_new-upload-volumes.md`.
 * **Isaac notified** (2026-05-13) about pairing endpoint contract via `lakeLoom/architecture/hey_isaac/2026-05-13_pairing-auth-endpoints-live.md`. Covers: Layer 1/2 auth headers, POST /confirm contract, QR payload structure, error format, open questions (device_label, pubkey encoding, filename convention).
+* **2026-05-15: QR pairing validated end-to-end on physical iPhone.** Full chain: QR scan → M2M → confirm → device-key binding → project create → home screen. iOS Module 01 merged (PR #18). Collaboration model (hi_genie/hey_isaac) proven effective for cross-domain debugging.
 
 
 ## Resolved Target Variables (dev)
@@ -100,15 +118,18 @@ lakeLoom/
 | Variable | Resolved Value |
 | --- | --- |
 | `catalog` | `hls_fde_dev` |
-| `schema` | `lakeloom` |
+| `schema` | `dev_matthew_giglia_lakeloom` |
 | `secret_scope_name` | `lakeloom_credentials` (default) |
 | `client_id_dbs_key` | `client_id_dev_matthew_giglia_lakeloom` |
 | `client_secret_dbs_key` | `client_secret_dev_matthew_giglia_lakeloom` |
 | `xcode_client_id_dbs_key` | `xcode_client_id_dev_matthew_giglia_lakeloom` |
 | `xcode_client_secret_dbs_key` | `xcode_client_secret_dev_matthew_giglia_lakeloom` |
 | `lakebase_project_id` | `dev-matthew-giglia-lakeloom` |
+| `lakebase_database_id` | `db-16c3-p7ob6z9dbv` |
 | `zerobus_stream_pool_size` | `16` |
 | `run_as_user` | `matthew.giglia@databricks.com` |
+| `app_name` | `lakeloom-ai-dev` |
+| `app_spn_id` | `686d32bf-a6a4-461b-a18b-82489eecdc15` |
 
 ## Resolved Target Variables (hls_fde)
 
@@ -329,17 +350,27 @@ The SDK's `Endpoint` object does NOT have a `hostname` attribute. Use the REST A
 * ~~Await Isaac's response on filename conventions (timestamps vs UUIDs) before finalizing App upload handlers.~~ **DONE — UUIDv7 filenames, MIME-derived extensions. Deployed 2026-05-14.**
 * ~~**Next feature branch:** Orphan-byte sweeper — scheduled job to scan UC Volumes for files without a matching `app.uploads` row.~~ **DONE 2026-05-14 — `orphan_byte_sweeper` job, weekly Sunday 2am UTC, report-only v1.**
 * ~~Await Isaac's confirmation: (1) HEIC vs JPEG/PNG from iOS, (2) base64url vs standard base64 for `device_pubkey`.~~ **DONE 2026-05-14 — iOS sends JPEG only (no HEIC), base64url no-padding confirmed.**
+* ~~End-to-end QR pairing on physical iPhone.~~ **DONE 2026-05-15 — Module 01 validated, PR #18 merged.**
+* **Next: Browser UI Phase 2** — Capture Session Browser (see `fixtures/databricks-app-ui-plan.md`).
+* **Next: iOS Module 02** — CaptureEngine. Will exercise audio + screenshot + photo upload endpoints.
+* **Non-blocking follow-up:** Isaac investigating `GET /api/v1/projects` list failure during onboarding (likely iOS `LiveProjectAPIClient` not routing through full header injector).
 
 ## App Bundle (lakeloom-ai) — Implementation Status
 
 ### QR-Pair Auth (server-side): COMPLETE
-All server components implemented: crypto lib, migration runner, `paired_sessions` table, iOS auth middleware (ECDSA P-256 verification), pairing routes (QR generate, confirm, device list, revoke, SSE), upload routes (audio/screenshots/documents → UC Volumes), event routes (→ ZeroBus).
+All server components implemented: crypto lib, migration runner, `paired_sessions` table, iOS auth middleware (ECDSA P-256 verification), pairing routes (QR generate, confirm, device list, revoke, SSE), upload routes (audio/screenshots/photos/documents → UC Volumes), event routes (→ ZeroBus).
 
 ### QR-Pair Auth (client-side): COMPLETE
 * `PairingPage.tsx` state machine implemented (loading → qr → paired → gated → error)
 * `qrcode.react` rendering correctly (confirmed 2026-05-13)
 * API test notebook validates: Xcode SPN token acquired, sidecar pass-through works, Layer 2 rejection correct
 
+
+
+### QR-Pair E2E on Device: VALIDATED (2026-05-15)
+* Physical iPhone scanned QR, paired, persisted credential to Keychain, created a project, landed on home screen.
+* First time full auth chain worked on device since pivot to QR pairing (2026-05-09).
+* Three server-side bug fixes enabled this: `sha256(Buffer)` token-hash (PR #21), `x-forwarded-host` (PR #20), OTel trace investigation.
 
 ### Upload Traceability & Capture Sessions: COMPLETE (2026-05-14)
 * **Migrations:** `002_capture_sessions.ts` (state machine table, 4 partial indexes, REPLICA IDENTITY FULL), `003_uploads.ts` (UUIDv7 PK, 6 partial indexes incl. sha256, REPLICA IDENTITY FULL)
@@ -364,14 +395,14 @@ All server components implemented: crypto lib, migration runner, `paired_session
 
 ### Post-Deploy Validation: COMPLETE (2026-05-14)
 * **Job:** `post_deploy_validation` in `resources/post_deploy_validation.job.yml`
-* **Notebook:** `src/tests/pairing-api-test.ipynb` — 7 endpoint tests, CI/CD gate cell raises AssertionError on failure
+* **Notebook:** `src/tests/pairing-api-test.ipynb` — 10 endpoint tests (including full E2E pairing with ECDSA keygen), CI/CD gate cell raises AssertionError on failure
 * **deploy.sh Step 7:** `run_post_deploy_validation()` — runs after source deploy, non-fatal (warns but doesn't block)
 * **Flag:** `--skip-validation` skips Step 7 for rapid iteration
 * **Tests cover:** healthz, browser-auth pairing (expected 401), SPN token acquisition, Layer 1 pass-through, capture lifecycle, upload routes
 
 ### Lakebase Schema Permissions: COMPLETE
 * `configure_app_spn` job succeeded (2026-05-13) — both tasks passed
-* App migrations run successfully on startup (schema `app` + table `paired_sessions` created)
+* App migrations run successfully on startup (schema `app` + all 4 tables created)
 * ~~Note: `src/admin/grant-lakebase-schema-access` notebook cell 5 had `endpoint.hostname` bug~~ **FIXED — uses REST API dict path `ep["status"]["hosts"]["host"]` (correct).**
 
 ### configure_app_spn Job (two-job pattern)
