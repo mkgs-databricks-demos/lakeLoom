@@ -91,8 +91,8 @@ struct LiveLakeloomAppClientTests {
         let request = await transport.lastRequest!
         // Authorization: Bearer <m2m>
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer m2m-token-1")
-        // X-Lakeloom-Session
-        #expect(request.value(forHTTPHeaderField: "X-Lakeloom-Session") == "session-token-abc")
+        // X-Lakeloom-Session-Token
+        #expect(request.value(forHTTPHeaderField: "X-Lakeloom-Session-Token") == "session-token-abc")
         // X-Lakeloom-Timestamp present and is unix-seconds string
         let ts = request.value(forHTTPHeaderField: "X-Lakeloom-Timestamp")
         #expect(ts != nil)

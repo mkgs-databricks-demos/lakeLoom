@@ -273,7 +273,7 @@ public actor LiveLakeloomAppClient: LakeloomAppClient {
         request.httpMethod = method.rawValue
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
-        request.setValue(config.sessionToken, forHTTPHeaderField: "X-Lakeloom-Session")
+        request.setValue(config.sessionToken, forHTTPHeaderField: "X-Lakeloom-Session-Token")
         for (header, value) in signatureHeaders {
             request.setValue(value, forHTTPHeaderField: header)
         }
