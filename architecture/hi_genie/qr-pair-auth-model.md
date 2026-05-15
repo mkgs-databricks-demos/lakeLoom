@@ -265,7 +265,7 @@ The signed message (canonical form, `\n`-joined exactly as shown):
 <HTTP method, uppercase>
 <URL path including query string>
 <X-Lakeloom-Timestamp value>
-<lowercase hex sha256 of request body, or "" if no body>
+<lowercase hex sha256 of request body — sha256(b'') = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 for bodyless requests>
 ```
 
 Example (corresponds to `POST /api/projects?include=defaults` with a JSON body):

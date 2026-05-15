@@ -35,6 +35,7 @@ public final class AppCoordinator {
     let auth: any AuthServicing
     let projects: any ProjectServicing
     let coreDataStack: any CoreDataStacking
+    let endpointResolver: any AppEndpointResolving
     let logger: AppLogger
     let nowProvider: @Sendable () -> Date
 
@@ -48,12 +49,14 @@ public final class AppCoordinator {
         auth: any AuthServicing,
         projects: any ProjectServicing,
         coreDataStack: any CoreDataStacking,
+        endpointResolver: any AppEndpointResolving,
         logger: AppLogger = AppLogger(category: .coordinator),
         nowProvider: @Sendable @escaping () -> Date = Date.init
     ) {
         self.auth = auth
         self.projects = projects
         self.coreDataStack = coreDataStack
+        self.endpointResolver = endpointResolver
         self.logger = logger
         self.nowProvider = nowProvider
     }
@@ -94,6 +97,16 @@ public final class AppCoordinator {
             await live.start()
         }
 
+        // Seed the endpoint resolver with QR-delivered App URLs for each
+        // hydrated workspace. Subsequent ProjectAPIClient calls hit the
+        // cache directly instead of falling back to URL derivation.
+        for credential in await auth.workspaces {
+            await endpointResolver.seed(
+                workspaceID: credential.id,
+                appBaseURL: credential.appBaseURL
+            )
+        }
+
         // Subscribe to auth events so forced sign-outs (refresh failures)
         // route us back to onboarding even mid-session.
         observeAuthEvents()
@@ -117,7 +130,7 @@ public final class AppCoordinator {
         }
 
         guard let workspace = await auth.activeWorkspace else {
-            await beginOnboarding(at: .workspaceURL(prefill: nil))
+            await beginOnboarding(at: .qrScan(inProgress: false, lastError: nil))
             return
         }
 
@@ -237,7 +250,7 @@ public final class AppCoordinator {
                transitioning == nil {
                 await handleForcedSignOut(workspaceID: workspaceID)
             }
-        case .signedIn, .switchedWorkspace, .identityRefreshed:
+        case .signedIn, .switchedWorkspace:
             // These fire as part of actions we drove ourselves — the
             // action handler already updated state.
             break
@@ -255,6 +268,21 @@ public final class AppCoordinator {
     }
 
     // MARK: Error rendering
+
+    static func message(for error: AuthError) -> String {
+        switch error {
+        case .noActiveWorkspace: return "No paired workspace."
+        case .unknownWorkspace(let id): return "Unknown workspace: \(id)"
+        case .userCancelled: return "Pairing cancelled."
+        case .invalidPairingPayload(let reason): return "QR code not recognized: \(reason)"
+        case .pairingFailed(let reason): return "Pairing failed: \(reason)"
+        case .refreshFailed: return "Session expired. Pair again to continue."
+        case .deviceKeyFailed(let reason): return "Device key error: \(reason)"
+        case .keychainFailed(let status): return "Keychain error (\(status))"
+        case .networkUnavailable: return "No network connection."
+        case .unexpectedResponse(let reason): return "Unexpected response: \(reason)"
+        }
+    }
 
     static func message(for error: ProjectError) -> String {
         switch error {

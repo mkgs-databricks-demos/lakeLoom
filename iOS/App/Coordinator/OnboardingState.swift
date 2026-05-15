@@ -11,14 +11,12 @@ public enum OnboardingState: Sendable, Equatable {
     /// Welcome / consent screen. Tap "I understand" to advance.
     case consent
 
-    /// Workspace URL entry. `prefill` carries the raw text the user
-    /// last typed if they navigated back here from `oauthLogin`.
-    case workspaceURL(prefill: String?)
-
-    /// OAuth login is presented via `ASWebAuthenticationSession`.
-    /// `inProgress` reflects whether the system browser is currently
-    /// open. `lastError` is set when a previous attempt failed.
-    case oauthLogin(workspaceURL: URL, inProgress: Bool, lastError: String?)
+    /// QR scanner. iOS reads the QR rendered by the lakeLoom Databricks
+    /// App's "Pair iPhone" page. `inProgress` reflects whether a scan
+    /// is currently being processed (App round-trip). `lastError` is
+    /// the most recent failure (decode failure, network failure, App
+    /// rejection) — shown above the camera preview with a retry CTA.
+    case qrScan(inProgress: Bool, lastError: String?)
 
     /// "Logged in as ..." confirmation step. User confirms before
     /// advancing to project selection. Optional back affordance

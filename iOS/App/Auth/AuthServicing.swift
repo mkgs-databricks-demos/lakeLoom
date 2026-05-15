@@ -1,76 +1,62 @@
-import AuthenticationServices
 import Foundation
 
 // MARK: - Public protocol
 
 /// The single source of truth for Databricks workspace authentication.
 ///
-/// Implementations own the OAuth 2.0 U2M flow with PKCE, per-workspace token
-/// storage in Keychain, silent refresh on 401, and the active-workspace
-/// selection. Other modules call ``currentToken(forceRefresh:)`` before each
-/// authenticated request and never touch tokens or Keychain directly.
+/// Implementations own the QR-pair flow, per-workspace Keychain storage of
+/// the paired credentials (Xcode SPN + session token + workspace + App URL),
+/// and the active-workspace selection. Other modules never touch tokens,
+/// Keychain, or the Databricks App URL directly — they call ``currentToken()``
+/// for a Layer 0 bearer or go through ``LakeloomAppClient`` for full requests.
 ///
-/// See `architecture/LakeLoomMarkdowns/module-01-auth-service.md`.
+/// See `architecture/LakeLoomMarkdowns/module-01-auth-service.md` and
+/// `architecture/hi_genie/qr-pair-auth-model.md`.
 public protocol AuthServicing: Sendable {
 
-    /// All workspaces the user has signed into. Empty if never signed in.
+    /// All workspaces the user has paired. Empty if never paired.
     var workspaces: [WorkspaceCredential] { get async }
 
-    /// The currently active workspace, if any. Nil before first login.
+    /// The currently active workspace, if any. Nil before first pairing.
     var activeWorkspace: WorkspaceCredential? { get async }
 
-    /// Stream of identity-relevant changes (sign-in, sign-out, workspace switch,
-    /// identity refresh). Multicast — multiple subscribers (e.g. AppCoordinator,
-    /// IngestService) can listen in parallel.
-    ///
-    /// `get async` because subscription registration runs on the actor.
-    /// By the time `await service.events` returns, the subscriber's
-    /// continuation is already in the broadcast set — any event fired
-    /// after the await reaches this subscriber.
+    /// Stream of identity-relevant changes (sign-in, sign-out, workspace switch).
+    /// Multicast — multiple subscribers (e.g. AppCoordinator, IngestService)
+    /// can listen in parallel.
     var events: AsyncStream<AuthEvent> { get async }
 
-    /// Returns a valid bearer token for the active workspace.
-    ///
-    /// Refreshes silently if the cached token is expired or near expiry.
-    /// `forceRefresh: true` skips the expiry check and forces a refresh —
-    /// used by callers that received a 401 and want to retry once.
-    /// Concurrent callers during an in-flight refresh await the same task
-    /// rather than triggering N parallel refreshes.
+    /// Returns a Layer 0 bearer token (M2M from Xcode SPN) for the active
+    /// workspace. Refreshes silently when the cached token is near expiry.
+    /// Delegates to ``LakeloomAppClient/currentBearer(workspaceID:)``.
     ///
     /// Throws ``AuthError/noActiveWorkspace`` if no workspace is active,
-    /// ``AuthError/refreshFailed(reason:)`` if the refresh token is rejected,
-    /// or ``AuthError/networkUnavailable`` if the token endpoint is unreachable.
+    /// ``AuthError/refreshFailed(reason:)`` if the M2M exchange fails,
+    /// ``AuthError/networkUnavailable`` if the token endpoint is unreachable.
     func currentToken(forceRefresh: Bool) async throws -> AccessToken
 
-    /// Initiates the OAuth login flow for a new workspace.
+    /// Completes a QR-pair sign-in.
     ///
-    /// Presents `ASWebAuthenticationSession` via `presenting`. On success the
-    /// new workspace is added to the workspaces list and made active.
-    @MainActor
-    func signIn(
-        workspaceURL: URL,
-        presenting: ASWebAuthenticationPresentationContextProviding
-    ) async throws -> WorkspaceCredential
-
-    /// Validates that `workspaceURL` is reachable and exposes a Databricks OIDC
-    /// discovery endpoint. Used by the onboarding step before the OAuth flow
-    /// is presented so the user gets fast feedback on a bad URL.
-    func validateWorkspaceURL(_ workspaceURL: URL) async throws
+    /// 1. Decodes the QR string into a ``PairingPayload``.
+    /// 2. Generates (or loads) the Secure Enclave device key.
+    /// 3. Configures ``LakeloomAppClient`` for the workspace.
+    /// 4. POSTs `/api/pairing/confirm` with the device pubkey + label.
+    /// 5. Persists workspace credential + session token + Xcode SPN creds.
+    /// 6. Activates the workspace and broadcasts `.signedIn`.
+    func signInViaPairing(qrText: String, deviceLabel: String) async throws -> WorkspaceCredential
 
     /// Switches the active workspace. The target must already be in the
-    /// workspaces list (i.e. the user must have signed into it before).
+    /// workspaces list (i.e. the user must have paired it before).
     func switchWorkspace(to workspaceID: String) async throws
 
-    /// Signs out of a specific workspace. Removes its credential and tokens.
-    /// If it was the active workspace, the next available workspace becomes
-    /// active (or nil if no others remain).
+    /// Signs out of a specific workspace. Removes its credential and
+    /// associated Keychain entries. If it was the active workspace, the
+    /// next available workspace becomes active (or nil if no others
+    /// remain). Also drops the workspace from ``LakeloomAppClient`` so
+    /// subsequent requests fail closed.
     func signOut(workspaceID: String) async throws
 
     /// Signs out of all workspaces and clears all stored credentials.
     func signOutAll() async throws
-
-    /// Forces a refresh of the cached SCIM identity for the active workspace.
-    func refreshIdentity() async throws -> UserIdentity
 }
 
 extension AuthServicing {
@@ -95,6 +81,13 @@ public struct WorkspaceCredential: Sendable, Identifiable, Equatable, Hashable, 
     public let isDefault: Bool
     public let signedInAt: Date
     public let identityRefreshedAt: Date
+    /// The Databricks App's HTTPS base URL for this workspace,
+    /// delivered via the QR pairing payload's `app.base_url` field.
+    /// Every iOS → App API call is built against this prefix.
+    public let appBaseURL: URL
+    /// How this credential was issued, plus auth-method-specific
+    /// metadata (e.g. paired-session id + expiry for QR pairing).
+    public let authMethod: AuthMethod
 
     public init(
         id: String,
@@ -105,7 +98,9 @@ public struct WorkspaceCredential: Sendable, Identifiable, Equatable, Hashable, 
         user: UserIdentity,
         isDefault: Bool,
         signedInAt: Date,
-        identityRefreshedAt: Date
+        identityRefreshedAt: Date,
+        appBaseURL: URL,
+        authMethod: AuthMethod
     ) {
         self.id = id
         self.workspaceURL = workspaceURL
@@ -116,6 +111,43 @@ public struct WorkspaceCredential: Sendable, Identifiable, Equatable, Hashable, 
         self.isDefault = isDefault
         self.signedInAt = signedInAt
         self.identityRefreshedAt = identityRefreshedAt
+        self.appBaseURL = appBaseURL
+        self.authMethod = authMethod
+    }
+}
+
+/// How a ``WorkspaceCredential`` was issued. Forward-compatible enum;
+/// each case carries the metadata that's only meaningful for that
+/// auth path. v1 only supports QR pairing.
+public enum AuthMethod: Sendable, Equatable, Hashable, Codable {
+
+    /// Issued via the QR-pair flow against the lakeLoom Databricks
+    /// App. The `pairedSessionID` is the App-assigned UUID for this
+    /// device's `app.paired_sessions` row (i.e. the value returned in
+    /// `POST /api/pairing/confirm`'s `paired_session_id` field).
+    /// `sessionExpiresAt` is the 7-day expiry the App sets.
+    case qrPaired(pairedSessionID: String, sessionExpiresAt: Date)
+}
+
+extension AuthMethod {
+    /// The session-expiry timestamp, regardless of which case. Used by
+    /// the in-app banner that nudges the user to re-pair before the
+    /// 7-day window elapses.
+    public var sessionExpiresAt: Date {
+        switch self {
+        case .qrPaired(_, let expiresAt):
+            return expiresAt
+        }
+    }
+
+    /// The paired-session UUID iOS uses when sending requests. Same
+    /// regardless of case for now; case-bound in case a future auth
+    /// method doesn't have an analog.
+    public var pairedSessionID: String {
+        switch self {
+        case .qrPaired(let pairedSessionID, _):
+            return pairedSessionID
+        }
     }
 }
 
@@ -170,36 +202,39 @@ public enum AuthEvent: Sendable, Equatable {
     case signedIn(WorkspaceCredential)
     case signedOut(workspaceID: String)
     case switchedWorkspace(WorkspaceCredential)
-    case identityRefreshed(WorkspaceCredential)
 }
 
 // MARK: - Errors
 
 /// Typed errors surfaced by ``AuthServicing``. Internal helpers may throw
-/// other error types (`OAuthError`, `KeychainError`, `URLError`); the public
+/// other error types (`LakeloomAppError`, `KeychainError`, `URLError`,
+/// `DeviceKeyStoreError`, `PairingPayload.DecodingError`); the public
 /// surface translates them into one of these cases.
 public enum AuthError: Error, Sendable, Equatable {
     case noActiveWorkspace
     case unknownWorkspace(String)
 
-    /// User dismissed `ASWebAuthenticationSession`.
+    /// QR scan / pairing was cancelled by the user (camera dismissed
+    /// without a code, or the QR was rejected by the App with a
+    /// retry-allowed status).
     case userCancelled
 
-    /// Provided URL didn't parse, didn't have a host, or didn't expose an
-    /// OIDC discovery endpoint.
-    case invalidWorkspaceURL(String)
+    /// Scanned QR couldn't be decoded (invalid base64, wrong version,
+    /// malformed JSON). Carries a short reason string for the UI.
+    case invalidPairingPayload(reason: String)
 
-    /// Server-returned error during the OAuth code-for-token exchange.
-    case oauthFailed(reason: String)
+    /// The App's `/api/pairing/confirm` rejected the device key or
+    /// already-bound session. Carries the App-supplied detail.
+    case pairingFailed(reason: String)
 
-    /// Refresh token was rejected (`invalid_grant`) or otherwise can't be
-    /// renewed. The user must sign in again. Tokens have been cleared but
-    /// the credential record is preserved so the UI can show "Re-login
-    /// required" without losing the workspace.
+    /// The Layer 0 M2M token exchange failed (typically because the
+    /// Xcode SPN's `client_secret` was rotated). Tokens have been
+    /// cleared but the credential record is preserved so the UI can
+    /// show "Re-pair to continue" without losing the workspace.
     case refreshFailed(reason: String)
 
-    /// SCIM `/Me` lookup failed.
-    case identityFetchFailed(reason: String)
+    /// Secure Enclave key generation or signing failed.
+    case deviceKeyFailed(reason: String)
 
     /// Keychain operation failed. Carries the OS status code for diagnostics.
     case keychainFailed(OSStatus)

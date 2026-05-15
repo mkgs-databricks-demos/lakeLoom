@@ -13,19 +13,13 @@ struct OnboardingFlowView: View {
                 ConsentStepView(
                     onContinue: { Task { await coordinator.acknowledgeConsent() } }
                 )
-            case .workspaceURL(let prefill):
-                WorkspaceURLStepView(
-                    prefill: prefill,
-                    onSubmit: { input in
-                        Task { await coordinator.submitWorkspaceURL(input) }
-                    }
-                )
-            case .oauthLogin(let url, let inProgress, let lastError):
-                OAuthLoginStepView(
-                    workspaceURL: url,
+            case .qrScan(let inProgress, let lastError):
+                QRScanStepView(
                     inProgress: inProgress,
                     lastError: lastError,
-                    coordinator: coordinator
+                    onScan: { qrText in
+                        Task { await coordinator.submitQRCode(qrText) }
+                    }
                 )
             case .identityConfirmation(let credential):
                 IdentityConfirmationStepView(

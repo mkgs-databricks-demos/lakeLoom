@@ -64,7 +64,15 @@ public struct LiveM2MTokenClient: M2MTokenClient {
             "m2m.token.attempt",
             metadata: [
                 "workspace_host": .string(workspaceURL.host ?? "<no-host>"),
-                "scopes": .string(scopes.joined(separator: " "))
+                "scopes": .string(scopes.joined(separator: " ")),
+                // First 12 chars of the SPN application_id so we can
+                // visually verify the QR's xcode_spn.client_id matches
+                // whatever's listed as CAN_USE on the deployed App.
+                // SPN application_ids are UUIDs (e.g. "686d32bf-a6a4-…"),
+                // so 12 chars covers the first segment + first dash + 3
+                // chars of the second segment — enough to disambiguate
+                // visually without leaking the whole identifier.
+                "client_id_prefix": .string(String(clientID.prefix(12)))
             ]
         )
 

@@ -23,6 +23,13 @@ public protocol AppEndpointResolving: Sendable {
     /// re-derives. Used when the user signs out of a workspace or
     /// when the App URL convention is changed at runtime via Settings.
     func invalidate(workspaceID: String) async
+
+    /// Pre-populates the cache with an authoritative `appBaseURL` for
+    /// `workspaceID`. AppCoordinator calls this with
+    /// `credential.appBaseURL` after a successful pairing (and on
+    /// cold-launch hydrate) so that the next `resolve(...)` returns
+    /// the QR-delivered URL instead of falling back to derivation.
+    func seed(workspaceID: String, appBaseURL: URL) async
 }
 
 extension AppEndpointResolving {
@@ -100,5 +107,13 @@ public actor LiveAppEndpointResolver: AppEndpointResolving {
 
     public func invalidate(workspaceID: String) async {
         cache.removeValue(forKey: workspaceID)
+    }
+
+    public func seed(workspaceID: String, appBaseURL: URL) async {
+        cache[workspaceID] = AppEndpoint(
+            workspaceID: workspaceID,
+            url: appBaseURL,
+            resolvedAt: nowProvider()
+        )
     }
 }

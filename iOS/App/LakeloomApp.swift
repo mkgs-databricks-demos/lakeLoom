@@ -21,11 +21,17 @@ struct LakeloomApp: App {
             coreDataStack = try! CoreDataStack(inMemory: true)
         }
 
+        let deviceKeyStore = LiveDeviceKeyStore()
+        let m2mTokenClient = LiveM2MTokenClient()
+        let requestSigner = RequestSigner(keyStore: deviceKeyStore)
+        let lakeloomApp = LiveLakeloomAppClient(
+            m2mTokenClient: m2mTokenClient,
+            requestSigner: requestSigner
+        )
         let auth = AuthService(
-            config: AuthConfig(clientID: AppConfig.oauthClientID),
-            oauth: LiveOAuthClient(),
-            keychain: LiveKeychainStore(),
-            identity: LiveDatabricksIdentityClient()
+            lakeloomApp: lakeloomApp,
+            deviceKeyStore: deviceKeyStore,
+            keychain: LiveKeychainStore()
         )
         let endpointResolver = LiveAppEndpointResolver()
         let projects = ProjectService(
@@ -37,7 +43,8 @@ struct LakeloomApp: App {
             wrappedValue: AppCoordinator(
                 auth: auth,
                 projects: projects,
-                coreDataStack: coreDataStack
+                coreDataStack: coreDataStack,
+                endpointResolver: endpointResolver
             )
         )
     }
@@ -51,11 +58,9 @@ struct LakeloomApp: App {
 }
 
 /// App-level configuration baked at build time.
+///
+/// Most auth-related config is no longer needed here — Xcode SPN
+/// credentials, workspace URL, and App base URL all arrive via the
+/// QR payload at pairing time, not from build config.
 enum AppConfig {
-    /// Published Databricks OAuth client ID for U2M flows. The
-    /// `databricks-cli` client is registered with `http://localhost`
-    /// loopback redirects only, which is why we run an in-app
-    /// `LoopbackCallbackListener` instead of a custom URL scheme.
-    /// See Module 01 §11 for the redirect URI strategy.
-    static let oauthClientID: String = "databricks-cli"
 }
