@@ -6,17 +6,21 @@
  * uploads only go to 'active' captures.
  *
  * Endpoints:
- *   POST   /api/projects/:project_id/captures       — Create a new capture session
- *   PATCH  /api/captures/:capture_session_id        — Transition state (complete/cancel)
- *   GET    /api/captures/:capture_session_id        — Get capture details (+uploads)
- *   GET    /api/projects/:project_id/captures       — List captures for a project
+ *   POST   /api/projects/:project_id/captures       — Create a new capture session (iOS only)
+ *   PATCH  /api/captures/:capture_session_id        — Transition state (iOS only)
+ *   PATCH  /api/v1/captures/:capture_session_id/state — Transition state (browser + iOS)
+ *   GET    /api/captures/:capture_session_id        — Get capture details (+uploads) (browser + iOS)
+ *   GET    /api/projects/:project_id/captures       — List captures for a project (browser + iOS)
  *
- * All endpoints require iOS Layer 0+1 authentication (iosAuth middleware).
+ * Auth:
+ *   - POST + original PATCH: iOS Layer 0+1 (iosAuth) — preserves existing iOS contract
+ *   - GET routes + v1 PATCH: dualAuth (accepts iOS Layer 2 OR browser on-behalf-of-user)
  */
 
 import { z } from 'zod';
 import type { Application } from 'express';
 import { iosAuth } from '../../middleware/ios-auth';
+import { dualAuth } from '../../middleware/browser-auth';
 import { validationError } from '../../lib/errors';
 
 // ── Interfaces ───────────────────────────────────────────────────────────────
@@ -46,12 +50,13 @@ const PatchCaptureBody = z.object({
 
 export async function setupCaptureRoutes(appkit: AppKitContext): Promise<void> {
   const { lakebase } = appkit;
-  const auth = iosAuth({ lakebase });
+  const iosOnly = iosAuth({ lakebase });
+  const dual = dualAuth({ lakebase });
 
   appkit.server.extend((app) => {
     // ── POST /api/projects/:project_id/captures ────────────────────────────
     // iOS-authenticated. Creates a new active capture session.
-    app.post('/api/projects/:project_id/captures', auth, async (req, res, next) => {
+    app.post('/api/projects/:project_id/captures', iosOnly, async (req, res, next) => {
       try {
         const parsed = CreateCaptureBody.safeParse(req.body);
         if (!parsed.success) {
@@ -97,7 +102,8 @@ export async function setupCaptureRoutes(appkit: AppKitContext): Promise<void> {
     // ── PATCH /api/captures/:capture_session_id ────────────────────────────
     // iOS-authenticated. Transitions state: active → completed | cancelled.
     // Authz: only the creating user can transition.
-    app.patch('/api/captures/:capture_session_id', auth, async (req, res, next) => {
+    // NOTE: Preserved for iOS contract compatibility. Browser uses /api/v1/ route below.
+    app.patch('/api/captures/:capture_session_id', iosOnly, async (req, res, next) => {
       try {
         const parsed = PatchCaptureBody.safeParse(req.body);
         if (!parsed.success) {
@@ -148,9 +154,58 @@ export async function setupCaptureRoutes(appkit: AppKitContext): Promise<void> {
       }
     });
 
+    // ── PATCH /api/v1/captures/:capture_session_id/state ──────────────────
+    // Browser + iOS (dualAuth). Transitions state: active → completed | cancelled.
+    // Browser authz: any authenticated user can transition (project-level access).
+    app.patch('/api/v1/captures/:capture_session_id/state', dual, async (req, res, next) => {
+      try {
+        const parsed = PatchCaptureBody.safeParse(req.body);
+        if (!parsed.success) {
+          throw validationError(parsed.error.issues.map((i) => i.message).join('; '));
+        }
+
+        const { state, ended_at } = parsed.data;
+        const captureId = req.params.capture_session_id;
+
+        // Fetch current capture and verify state
+        const { rows: existing } = await lakebase.query(
+          `SELECT id, created_by_user_id, state FROM app.capture_sessions
+           WHERE id = $1 AND revoked_at IS NULL`,
+          [captureId],
+        );
+
+        if (existing.length === 0) {
+          throw validationError('Capture session not found.');
+        }
+
+        const capture = existing[0];
+
+        if (capture.state !== 'active') {
+          throw validationError(
+            `Cannot transition from '${capture.state}' to '${state}'. Only 'active' captures can be transitioned.`,
+          );
+        }
+
+        // Apply state transition
+        const endedAtValue = ended_at ? new Date(ended_at).toISOString() : new Date().toISOString();
+
+        const { rows: updated } = await lakebase.query(
+          `UPDATE app.capture_sessions
+           SET state = $1, ended_at = $2
+           WHERE id = $3
+           RETURNING id, project_id, state, label, started_at, ended_at`,
+          [state, endedAtValue, captureId],
+        );
+
+        res.json(updated[0]);
+      } catch (err) {
+        next(err);
+      }
+    });
+
     // ── GET /api/captures/:capture_session_id ──────────────────────────────
-    // iOS-authenticated. Returns capture metadata. Supports ?include=uploads.
-    app.get('/api/captures/:capture_session_id', auth, async (req, res, next) => {
+    // Browser + iOS (dualAuth). Returns capture metadata. Supports ?include=uploads.
+    app.get('/api/captures/:capture_session_id', dual, async (req, res, next) => {
       try {
         const captureId = req.params.capture_session_id;
         const include = req.query.include as string | undefined;
@@ -193,36 +248,49 @@ export async function setupCaptureRoutes(appkit: AppKitContext): Promise<void> {
     });
 
     // ── GET /api/projects/:project_id/captures ─────────────────────────────
-    // iOS-authenticated. Lists captures for a project.
+    // Browser + iOS (dualAuth). Lists captures for a project with upload summary.
     // Query params: ?state=active|completed|cancelled, ?limit=N, ?before=<ISO>
-    app.get('/api/projects/:project_id/captures', auth, async (req, res, next) => {
+    app.get('/api/projects/:project_id/captures', dual, async (req, res, next) => {
       try {
         const projectId = req.params.project_id;
         const stateFilter = req.query.state as string | undefined;
         const limit = Math.min(parseInt(req.query.limit as string, 10) || 50, 200);
         const before = req.query.before as string | undefined;
 
-        let sql = `
-          SELECT id, project_id, created_by_user_id, device_label, state, label, started_at, ended_at
-          FROM app.capture_sessions
-          WHERE project_id = $1 AND revoked_at IS NULL
-        `;
+        // Build dynamic WHERE clauses
+        const conditions: string[] = ['cs.project_id = $1', 'cs.revoked_at IS NULL'];
         const params: unknown[] = [projectId];
         let paramIdx = 2;
 
         if (stateFilter && ['active', 'completed', 'cancelled'].includes(stateFilter)) {
-          sql += ` AND state = $${paramIdx}`;
+          conditions.push(`cs.state = $${paramIdx}`);
           params.push(stateFilter);
           paramIdx++;
         }
 
         if (before) {
-          sql += ` AND started_at < $${paramIdx}`;
+          conditions.push(`cs.started_at < $${paramIdx}`);
           params.push(before);
           paramIdx++;
         }
 
-        sql += ` ORDER BY started_at DESC LIMIT $${paramIdx}`;
+        // Enriched query with upload_count and total_size_bytes via LATERAL join
+        const sql = `
+          SELECT
+            cs.id, cs.project_id, cs.created_by_user_id, cs.device_label,
+            cs.state, cs.label, cs.started_at, cs.ended_at,
+            COALESCE(u.upload_count, 0)::int AS upload_count,
+            COALESCE(u.total_size_bytes, 0)::bigint AS total_size_bytes
+          FROM app.capture_sessions cs
+          LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS upload_count, SUM(size_bytes) AS total_size_bytes
+            FROM app.uploads
+            WHERE capture_session_id = cs.id AND revoked_at IS NULL
+          ) u ON true
+          WHERE ${conditions.join(' AND ')}
+          ORDER BY cs.started_at DESC
+          LIMIT $${paramIdx}
+        `;
         params.push(limit);
 
         const { rows } = await lakebase.query(sql, params);
