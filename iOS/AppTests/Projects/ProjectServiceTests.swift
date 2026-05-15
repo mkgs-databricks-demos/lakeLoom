@@ -28,7 +28,7 @@ struct ProjectServiceListTests {
     func cacheMissTriggersFetch() async throws {
         let api = ScriptedProjectAPIClient()
         let project = ProjectMetadata.fixture(id: "p-1")
-        await api.enqueueList(.success(ProjectListResponse(projects: [project], truncated: false)))
+        await api.enqueueList(.success(ProjectListResponse(projects: [project], hasMore: false)))
         let (service, _) = await makeService(api: api)
 
         let projects = try await service.list(workspaceID: Self.workspaceID, forceRefresh: false)
@@ -46,8 +46,8 @@ struct ProjectServiceListTests {
         let api = ScriptedProjectAPIClient()
         let p1 = ProjectMetadata.fixture(id: "p-1")
         let p2 = ProjectMetadata.fixture(id: "p-2")
-        await api.enqueueList(.success(ProjectListResponse(projects: [p1], truncated: false)))
-        await api.enqueueList(.success(ProjectListResponse(projects: [p1, p2], truncated: false)))
+        await api.enqueueList(.success(ProjectListResponse(projects: [p1], hasMore: false)))
+        await api.enqueueList(.success(ProjectListResponse(projects: [p1, p2], hasMore: false)))
         let (service, _) = await makeService(api: api)
 
         let first = try await service.list(workspaceID: Self.workspaceID, forceRefresh: false)
@@ -63,7 +63,7 @@ struct ProjectServiceListTests {
         let api = ScriptedProjectAPIClient()
         await api.enqueueList(.failure(.unauthorized))
         let project = ProjectMetadata.fixture(id: "p-1")
-        await api.enqueueList(.success(ProjectListResponse(projects: [project], truncated: false)))
+        await api.enqueueList(.success(ProjectListResponse(projects: [project], hasMore: false)))
         let (service, auth) = await makeService(api: api)
         await auth.setNextTokenAfterForceRefresh("token-2")
 
@@ -187,7 +187,7 @@ struct ProjectServiceCreateTests {
         let api = ScriptedProjectAPIClient()
         // Initial list seeds the cache.
         let p0 = ProjectMetadata.fixture(id: "p-0")
-        await api.enqueueList(.success(ProjectListResponse(projects: [p0], truncated: false)))
+        await api.enqueueList(.success(ProjectListResponse(projects: [p0], hasMore: false)))
         // Create returns the new project.
         let pNew = ProjectMetadata.fixture(id: "p-new")
         await api.enqueueCreate(.success(pNew))
