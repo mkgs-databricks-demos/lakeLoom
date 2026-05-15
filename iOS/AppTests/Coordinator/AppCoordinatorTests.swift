@@ -72,7 +72,7 @@ struct AppCoordinatorBootstrapTests {
         let auth = MockAuthService(activeWorkspace: workspace)
         let api = ScriptedProjectAPIClient()
         let project = ProjectMetadata.fixture(id: "p-1", workspaceID: "ws-1")
-        await api.enqueueList(.success(ProjectListResponse(projects: [project], truncated: false)))
+        await api.enqueueList(.success(ProjectListResponse(projects: [project], hasMore: false)))
         let projects = ProjectService(
             auth: auth,
             endpointResolver: LiveAppEndpointResolver(),
@@ -101,8 +101,8 @@ struct AppCoordinatorBootstrapTests {
         // empty response. Then onboarding bootstrap triggers
         // loadProjectsForOnboarding which calls list() again. Two empty
         // outcomes cover both paths.
-        await api.enqueueList(.success(ProjectListResponse(projects: [], truncated: false)))
-        await api.enqueueList(.success(ProjectListResponse(projects: [], truncated: false)))
+        await api.enqueueList(.success(ProjectListResponse(projects: [], hasMore: false)))
+        await api.enqueueList(.success(ProjectListResponse(projects: [], hasMore: false)))
         let projects = ProjectService(
             auth: auth,
             endpointResolver: LiveAppEndpointResolver(),
