@@ -39,6 +39,37 @@ createApp({
       });
     });
 
+    // ── User identity endpoint ────────────────────────────────────────────
+    // Returns the current user's identity from the auth sidecar headers.
+    // Browser requests always have these headers after passing through the
+    // Databricks Apps platform auth proxy.
+    appkit.server.extend((app) => {
+      app.get('/api/me', (req, res) => {
+        const email = req.headers['x-forwarded-email'] as string | undefined;
+        const preferredUsername = req.headers['x-forwarded-preferred-username'] as string | undefined;
+        const scimId = req.headers['x-forwarded-user'] as string | undefined;
+
+        if (!email && !scimId) {
+          res.status(401).json({
+            type: 'https://lakeloom/errors/unauthenticated',
+            title: 'Unauthenticated',
+            status: 401,
+            detail: 'No user identity headers present.',
+          });
+          return;
+        }
+
+        // Derive display_name from email (before @) if no explicit name header
+        const displayName = preferredUsername ?? email?.split('@')[0] ?? 'Unknown';
+
+        res.status(200).json({
+          email: email ?? null,
+          display_name: displayName,
+          scim_id: scimId ?? null,
+        });
+      });
+    });
+
     // ── Register routes ───────────────────────────────────────────────────
     await setupPairingRoutes(appkit);
     await setupCaptureRoutes(appkit);

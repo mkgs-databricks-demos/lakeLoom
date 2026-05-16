@@ -7,6 +7,7 @@ import {
   Skeleton,
 } from '@databricks/appkit-ui/react';
 import { Suspense, lazy } from 'react';
+import { useCurrentUser } from './hooks/useCurrentUser';
 
 // ── Route-level code splitting ────────────────────────────────────────────────
 // Each page is loaded on demand. Reduces initial bundle from ~1.7 MB to the
@@ -35,6 +36,18 @@ const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   }`;
 
 function Layout() {
+  const { user } = useCurrentUser();
+
+  // Derive initials from display name or email
+  const initials = user
+    ? (user.displayName || user.email || '?')
+        .split(/[.@ ]/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((s) => s[0].toUpperCase())
+        .join('')
+    : '';
+
   return (
     <div className="min-h-screen bg-[var(--surface-primary,#fff)] flex flex-col">
       <header className="border-b border-[var(--border-default,#DCE0E2)] px-6 py-3 flex items-center gap-4">
@@ -53,6 +66,22 @@ function Layout() {
             Analytics
           </NavLink>
         </nav>
+
+        {/* ── User identity pill ─────────────────────────────────────── */}
+        {user && (
+          <div className="ml-auto flex items-center gap-2">
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full
+                          bg-[var(--surface-tertiary,#EEEDE9)] border border-[var(--border-default,#DCE0E2)]">
+              <span className="w-6 h-6 rounded-full bg-[var(--accent-primary,#FF3621)] text-white
+                             text-[10px] font-bold flex items-center justify-center">
+                {initials}
+              </span>
+              <span className="text-xs font-medium text-[var(--text-primary,#1B3139)] max-w-[180px] truncate">
+                {user.email ?? user.displayName}
+              </span>
+            </div>
+          </div>
+        )}
       </header>
 
       <main className="flex-1">
