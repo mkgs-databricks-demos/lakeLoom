@@ -325,6 +325,44 @@ Reusable components serving multiple features:
 
 ---
 
+## Cross-Cutting Concerns (Phase 2+ Enhancements)
+
+### User Identity Display
+
+Show the current user's identity in the top-right of the app shell so it's always clear who is logged in. The browser auth sidecar provides `X-Forwarded-Email` on every request.
+
+**Implementation approach:**
+- Add `GET /api/me` endpoint — returns `{ email, display_name, scim_id }` from identity headers
+- App shell fetches on mount, caches in React context
+- Display as avatar/email pill in the top-right nav bar (similar to Databricks workspace header)
+- Also useful for showing "Created by you" vs "Created by <name>" in project cards
+
+**Priority:** High — simple to implement, immediately clarifies identity handoff between iOS and browser.
+
+---
+
+### Project Permissions Model
+
+Owner of a project should be able to grant scoped access to other workspace users. Three permission levels:
+
+| Level | Capabilities |
+|-------|-------------|
+| **View** | Read-only access to project, captures, uploads, transcripts |
+| **Edit** | Create/modify captures, upload files, transition session states |
+| **Manage** | Grant/revoke permissions, archive/restore, change project settings |
+
+**Implementation approach:**
+- New Lakebase table: `app.project_permissions` (project_id, user_id, role, granted_by, granted_at)
+- New middleware: `requireProjectAccess(minRole)` — checks permission table before handler
+- Project creator automatically gets `manage` role
+- `GET /api/v1/projects` returns only projects where user has at least `view` permission (or is creator)
+- UI: "Share" button on project detail → modal with user search + role selector + current collaborators list
+
+**Dependencies:** User identity display (need `/api/me` and user lookup)  
+**Priority:** Medium — enables team collaboration, but single-user flow works without it.
+
+---
+
 ## Relationship to Existing Code
 
 | Existing | Status | Action |
