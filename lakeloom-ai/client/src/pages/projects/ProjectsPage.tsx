@@ -406,7 +406,7 @@ function ProjectCard({
                          bg-[var(--surface-tertiary,#EEEDE9)] text-[var(--text-tertiary,#618794)]
                          border border-[var(--border-default,#DCE0E2)]">
             <Smartphone className="w-3 h-3" />
-            No device
+            Unpaired
           </span>
         )}
       </div>
