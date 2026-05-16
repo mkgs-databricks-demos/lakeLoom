@@ -1,5 +1,4 @@
 import { createApp, analytics, lakebase, server } from '@databricks/appkit';
-import { setupSampleLakebaseRoutes } from './routes/lakebase/todo-routes';
 import { setupPairingRoutes } from './routes/pairing/pairing-routes';
 import { setupCaptureRoutes } from './routes/captures/capture-routes';
 import { setupUploadRoutes } from './routes/uploads/upload-routes';
@@ -41,7 +40,6 @@ createApp({
     });
 
     // ── Register routes ───────────────────────────────────────────────────
-    await setupSampleLakebaseRoutes(appkit);
     await setupPairingRoutes(appkit);
     await setupCaptureRoutes(appkit);
     await setupUploadRoutes(appkit);
@@ -53,25 +51,55 @@ createApp({
       app.use(problemDetailsHandler);
     });
 
-    await appkit.server.start();
+    const httpServer = await appkit.server.start();
 
     // ── Graceful shutdown ─────────────────────────────────────────────────
-    // The platform sends SIGTERM on redeploy/stop. Drain in-flight requests,
-    // close ZeroBus streams, close the Lakebase PG pool, and exit cleanly.
+    // The platform sends SIGTERM on redeploy/stop. We have 15s before a
+    // force-kill. Close the HTTP server first (stop accepting new connections),
+    // then drain ZeroBus streams and the Lakebase pool. A 12s safety timeout
+    // ensures we exit before the platform force-kills at 15s.
+    let shuttingDown = false;
+
     const shutdown = async (signal: string) => {
+      if (shuttingDown) return; // Prevent double-shutdown
+      shuttingDown = true;
+
       console.log(`[shutdown] Received ${signal}, shutting down gracefully...`);
+
+      // Safety net: force exit after 12s (platform kills at 15s)
+      const forceExitTimer = setTimeout(() => {
+        console.error('[shutdown] Forced exit after 12s timeout.');
+        process.exit(1);
+      }, 12_000);
+      forceExitTimer.unref(); // Don't keep event loop alive
+
+      // 1. Stop accepting new connections
+      try {
+        await new Promise<void>((resolve, reject) => {
+          httpServer.close((err) => (err ? reject(err) : resolve()));
+        });
+        console.log('[shutdown] HTTP server closed.');
+      } catch (err) {
+        console.error('[shutdown] HTTP server close error:', err);
+      }
+
+      // 2. Close ZeroBus streams
       try {
         await shutdownZerobus();
         console.log('[shutdown] ZeroBus streams closed.');
       } catch (err) {
         console.error('[shutdown] ZeroBus shutdown error:', err);
       }
+
+      // 3. Close Lakebase pool
       try {
         await appkit.lakebase.pool.end();
         console.log('[shutdown] Lakebase pool closed.');
       } catch (err) {
         console.error('[shutdown] Lakebase shutdown error:', err);
       }
+
+      console.log('[shutdown] Clean exit.');
       process.exit(0);
     };
 
