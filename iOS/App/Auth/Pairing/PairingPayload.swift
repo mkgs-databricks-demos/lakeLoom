@@ -140,22 +140,31 @@ extension PairingPayload {
     /// Decodes a QR-scanned payload string.
     ///
     /// Accepted wire formats (in order of attempt):
-    ///   1. **Data URI** — `data:application/json;base64,<payload>`
-    ///      (with any MIME type — we just split on the comma). This is
-    ///      what the live Databricks App renders today via
-    ///      `data:application/json;base64,${btoa(JSON.stringify(payload))}`
-    ///      in `lakeloom-ai/client/src/pages/pairing/PairingPage.tsx`.
-    ///   2. **Raw base64** (RFC 4648 §4).
-    ///   3. **base64url** (§5) with or without padding.
+    ///   1. **Raw JSON** — anything starting with `{` after trim. The
+    ///      Databricks App's pairing endpoint serves the JSON
+    ///      directly; the QR can encode it without a base64 wrapper.
+    ///      This is the format the debug paste-payload affordance
+    ///      surfaces when grabbed from the browser Network tab.
+    ///   2. **Data URI** — `data:application/json;base64,<payload>`
+    ///      (with any MIME type — we just split on the comma). Legacy
+    ///      form for older pairing-page renders that did
+    ///      `data:application/json;base64,${btoa(JSON.stringify(payload))}`.
+    ///   3. **Raw base64** (RFC 4648 §4).
+    ///   4. **base64url** (§5) with or without padding.
     ///
     /// We're deliberately lenient so iOS doesn't break the next time
     /// Genie iterates on the encoder. JSON decoding uses `.iso8601` for
     /// `expires_at`.
     public static func decode(from qrString: String) throws -> PairingPayload {
         let trimmed = qrString.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Strip an optional `data:<mime>[;base64],` prefix. If the QR
-        // contains a Data URI we want only the payload portion after
-        // the first comma.
+
+        // Path 1: raw JSON — fast-path so we don't waste time trying
+        // to base64-decode a `{`-prefixed string.
+        if trimmed.hasPrefix("{") {
+            return try Self.decodeJSON(Data(trimmed.utf8))
+        }
+
+        // Path 2-4: base64 of JSON, optionally wrapped in a Data URI.
         let candidate: String
         if trimmed.hasPrefix("data:"), let commaIdx = trimmed.firstIndex(of: ",") {
             candidate = String(trimmed[trimmed.index(after: commaIdx)...])
@@ -165,11 +174,15 @@ extension PairingPayload {
         guard let jsonData = Self.decodeBase64Variants(candidate) else {
             throw DecodingError.invalidBase64
         }
+        return try Self.decodeJSON(jsonData)
+    }
+
+    private static func decodeJSON(_ data: Data) throws -> PairingPayload {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let payload: PairingPayload
         do {
-            payload = try decoder.decode(PairingPayload.self, from: jsonData)
+            payload = try decoder.decode(PairingPayload.self, from: data)
         } catch {
             throw DecodingError.invalidJSON(reason: String(describing: error))
         }

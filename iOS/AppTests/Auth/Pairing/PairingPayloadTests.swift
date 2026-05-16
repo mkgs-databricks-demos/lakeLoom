@@ -92,6 +92,25 @@ struct PairingPayloadTests {
         }
     }
 
+    @Test("decode happy path — raw JSON (no base64 wrapper)")
+    func decodeRawJSON() throws {
+        // Genie's pairing endpoint now serves the JSON directly via
+        // the QR (the network response in the browser DevTools is
+        // the literal JSON object). iOS must accept this without a
+        // base64/data-URI wrapper.
+        let payload = try PairingPayload.decode(from: Self.sampleJSON)
+        #expect(payload.version == 1)
+        #expect(payload.workspace.id == "7474657291520070")
+        #expect(payload.user.displayName == "Matthew Giglia")
+    }
+
+    @Test("decode raw JSON tolerates leading/trailing whitespace")
+    func decodeRawJSONTrimsWhitespace() throws {
+        let qr = "  \n\(Self.sampleJSON)\n  "
+        let payload = try PairingPayload.decode(from: qr)
+        #expect(payload.version == 1)
+    }
+
     @Test("decode tolerates leading/trailing whitespace")
     func decodeTrimsWhitespace() throws {
         let qr = "  \n" + Self.encodedQR(json: Self.sampleJSON) + "\n  "
