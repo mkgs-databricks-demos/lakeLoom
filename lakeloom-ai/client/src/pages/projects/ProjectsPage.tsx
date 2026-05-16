@@ -402,7 +402,7 @@ function ProjectCard({
             {deviceLabel}
           </span>
         ) : (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium whitespace-nowrap
                          bg-[var(--surface-tertiary,#EEEDE9)] text-[var(--text-tertiary,#618794)]
                          border border-[var(--border-default,#DCE0E2)]">
             <Smartphone className="w-3 h-3" />
