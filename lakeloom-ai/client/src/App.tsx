@@ -12,6 +12,8 @@ import { Suspense, lazy } from 'react';
 // Each page is loaded on demand. Reduces initial bundle from ~1.7 MB to the
 // shell + whichever page the user navigates to first.
 const ProjectsPage = lazy(() => import('./pages/projects/ProjectsPage').then(m => ({ default: m.ProjectsPage })));
+const ProjectDetailPage = lazy(() => import('./pages/projects/ProjectDetailPage').then(m => ({ default: m.ProjectDetailPage })));
+const CaptureDetailPage = lazy(() => import('./pages/projects/CaptureDetailPage').then(m => ({ default: m.CaptureDetailPage })));
 const AnalyticsPage = lazy(() => import('./pages/analytics/AnalyticsPage').then(m => ({ default: m.AnalyticsPage })));
 const LakebasePage = lazy(() => import('./pages/lakebase/LakebasePage').then(m => ({ default: m.LakebasePage })));
 const FilesPage = lazy(() => import('./pages/files/FilesPage').then(m => ({ default: m.FilesPage })));
@@ -122,6 +124,8 @@ const router = createBrowserRouter([
     errorElement: <RouteErrorFallback />,
     children: [
       { path: '/', element: <ProjectsPage /> },
+      { path: '/projects/:id', element: <ProjectDetailPage /> },
+      { path: '/projects/:id/captures/:cid', element: <CaptureDetailPage /> },
       { path: '/pairing', element: <PairingPage /> },
       { path: '/analytics', element: <AnalyticsPage /> },
       { path: '/lakebase', element: <LakebasePage /> },

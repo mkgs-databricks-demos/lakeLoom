@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef, type FormEvent } from 'react';
+import { useNavigate } from 'react-router';
 import { Plus, Search, Archive, RotateCcw, Pencil, FolderOpen, Loader2 } from 'lucide-react';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -96,6 +97,7 @@ export function ProjectsPage() {
   const [hasMore, setHasMore] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
+  const navigate = useNavigate();
 
   // Debounce search input to avoid hammering the API
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -258,6 +260,7 @@ export function ProjectsPage() {
               <ProjectCard
                 key={project.project_id}
                 project={project}
+                onClick={() => navigate(`/projects/${project.project_id}`)}
                 onEdit={() => setEditingProject(project)}
                 onArchive={() => handleArchive(project.project_id)}
                 onRestore={() => handleRestore(project.project_id)}
@@ -315,11 +318,13 @@ export function ProjectsPage() {
 
 function ProjectCard({
   project,
+  onClick,
   onEdit,
   onArchive,
   onRestore,
 }: {
   project: Project;
+  onClick: () => void;
   onEdit: () => void;
   onArchive: () => void;
   onRestore: () => void;
@@ -327,9 +332,12 @@ function ProjectCard({
   const timeAgo = formatRelativeTime(project.updated_at);
 
   return (
-    <div className={`rounded-xl border bg-[var(--surface-raised,#fff)] p-6
-                     border-[var(--border-default,#DCE0E2)]
-                     hover:shadow-sm transition-shadow duration-200
+    <div
+      onClick={onClick}
+      className={`rounded-xl border bg-[var(--surface-raised,#fff)] p-6
+                     border-[var(--border-default,#DCE0E2)] cursor-pointer
+                     hover:shadow-sm hover:border-[var(--border-focus,#2272B4)]
+                     transition-all duration-200
                      ${project.archived ? 'opacity-60' : ''}`}>
       <div className="flex items-start justify-between mb-2">
         <h3 className="text-base font-semibold text-[var(--text-primary,#1B3139)] truncate pr-2">
@@ -353,7 +361,7 @@ function ProjectCard({
         Updated {timeAgo} · by {project.created_by_username}
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
         <button
           onClick={onEdit}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
