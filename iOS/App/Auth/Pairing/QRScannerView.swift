@@ -47,6 +47,20 @@ public struct QRScannerView: View {
                 })
                 ScannerOverlay(prompt: prompt)
             }
+
+            #if DEBUG
+            // Simulators have no real camera, and even on a device
+            // it's useful to bypass the QR optics during repro work
+            // (paste the exact payload from the pair-event response).
+            // The overlay layers on top of every permission state so
+            // it works whether or not camera access has been granted.
+            DebugPastePayloadOverlay { code in
+                if code != lastScanned {
+                    lastScanned = code
+                    onCodeScanned(code)
+                }
+            }
+            #endif
         }
         .task {
             await checkOrRequestPermission()
@@ -238,3 +252,101 @@ private struct PermissionDeniedView: View {
         print("scanned: \(code)")
     }
 }
+
+// MARK: - Debug paste affordance
+
+#if DEBUG
+/// Floats a small "Paste payload" button in the top-right of the
+/// scanner. Tapping opens a sheet with a multiline text editor and a
+/// "Use this" submit button that fires the same `onCodeScanned`
+/// callback the camera path uses. Excluded from Release builds at
+/// the compiler level via `#if DEBUG`.
+private struct DebugPastePayloadOverlay: View {
+    let onCodeScanned: @MainActor (String) -> Void
+
+    @State private var showingSheet = false
+
+    var body: some View {
+        VStack {
+            HStack {
+                Spacer()
+                Button {
+                    showingSheet = true
+                } label: {
+                    Label("Paste payload", systemImage: "doc.on.clipboard")
+                        .font(.caption.weight(.medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.black.opacity(0.55), in: Capsule())
+                }
+                // 60pt clears the iPhone 17's 59pt Dynamic Island
+                // even when the parent applies `.ignoresSafeArea`
+                // (which `QRScanStepView` does). Otherwise the
+                // status-bar / island region eats taps.
+                .padding(.top, 60)
+                .padding(.trailing, 16)
+            }
+            Spacer()
+        }
+        .sheet(isPresented: $showingSheet) {
+            DebugPastePayloadSheet(
+                onSubmit: { text in
+                    showingSheet = false
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else { return }
+                    onCodeScanned(trimmed)
+                },
+                onCancel: { showingSheet = false }
+            )
+        }
+    }
+}
+
+private struct DebugPastePayloadSheet: View {
+    let onSubmit: (String) -> Void
+    let onCancel: () -> Void
+
+    @State private var payload: String = ""
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Paste the pairing payload (the `data:application/json;base64,...` text the Databricks App returns when it generates a QR).")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+
+                TextEditor(text: $payload)
+                    .font(.system(.footnote, design: .monospaced))
+                    .scrollContentBackground(.hidden)
+                    .padding(8)
+                    .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+                    .frame(minHeight: 200)
+
+                Button {
+                    if let str = UIPasteboard.general.string {
+                        payload = str
+                    }
+                } label: {
+                    Label("Paste from clipboard", systemImage: "doc.on.clipboard")
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding()
+            .navigationTitle("DEBUG: Paste QR payload")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Use this") {
+                        onSubmit(payload)
+                    }
+                    .disabled(payload.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+}
+#endif
