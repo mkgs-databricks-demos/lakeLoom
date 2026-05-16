@@ -10,3 +10,4 @@ export { TimeAgo, Duration } from './TimeAgo';
 export { EmptyState } from './EmptyState';
 export { FileIcon, FileIconContainer } from './FileIcon';
 export { ConfirmDialog } from './ConfirmDialog';
+export { PairDeviceModal } from './PairDeviceModal';

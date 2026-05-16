@@ -5,13 +5,16 @@
  * Displays project metadata header + paginated list of capture sessions
  * with state filtering and browser-side state transitions.
  *
+ * The "Pair iPhone" CTA opens a modal (PairDeviceModal) instead of navigating
+ * away, keeping the user in project context.
+ *
  * Brand: Databricks semantic tokens, DM Sans, motion vars, WCAG AA.
  */
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router';
 import { ArrowLeft, Smartphone, Loader2, ChevronDown } from 'lucide-react';
-import { StatusBadge, TimeAgo, Duration, EmptyState, ConfirmDialog } from '../../components';
+import { StatusBadge, TimeAgo, Duration, EmptyState, ConfirmDialog, PairDeviceModal } from '../../components';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -111,6 +114,9 @@ export function ProjectDetailPage() {
   } | null>(null);
   const [confirmLoading, setConfirmLoading] = useState(false);
 
+  // Pair device modal state
+  const [showPairModal, setShowPairModal] = useState(false);
+
   const projectId = id!;
 
   // Load project + captures
@@ -167,6 +173,13 @@ export function ProjectDetailPage() {
     }
   };
 
+  // Device selected handler (from modal)
+  const handleDeviceSelected = (deviceId: string, deviceLabel: string) => {
+    // For now, just close the modal. In future phases this could
+    // trigger a capture session creation on the selected device.
+    console.log(`Device selected: ${deviceLabel} (${deviceId})`);
+  };
+
   const projectName = project?.project_name ?? project?.name ?? 'Project';
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -182,7 +195,7 @@ export function ProjectDetailPage() {
         Back to Projects
       </Link>
 
-      {/* ── Project header ────────────────────────────────────────────────── */}
+      {/* ── Project header ──────────────────────────────────────────────────── */}
       {project && (
         <div className="mb-8">
           <h1 className="text-2xl font-bold text-[var(--text-primary,#1B3139)]">
@@ -255,14 +268,15 @@ export function ProjectDetailPage() {
           title="No capture sessions yet"
           description="Pair an iPhone to start capturing audio, screenshots, and documents for this project."
           action={
-            <Link
-              to="/pairing"
+            <button
+              type="button"
+              onClick={() => setShowPairModal(true)}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium
                          bg-[var(--accent-primary,#FF3621)] text-white
                          hover:brightness-90 transition-all duration-100"
             >
               Pair iPhone →
-            </Link>
+            </button>
           }
         />
       )}
@@ -387,6 +401,13 @@ export function ProjectDetailPage() {
         confirmLabel={confirmAction?.state === 'completed' ? 'Complete' : 'Cancel Session'}
         loading={confirmLoading}
         variant={confirmAction?.state === 'cancelled' ? 'danger' : 'default'}
+      />
+
+      {/* ── Pair device modal ──────────────────────────────────────────────── */}
+      <PairDeviceModal
+        open={showPairModal}
+        onClose={() => setShowPairModal(false)}
+        onDeviceSelected={handleDeviceSelected}
       />
     </div>
   );
