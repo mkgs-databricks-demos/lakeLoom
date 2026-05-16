@@ -81,11 +81,20 @@ public final class AppCoordinator {
         do {
             try await coreDataStack.initialize()
         } catch {
+            // Surface the underlying reason in both the log and the
+            // user-facing error screen — the previous "core data
+            // initialize failed" placeholder hid migration / model
+            // / permission issues behind an opaque message, forcing
+            // a roundtrip through Console.app to diagnose.
+            let detail = String(describing: error)
             await logger.error(
                 "core data initialize failed",
-                metadata: ["reason": .errorCode(String(describing: type(of: error)))]
+                metadata: [
+                    "type": .errorCode(String(describing: type(of: error))),
+                    "reason": .string(detail)
+                ]
             )
-            phase = .error(.bootstrapFailed(reason: "core data initialize failed"))
+            phase = .error(.bootstrapFailed(reason: "CoreData: \(detail)"))
             return
         }
 
