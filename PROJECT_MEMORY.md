@@ -62,7 +62,7 @@ lakeLoom/
 │   │   ├── server.ts              # Entry: secrets → migrations → routes → serve
 │   │   ├── lib/                   # crypto.ts, errors.ts (RFC 9457)
 │   │   ├── middleware/            # ios-auth.ts, browser-auth.ts + dualAuth()
-│   │   ├── migrations/            # 001–004 (paired_sessions → projects)
+│   │   ├── migrations/            # 001–005 (paired_sessions → project_device_assignments)
 │   │   ├── services/              # secrets, sse, zerobus stream pool
 │   │   └── routes/                # pairing, captures, uploads, events, projects
 │   ├── client/                     # React frontend (Vite + Tailwind v4)
@@ -351,7 +351,7 @@ The SDK's `Endpoint` object does NOT have a `hostname` attribute. Use the REST A
 * ~~**Next feature branch:** Orphan-byte sweeper — scheduled job to scan UC Volumes for files without a matching `app.uploads` row.~~ **DONE 2026-05-14 — `orphan_byte_sweeper` job, weekly Sunday 2am UTC, report-only v1.**
 * ~~Await Isaac's confirmation: (1) HEIC vs JPEG/PNG from iOS, (2) base64url vs standard base64 for `device_pubkey`.~~ **DONE 2026-05-14 — iOS sends JPEG only (no HEIC), base64url no-padding confirmed.**
 * ~~End-to-end QR pairing on physical iPhone.~~ **DONE 2026-05-15 — Module 01 validated, PR #18 merged.**
-* **Next: Browser UI Phase 2** — Capture Session Browser (see `fixtures/databricks-app-ui-plan.md`).
+* **~~Next: Browser UI Phase 2~~ — IN PROGRESS (2026-05-16).** Device assignment, project card indicators, user identity pill all shipped. Remaining: session list, session detail view, session label editing. See `fixtures/databricks-app-ui-plan.md`.
 * **Next: iOS Module 02** — CaptureEngine. Will exercise audio + screenshot + photo upload endpoints.
 * **Non-blocking follow-up:** Isaac investigating `GET /api/v1/projects` list failure during onboarding (likely iOS `LiveProjectAPIClient` not routing through full header injector).
 
@@ -393,12 +393,13 @@ All server components implemented: crypto lib, migration runner, `paired_session
 * **`screenshots` UC Volume semantic widening:** This volume now holds "session images" — both screenshots (`kind='screenshot'`, PNG primary) and camera photos (`kind='photo'`, JPEG only). Differentiated by `kind` column in `app.uploads`, not by filesystem layout.
 * **base64url encoding confirmed:** `device_pubkey` on wire uses RFC 4648 §5 base64url with stripped padding. Node decoder `Buffer.from(x, 'base64url')` handles this natively. No code change needed.
 
-### Post-Deploy Validation: COMPLETE (2026-05-14)
+### Post-Deploy Validation: COMPLETE (2026-05-14, expanded 2026-05-16)
 * **Job:** `post_deploy_validation` in `resources/post_deploy_validation.job.yml`
-* **Notebook:** `src/tests/pairing-api-test.ipynb` — 10 endpoint tests (including full E2E pairing with ECDSA keygen), CI/CD gate cell raises AssertionError on failure
+* **Notebook:** `src/tests/pairing-api-test.ipynb` — **14 endpoint tests** (including full E2E pairing with ECDSA keygen), CI/CD gate cell raises AssertionError on failure
 * **deploy.sh Step 7:** `run_post_deploy_validation()` — runs after source deploy, non-fatal (warns but doesn't block)
 * **Flag:** `--skip-validation` skips Step 7 for rapid iteration
-* **Tests cover:** healthz, browser-auth pairing (expected 401), SPN token acquisition, Layer 1 pass-through, capture lifecycle, upload routes
+* **Tests cover:** healthz, browser-auth pairing (expected 401), SPN token acquisition, Layer 1 pass-through, capture lifecycle, upload routes, browser-auth captures list, capture detail, state transition, `/api/me` identity endpoint
+* **Retry logic:** Tests 12+ retry on 502/503 (transient app restart after deploy)
 
 ### Lakebase Schema Permissions: COMPLETE
 * `configure_app_spn` job succeeded (2026-05-13) — both tasks passed
@@ -428,6 +429,33 @@ All server components implemented: crypto lib, migration runner, `paired_session
 * **Client UI:** `ProjectsPage.tsx` — card grid with create/edit modals, search (debounced 300ms), archive/restore, "Load more" button for pagination. Databricks brand tokens (DM Sans, semantic colors, motion).
 * **Test 9:** Added to `pairing-api-test` notebook — validates all 6 routes are registered and dualAuth active.
 * **Lakebase extension support confirmed:** `CREATE EXTENSION IF NOT EXISTS pg_trgm` succeeded. Positive signal for future `pgvector` use.
+
+### Browser UI Phase 2 — Device Assignment & User Identity: IN PROGRESS (2026-05-16)
+
+**Branch:** `phase2-capture-session-browser`
+
+**Migration 005:** `app.project_device_assignments` — links `project_id` to `paired_session_id`. Unique constraint prevents duplicates. `ON CONFLICT DO UPDATE` makes assignment idempotent.
+
+**Server endpoints added:**
+- `POST /api/v1/projects/:id/devices` — upsert device assignment
+- `GET /api/v1/projects/:id/devices` — list assigned devices (JOIN paired_sessions for labels)
+- `GET /api/me` — returns `{ email, display_name, scim_id }` from auth sidecar headers
+
+**Client features shipped:**
+- `ProjectDetailPage`: device assignment state, green success banner, "Capture Sessions" header chip (green/gray)
+- `PairDeviceModal`: `activeDeviceId` prop, active indicator (pulsing green dot, tinted background)
+- `ProjectsPage`: per-card device pill — green with label (assigned) or gray "Unpaired" (unassigned), `whitespace-nowrap`
+- `App.tsx`: user identity pill in nav header (Lava 600 initials circle + email), uses `useCurrentUser` hook
+- Device-agnostic text: "Pair Device" instead of "Pair iPhone" (future Watch/iPad support)
+
+**New client file:** `client/src/hooks/useCurrentUser.ts` — fetches `/api/me` on mount, caches for session
+
+**Test 14:** Validates `/api/me` — accepts 200 (identity returned) or 401 (no headers, expected from SPN)
+
+**Remaining Phase 2 work:**
+- Session list per project (sortable by date, filterable by state)
+- Session detail view (metadata header, upload timeline, state transition buttons)
+- Session label editing
 
 ### QR Pairing Host Fix: COMPLETE (2026-05-14)
 * **Bug:** `app.base_url` in QR payload encoded `https://localhost:8000` because Express reads the container's loopback address from `req.headers.host`. iPhone tried to connect to its own loopback → ECONNREFUSED.

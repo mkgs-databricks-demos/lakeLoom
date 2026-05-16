@@ -1,7 +1,7 @@
 # Databricks App UI — Feature Plan & Implementation Order
 
-**Date:** 2026-05-14 (created) | **Last updated:** 2026-05-15
-**Status:** Phase 1 COMPLETE. Phase 2–7 planned and ready for implementation.
+**Date:** 2026-05-14 (created) | **Last updated:** 2026-05-16
+**Status:** Phase 1 COMPLETE. Phase 2 IN PROGRESS (device assignment, user identity shipped). Phase 3–7 planned.
 **Principle:** The Databricks App does everything the iOS app does EXCEPT record audio.
 
 ---
@@ -93,6 +93,16 @@ Review and manage capture sessions created from iOS.
 - Empty state when no captures exist yet (CTA: "Pair an iPhone to start capturing")
 
 **Dependencies:** Project Management (sessions belong to projects) — ✅ MET
+
+**Phase 2 Progress (2026-05-16):**
+- ✅ Device-to-project association — Migration 005 (`app.project_device_assignments`), POST/GET `/api/v1/projects/:id/devices`
+- ✅ Device selection in ProjectDetailPage — PairDeviceModal with active indicator (green bg, pulsing dot)
+- ✅ Device chip in "Capture Sessions" section header (green when assigned, gray "Connect device" when not)
+- ✅ Project card device indicators — green pill (device label) or gray pill ("Unpaired") on every card
+- ✅ Device-agnostic text — "Pair Device" instead of "Pair iPhone" (future Watch/iPad support)
+- ⬜ Session list per project (sortable by date, filterable by state)
+- ⬜ Session detail view (metadata header, upload timeline, state transition buttons)
+- ⬜ Session label editing
 
 ---
 
@@ -274,7 +284,7 @@ The ordering optimizes for: (a) unblocking iOS Module 06, (b) delivering reviewa
 | Phase | Feature | Status | Est. Effort |
 |-------|---------|--------|-------------|
 | **Phase 1** | Project Management | ✅ COMPLETE (2026-05-14) | — |
-| **Phase 2** | Capture Session Browser | Ready | 2 days |
+| **Phase 2** | Capture Session Browser | ⏳ IN PROGRESS (device assignment + UI shipped 2026-05-16) | 2 days |
 | **Phase 3** | Media Viewer & Audio Playback | Ready (depends on Phase 2) | 3–4 days |
 | **Phase 4** | Browser-Side Uploads | Ready (depends on Phase 2+3) | 1–2 days |
 | **Phase 5** | Device & Admin Panel | Ready (independent) | 1–2 days |
@@ -327,17 +337,17 @@ Reusable components serving multiple features:
 
 ## Cross-Cutting Concerns (Phase 2+ Enhancements)
 
-### User Identity Display
+### User Identity Display — ✅ COMPLETE (2026-05-16)
 
 Show the current user's identity in the top-right of the app shell so it's always clear who is logged in. The browser auth sidecar provides `X-Forwarded-Email` on every request.
 
-**Implementation approach:**
-- Add `GET /api/me` endpoint — returns `{ email, display_name, scim_id }` from identity headers
-- App shell fetches on mount, caches in React context
-- Display as avatar/email pill in the top-right nav bar (similar to Databricks workspace header)
-- Also useful for showing "Created by you" vs "Created by <name>" in project cards
+**Implementation (shipped):**
+- `GET /api/me` endpoint in `server/server.ts` — returns `{ email, display_name, scim_id }` from sidecar headers (`X-Forwarded-Email`, `X-Forwarded-User`, `X-Forwarded-Preferred-Username`)
+- `useCurrentUser` hook (`client/src/hooks/useCurrentUser.ts`) — fetches on mount, caches for session
+- Nav header pill: Lava 600 initials circle + truncated email, pushed right via `ml-auto`
+- Test 14 in `pairing-api-test` notebook validates endpoint (200 with identity OR 401 for no-header cases)
 
-**Priority:** High — simple to implement, immediately clarifies identity handoff between iOS and browser.
+**Commit:** `d151e5c` (branch `phase2-capture-session-browser`)
 
 ---
 
