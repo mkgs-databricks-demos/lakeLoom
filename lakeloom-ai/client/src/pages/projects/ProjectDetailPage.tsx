@@ -116,21 +116,28 @@ export function ProjectDetailPage() {
 
   // Pair device modal state
   const [showPairModal, setShowPairModal] = useState(false);
+  const [assignedDevice, setAssignedDevice] = useState<{ id: string; label: string } | null>(null);
 
   const projectId = id!;
 
-  // Load project + captures
+  // Load project + captures + assigned devices
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const [proj, caps] = await Promise.all([
+      const [proj, caps, devicesRes] = await Promise.all([
         fetchProject(projectId),
         fetchCaptures(projectId, stateFilter),
+        fetch(`/api/v1/projects/${projectId}/devices`).then(r => r.ok ? r.json() : { devices: [] }),
       ]);
       setProject(proj);
       setCaptures(caps.captures);
       setHasMore(caps.captures.length >= 25);
+      // Set first assigned device (most recent assignment)
+      const devices = devicesRes.devices ?? [];
+      if (devices.length > 0) {
+        setAssignedDevice({ id: devices[0].paired_session_id, label: devices[0].device_label ?? 'iPhone' });
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -185,8 +192,7 @@ export function ProjectDetailPage() {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || `Failed to assign device: ${res.status}`);
       }
-      console.log(`✓ Device "${deviceLabel}" assigned to project ${projectId}`);
-      // TODO: Show toast / update UI to reflect assigned device
+      setAssignedDevice({ id: deviceId, label: deviceLabel });
     } catch (err) {
       setError((err as Error).message);
     }
