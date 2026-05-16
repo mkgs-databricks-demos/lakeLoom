@@ -51,13 +51,14 @@ createApp({
       app.use(problemDetailsHandler);
     });
 
-    const httpServer = await appkit.server.start();
+    await appkit.server.start();
 
     // ── Graceful shutdown ─────────────────────────────────────────────────
     // The platform sends SIGTERM on redeploy/stop. We have 15s before a
-    // force-kill. Close the HTTP server first (stop accepting new connections),
-    // then drain ZeroBus streams and the Lakebase pool. A 12s safety timeout
-    // ensures we exit before the platform force-kills at 15s.
+    // force-kill. Drain ZeroBus streams and the Lakebase pool before exiting.
+    // HTTP connections are cleaned up by process.exit — AppKit's server type
+    // (Application) doesn't expose .close(), so we skip explicit HTTP close.
+    // A 12s safety timeout ensures we exit before the platform kills at 15s.
     let shuttingDown = false;
 
     const shutdown = async (signal: string) => {
@@ -73,17 +74,7 @@ createApp({
       }, 12_000);
       forceExitTimer.unref(); // Don't keep event loop alive
 
-      // 1. Stop accepting new connections
-      try {
-        await new Promise<void>((resolve, reject) => {
-          httpServer.close((err) => (err ? reject(err) : resolve()));
-        });
-        console.log('[shutdown] HTTP server closed.');
-      } catch (err) {
-        console.error('[shutdown] HTTP server close error:', err);
-      }
-
-      // 2. Close ZeroBus streams
+      // 1. Close ZeroBus streams (drain in-flight events)
       try {
         await shutdownZerobus();
         console.log('[shutdown] ZeroBus streams closed.');
@@ -91,7 +82,7 @@ createApp({
         console.error('[shutdown] ZeroBus shutdown error:', err);
       }
 
-      // 3. Close Lakebase pool
+      // 2. Close Lakebase pool (drain in-flight queries)
       try {
         await appkit.lakebase.pool.end();
         console.log('[shutdown] Lakebase pool closed.');
