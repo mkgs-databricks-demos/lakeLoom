@@ -11,7 +11,7 @@
 
 import { useState, useEffect, useCallback, useRef, type FormEvent } from 'react';
 import { useNavigate } from 'react-router';
-import { Plus, Search, Archive, RotateCcw, Pencil, FolderOpen, Loader2 } from 'lucide-react';
+import { Plus, Search, Archive, RotateCcw, Pencil, FolderOpen, Loader2, Smartphone } from 'lucide-react';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -99,6 +99,29 @@ export function ProjectsPage() {
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const navigate = useNavigate();
 
+  // Device assignments per project (project_id → device label)
+  const [projectDevices, setProjectDevices] = useState<Record<string, string>>({});
+
+  // Fetch devices for loaded projects
+  const fetchProjectDevices = async (projectIds: string[]) => {
+    const results: Record<string, string> = {};
+    await Promise.all(
+      projectIds.map(async (pid) => {
+        try {
+          const res = await fetch(`/api/v1/projects/${pid}/devices`);
+          if (res.ok) {
+            const data = await res.json();
+            const devices = data.devices ?? [];
+            if (devices.length > 0) {
+              results[pid] = devices[0].device_label ?? 'Device';
+            }
+          }
+        } catch { /* ignore */ }
+      })
+    );
+    setProjectDevices((prev) => ({ ...prev, ...results }));
+  };
+
   // Debounce search input to avoid hammering the API
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -128,6 +151,13 @@ export function ProjectsPage() {
   useEffect(() => {
     loadProjects();
   }, [loadProjects]);
+
+  // Fetch device assignments whenever projects change
+  useEffect(() => {
+    if (projects.length > 0) {
+      fetchProjectDevices(projects.map((p) => p.project_id));
+    }
+  }, [projects]);
 
   // Load next page (appends to existing results)
   const loadMore = async () => {
@@ -260,6 +290,7 @@ export function ProjectsPage() {
               <ProjectCard
                 key={project.project_id}
                 project={project}
+                deviceLabel={projectDevices[project.project_id] ?? null}
                 onClick={() => navigate(`/projects/${project.project_id}`)}
                 onEdit={() => setEditingProject(project)}
                 onArchive={() => handleArchive(project.project_id)}
@@ -318,12 +349,14 @@ export function ProjectsPage() {
 
 function ProjectCard({
   project,
+  deviceLabel,
   onClick,
   onEdit,
   onArchive,
   onRestore,
 }: {
   project: Project;
+  deviceLabel: string | null;
   onClick: () => void;
   onEdit: () => void;
   onArchive: () => void;
@@ -357,8 +390,18 @@ function ProjectCard({
         </p>
       )}
 
-      <div className="text-xs text-[var(--text-tertiary,#618794)] mb-4">
-        Updated {timeAgo} · by {project.created_by_username}
+      <div className="flex items-center justify-between mb-4">
+        <span className="text-xs text-[var(--text-tertiary,#618794)]">
+          Updated {timeAgo} · by {project.created_by_username}
+        </span>
+        {deviceLabel && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium
+                         bg-[var(--accent-success-subtle,#dcfce7)] text-[var(--accent-success,#00A972)]
+                         border border-[var(--accent-success,#00A972)]/20">
+            <Smartphone className="w-3 h-3" />
+            {deviceLabel}
+          </span>
+        )}
       </div>
 
       <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
