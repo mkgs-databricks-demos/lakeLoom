@@ -38,13 +38,15 @@ struct LakeloomApp: App {
             auth: auth,
             endpointResolver: endpointResolver
         )
+        let captureAPI = LiveCaptureAPIClient(lakeloomApp: lakeloomApp)
 
         _coordinator = State(
             wrappedValue: AppCoordinator(
                 auth: auth,
                 projects: projects,
                 coreDataStack: coreDataStack,
-                endpointResolver: endpointResolver
+                endpointResolver: endpointResolver,
+                captureAPI: captureAPI
             )
         )
     }

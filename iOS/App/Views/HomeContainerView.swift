@@ -10,6 +10,10 @@ import SwiftUI
 struct HomeContainerView: View {
     @Bindable var coordinator: AppCoordinator
 
+    #if DEBUG
+    @State private var showingSmokeTest = false
+    #endif
+
     var body: some View {
         VStack(spacing: Spacing.lg) {
             Spacer()
@@ -41,6 +45,20 @@ struct HomeContainerView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, Spacing.xl)
 
+            #if DEBUG
+            if coordinator.captureAPI != nil, coordinator.activeContext != nil {
+                Button {
+                    showingSmokeTest = true
+                } label: {
+                    Label("Endpoint smoke test", systemImage: "stethoscope")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .padding(.horizontal, Spacing.xl)
+            }
+            #endif
+
             Spacer()
 
             Button(role: .destructive) {
@@ -58,5 +76,18 @@ struct HomeContainerView: View {
             .padding(.horizontal, Spacing.xl)
             .padding(.bottom, Spacing.lg)
         }
+        #if DEBUG
+        .sheet(isPresented: $showingSmokeTest) {
+            if let api = coordinator.captureAPI,
+               let context = coordinator.activeContext {
+                EndpointSmokeTestView(
+                    captureAPI: api,
+                    workspaceID: context.workspace.id,
+                    projectID: context.project.id,
+                    onDismiss: { showingSmokeTest = false }
+                )
+            }
+        }
+        #endif
     }
 }

@@ -36,6 +36,12 @@ public final class AppCoordinator {
     let projects: any ProjectServicing
     let coreDataStack: any CoreDataStacking
     let endpointResolver: any AppEndpointResolving
+    /// Optional transport-layer client for capture endpoints. Production
+    /// wiring sets this in `LakeloomApp.swift`; tests omit it (the
+    /// existing test surface doesn't yet drive capture flows through
+    /// the coordinator). The endpoint smoke-test sheet on the home
+    /// view reads this property.
+    public let captureAPI: (any CaptureAPIClient)?
     let logger: AppLogger
     let nowProvider: @Sendable () -> Date
 
@@ -50,6 +56,7 @@ public final class AppCoordinator {
         projects: any ProjectServicing,
         coreDataStack: any CoreDataStacking,
         endpointResolver: any AppEndpointResolving,
+        captureAPI: (any CaptureAPIClient)? = nil,
         logger: AppLogger = AppLogger(category: .coordinator),
         nowProvider: @Sendable @escaping () -> Date = Date.init
     ) {
@@ -57,6 +64,7 @@ public final class AppCoordinator {
         self.projects = projects
         self.coreDataStack = coreDataStack
         self.endpointResolver = endpointResolver
+        self.captureAPI = captureAPI
         self.logger = logger
         self.nowProvider = nowProvider
     }

@@ -154,6 +154,7 @@
 		C0020A12C012C012C012C012 /* FakeAudioRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0010A12C012C012C012C012 /* FakeAudioRecorder.swift */; };
 		C0020A13C013C013C013C013 /* FakeUploadCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0010A13C013C013C013C013 /* FakeUploadCoordinator.swift */; };
 		C0020A14C014C014C014C014 /* LiveCaptureServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0010A14C014C014C014C014 /* LiveCaptureServiceTests.swift */; };
+		D0020A01D001D001D001D001 /* EndpointSmokeTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0010A01D001D001D001D001 /* EndpointSmokeTestView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -323,6 +324,7 @@
 		C0010A12C012C012C012C012 /* FakeAudioRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeAudioRecorder.swift; sourceTree = "<group>"; };
 		C0010A13C013C013C013C013 /* FakeUploadCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeUploadCoordinator.swift; sourceTree = "<group>"; };
 		C0010A14C014C014C014C014 /* LiveCaptureServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveCaptureServiceTests.swift; sourceTree = "<group>"; };
+		D0010A01D001D001D001D001 /* EndpointSmokeTestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndpointSmokeTestView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -543,6 +545,7 @@
 				A6B53730F7F710DA0FE81E5D /* CaptureAPIError.swift */,
 				C0010A01C001C001C001C001 /* CaptureService.swift */,
 				7F84DC6843AC8EE019EF2578 /* CaptureSession.swift */,
+				D0010A01D001D001D001D001 /* EndpointSmokeTestView.swift */,
 				C0010A02C002C002C002C002 /* FileSHA256.swift */,
 				C0010A03C003C003C003C003 /* LiveCaptureService.swift */,
 			);
@@ -1028,6 +1031,7 @@
 				907970D8A5089D5B3B4893A5 /* CaptureAPIError.swift in Sources */,
 				C0020A01C001C001C001C001 /* CaptureService.swift in Sources */,
 				964D84FECA40C505ADF6D9EC /* CaptureSession.swift in Sources */,
+				D0020A01D001D001D001D001 /* EndpointSmokeTestView.swift in Sources */,
 				C0020A02C002C002C002C002 /* FileSHA256.swift in Sources */,
 				C0020A03C003C003C003C003 /* LiveCaptureService.swift in Sources */,
 				A0020A03A003A003A003A003 /* LiveAudioRecorder.swift in Sources */,
