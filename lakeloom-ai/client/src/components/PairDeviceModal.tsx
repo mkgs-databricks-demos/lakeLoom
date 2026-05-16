@@ -36,11 +36,13 @@ export interface PairDeviceModalProps {
   open: boolean;
   onClose: () => void;
   onDeviceSelected?: (deviceId: string, deviceLabel: string) => void;
+  /** The paired_session_id of the device currently assigned to this project */
+  activeDeviceId?: string | null;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export function PairDeviceModal({ open, onClose, onDeviceSelected }: PairDeviceModalProps) {
+export function PairDeviceModal({ open, onClose, onDeviceSelected, activeDeviceId }: PairDeviceModalProps) {
   const [devices, setDevices] = useState<PairedDevice[]>([]);
   const [loadingDevices, setLoadingDevices] = useState(true);
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
@@ -184,28 +186,42 @@ export function PairDeviceModal({ open, onClose, onDeviceSelected }: PairDeviceM
                 {devices.map((device) => (
                   <div
                     key={device.id}
-                    className="flex items-center justify-between px-4 py-3 rounded-xl
-                               border border-[var(--border-default,#DCE0E2)]
-                               hover:border-[var(--border-focus,#2272B4)] hover:shadow-sm
-                               transition-all duration-150 cursor-pointer group"
+                    className={`flex items-center justify-between px-4 py-3 rounded-xl
+                               border transition-all duration-150 cursor-pointer group
+                               ${device.id === activeDeviceId
+                                 ? 'border-[var(--accent-success,#00A972)]/40 bg-[var(--accent-success-subtle,#dcfce7)]/50'
+                                 : 'border-[var(--border-default,#DCE0E2)] hover:border-[var(--border-focus,#2272B4)] hover:shadow-sm'
+                               }`}
                     onClick={() => {
                       onDeviceSelected?.(device.id, device.label);
                       onClose();
                     }}
                   >
                     <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-lg bg-[var(--surface-tertiary,#EEEDE9)]
-                                      flex items-center justify-center
-                                      group-hover:bg-[var(--accent-primary,#FF3621)]/10
-                                      transition-colors duration-150">
-                        <Smartphone className="w-4 h-4 text-[var(--text-secondary,#5A6F77)]
-                                               group-hover:text-[var(--accent-primary,#FF3621)]
-                                               transition-colors duration-150" />
+                      <div className={`w-9 h-9 rounded-lg flex items-center justify-center transition-colors duration-150
+                                      ${device.id === activeDeviceId
+                                        ? 'bg-[var(--accent-success,#00A972)]/10'
+                                        : 'bg-[var(--surface-tertiary,#EEEDE9)] group-hover:bg-[var(--accent-primary,#FF3621)]/10'
+                                      }`}>
+                        <Smartphone className={`w-4 h-4 transition-colors duration-150
+                                               ${device.id === activeDeviceId
+                                                 ? 'text-[var(--accent-success,#00A972)]'
+                                                 : 'text-[var(--text-secondary,#5A6F77)] group-hover:text-[var(--accent-primary,#FF3621)]'
+                                               }`} />
                       </div>
                       <div>
-                        <p className="text-sm font-medium text-[var(--text-primary,#1B3139)]">
-                          {device.label}
-                        </p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-medium text-[var(--text-primary,#1B3139)]">
+                            {device.label}
+                          </p>
+                          {device.id === activeDeviceId && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium
+                                           bg-[var(--accent-success,#00A972)]/15 text-[var(--accent-success,#00A972)]">
+                              <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent-success,#00A972)] animate-pulse" />
+                              Active
+                            </span>
+                          )}
+                        </div>
                         <p className="text-xs text-[var(--text-secondary,#5A6F77)]">
                           Last active: {device.last_seen_at
                             ? new Date(device.last_seen_at).toLocaleDateString()
@@ -215,9 +231,12 @@ export function PairDeviceModal({ open, onClose, onDeviceSelected }: PairDeviceM
                         </p>
                       </div>
                     </div>
-                    <span className="text-xs font-medium text-[var(--accent-primary,#FF3621)]
-                                     opacity-0 group-hover:opacity-100 transition-opacity duration-150">
-                      Select
+                    <span className={`text-xs font-medium transition-opacity duration-150
+                                     ${device.id === activeDeviceId
+                                       ? 'text-[var(--accent-success,#00A972)] opacity-100'
+                                       : 'text-[var(--accent-primary,#FF3621)] opacity-0 group-hover:opacity-100'
+                                     }`}>
+                      {device.id === activeDeviceId ? 'Active' : 'Select'}
                     </span>
                   </div>
                 ))}

@@ -312,7 +312,7 @@ export function ProjectDetailPage() {
         <EmptyState
           icon={<Smartphone className="w-7 h-7" />}
           title="No capture sessions yet"
-          description="Pair an iPhone to start capturing audio, screenshots, and documents for this project."
+          description="Pair a device to start capturing audio, screenshots, and documents for this project."
           action={
             <button
               type="button"
@@ -321,7 +321,7 @@ export function ProjectDetailPage() {
                          bg-[var(--accent-primary,#FF3621)] text-white
                          hover:brightness-90 transition-all duration-100"
             >
-              Pair iPhone →
+              Pair Device →
             </button>
           }
         />
@@ -454,6 +454,7 @@ export function ProjectDetailPage() {
         open={showPairModal}
         onClose={() => setShowPairModal(false)}
         onDeviceSelected={handleDeviceSelected}
+        activeDeviceId={assignedDevice?.id ?? null}
       />
     </div>
   );
