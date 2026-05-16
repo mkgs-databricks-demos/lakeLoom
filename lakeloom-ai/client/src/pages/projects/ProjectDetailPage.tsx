@@ -173,11 +173,23 @@ export function ProjectDetailPage() {
     }
   };
 
-  // Device selected handler (from modal)
-  const handleDeviceSelected = (deviceId: string, deviceLabel: string) => {
-    // For now, just close the modal. In future phases this could
-    // trigger a capture session creation on the selected device.
-    console.log(`Device selected: ${deviceLabel} (${deviceId})`);
+  // Device selected handler (from modal) — associates device with project
+  const handleDeviceSelected = async (deviceId: string, deviceLabel: string) => {
+    try {
+      const res = await fetch(`/api/v1/projects/${projectId}/devices`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paired_session_id: deviceId }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Failed to assign device: ${res.status}`);
+      }
+      console.log(`✓ Device "${deviceLabel}" assigned to project ${projectId}`);
+      // TODO: Show toast / update UI to reflect assigned device
+    } catch (err) {
+      setError((err as Error).message);
+    }
   };
 
   const projectName = project?.project_name ?? project?.name ?? 'Project';

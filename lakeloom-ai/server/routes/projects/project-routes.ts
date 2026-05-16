@@ -384,6 +384,69 @@ export async function setupProjectRoutes(appkit: AppKitContext): Promise<void> {
         next(err);
       }
     });
+
+    // ── POST /api/v1/projects/:id/devices ────────────────────────────────
+    // Associate a paired device with this project.
+    // Creates an assignment so the iPhone knows which project to target.
+    // Idempotent: re-assigning the same device returns 200 (not 409).
+    app.post('/api/v1/projects/:id/devices', auth, async (req, res, next) => {
+      try {
+        const projectId = req.params.id as string;
+        const { paired_session_id } = req.body ?? {};
+
+        if (!paired_session_id || typeof paired_session_id !== 'string') {
+          throw validationError('paired_session_id is required.');
+        }
+
+        // Verify project exists
+        const { rows: projRows } = await lakebase.query(
+          `SELECT id FROM app.projects WHERE id = $1`,
+          [projectId],
+        );
+        if (projRows.length === 0) {
+          throw projectNotFound(projectId);
+        }
+
+        // Upsert assignment (ON CONFLICT = idempotent)
+        const { rows } = await lakebase.query(
+          `INSERT INTO app.project_device_assignments
+             (project_id, paired_session_id, assigned_by_user_id)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (project_id, paired_session_id) DO UPDATE
+             SET assigned_by_user_id = EXCLUDED.assigned_by_user_id,
+                 assigned_at = NOW()
+           RETURNING id, project_id, paired_session_id, assigned_by_user_id, assigned_at`,
+          [projectId, paired_session_id, req.user!.userId],
+        );
+
+        res.status(201).json(rows[0]);
+      } catch (err) {
+        next(err);
+      }
+    });
+
+    // ── GET /api/v1/projects/:id/devices ─────────────────────────────────
+    // List devices assigned to this project (with device labels from paired_sessions).
+    app.get('/api/v1/projects/:id/devices', auth, async (req, res, next) => {
+      try {
+        const projectId = req.params.id as string;
+
+        const { rows } = await lakebase.query(
+          `SELECT pda.id, pda.paired_session_id, pda.assigned_at,
+                  ps.device_label, ps.last_seen_at
+           FROM app.project_device_assignments pda
+           JOIN app.paired_sessions ps ON ps.id = pda.paired_session_id
+           WHERE pda.project_id = $1
+           ORDER BY pda.assigned_at DESC`,
+          [projectId],
+        );
+
+        res.json({ devices: rows });
+      } catch (err) {
+        next(err);
+      }
+    });
+
   });
 }
 
