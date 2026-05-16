@@ -1,10 +1,10 @@
 # Module 02 — CaptureEngine + ChunkAssembler
 
-**Product:** Lakeloom
-**Status:** Design — pre-implementation
-**Last updated:** 2026-05-02
-**Depends on:** AppCoordinator (for current project + workspace + user); permissions (mic, speech)
-**Depended on by:** IngestService (consumes the chunk stream), StorageService (consumes audio file events)
+**Product:** lakeLoom
+**Status:** File-upload pipeline shipped (PRs #24, #26, #27, #28). Live transcription + chunk streaming still in design phase. See §1.5 for the implementation-status map.
+**Last updated:** 2026-05-16
+**Depends on:** AppCoordinator (for current project + workspace + user); AuthService + `LakeloomAppClient` (transport + signing); permissions (mic; speech when transcription lands)
+**Depended on by:** IngestService (consumes the chunk stream), StorageService (consumes audio file events), Module 08 UI (subscribes to `CaptureService.stateUpdates()`)
 
 ---
 
@@ -12,13 +12,75 @@
 
 CaptureEngine owns the audio capture pipeline. It converts a button press (Quick Capture v1) or a recording session (Meeting Mode v1.x) into:
 
-1. A stream of finalized **transcript chunks** with timing, confidence, and trigger metadata
-2. A single **session audio file** persisted locally for post-session Wi-Fi upload
-3. A pair of **session lifecycle events** (`sessionStart`, `sessionEnd`)
+1. A stream of finalized **transcript chunks** with timing, confidence, and trigger metadata (ZeroBus path)
+2. A single **session audio file** persisted locally and uploaded to a UC Volume at the end of the session (multipart-upload path)
+3. A pair of **session lifecycle events** (`sessionStart`, `sessionEnd`) bound to a server-side `app.capture_sessions` row
+4. (PRs 5–6, in flight) **Screenshots** and **photos** as additional artifacts attached to the same capture session
 
 ChunkAssembler is a sub-component of CaptureEngine. It is the policy layer that decides when an in-flight transcript becomes a finalized chunk. The split exists because the audio plumbing (AVAudioEngine, SpeechAnalyzer, file writer) is platform mechanics, while chunking rules are business logic that will evolve as Meeting Mode lands and as we tune it.
 
-CaptureEngine does **not** know about ZeroBus, Core Data, or the network. Its sole output is an `AsyncStream<CaptureEvent>`. IngestService and StorageService each subscribe to that stream and act on the events relevant to them.
+CaptureEngine does **not** know about ZeroBus directly, Core Data, or the network. The transcript-chunk path emits `AsyncStream<CaptureEvent>` (IngestService consumes it); the file-upload path emits `PendingUpload` onto the `UploadCoordinator` queue. Both paths share the same `app.capture_sessions` lifecycle on the server.
+
+---
+
+## 1.5 Implementation Status
+
+The module spans two parallel pipelines, both feeding the same server-side capture session:
+
+```
+                 ┌────────────────────────────────────────────────┐
+                 │  user taps Record  →  CaptureService.start...  │
+                 └────────────────────┬───────────────────────────┘
+                                      │
+                  ┌───────────────────┴───────────────────┐
+                  ▼                                       ▼
+    ┌───────────────────────────┐         ┌────────────────────────────┐
+    │  Live transcription path  │         │   File-upload path         │
+    │   (§§2–13, still design)  │         │  (§§17–20, shipped)        │
+    │                           │         │                            │
+    │  AVAudioEngine tap        │         │  AVAudioRecorder writes    │
+    │    ↓                      │         │  M4A/AAC to disk           │
+    │  TranscriberFeed →        │         │    ↓                       │
+    │    SpeechAnalyzer         │         │  on stop:                  │
+    │    ↓                      │         │    FileSHA256 → multipart  │
+    │  ChunkAssembler builds    │         │    → UploadCoordinator     │
+    │    TranscriptChunk        │         │    → POST .../audio        │
+    │    ↓                      │         │                            │
+    │  IngestService → ZeroBus  │         │  uploads land in UC Volume │
+    └───────────────────────────┘         │  rows in app.uploads       │
+                                          └────────────────────────────┘
+```
+
+| Component | Status | Section |
+|-----------|--------|---------|
+| `CaptureService` orchestration + state machine | **shipped (PR #28)** | §20 |
+| `CaptureAPIClient` (4 session lifecycle endpoints) | **shipped (PR #24)** | §17 |
+| `AudioRecorder` (M4A/AAC to disk) | **shipped (PR #26)** | §7 + §18 |
+| `UploadCoordinator` (persistent queue + multipart + retry) | **shipped (PR #27)** | §19 |
+| `FileSHA256` streaming hasher | **shipped (PR #28)** | §19.1 |
+| Camera photo capture | **in flight (PR 5)** | §18.5 (TBD) |
+| Screen broadcast capture | **planned (PR 6)** | — |
+| Module 08 UI integration | **planned (PR 7)** | Module 08 doc |
+| `AVAudioEngine` dual-tap architecture | **design only** | §5 |
+| `TranscriberFeed` + `SpeechAnalyzer` integration | **design only** | §6 |
+| `ChunkAssembler` policy + `TranscriptChunk` emission | **design only** | §8 |
+| Live `PartialTranscript` stream | **design only** | §3.2 |
+
+§§2–16 below describe the **transcription pipeline** that's still to build. §§17–20 (appended after the original design) document the **file-upload pipeline** as built.
+
+The two pipelines coexist by design: when the transcription pipeline lands, `AVAudioEngine` will tap the mic input twice — one tap feeds `AVAudioRecorder` (or its `AVAudioFile`-based replacement) for the M4A file, the other feeds `SpeechAnalyzer` for live transcription. The file-upload path stays unchanged; chunks emit in parallel via the existing `CaptureEvent` stream contract.
+
+### 1.5.1 Backend dependencies
+
+| Backend asset | Status (as of 2026-05-16) | Blocks iOS-side work? |
+|---------------|----------------------------|------------------------|
+| `app.capture_sessions` table + 4 lifecycle routes | live on dev | ✓ no — file pipeline shipped against it |
+| `app.uploads` table + `/api/captures/:id/audio` route | live on dev (iosAuth fix shipped 2026-05-16; downstream 500 with Genie) | partial — audio uploads currently failing 500 after auth |
+| UC Volumes for audio / screenshots / documents | provisioned | ✓ no |
+| ZeroBus target table in Unity Catalog | **provisioned 2026-05-16** | — needed only when transcription pipeline (§§2–16) lands |
+| ZeroBus producer streams | **not wired** | — needed only when transcription pipeline lands |
+
+The ZeroBus target table being ready without producers is the correct ordering: iOS won't have anything to publish until `SpeechAnalyzer` + `ChunkAssembler` land on this side. When that work starts, Genie will need to wire up the producer pipeline so the existing target table starts receiving rows.
 
 ---
 
@@ -430,6 +492,8 @@ private func handleResult(_ result: SpeechTranscriber.Result) async {
 ---
 
 ## 7. AudioRecorder — Opus Encoding to Disk
+
+> **As-built (2026-05-16):** v1 shipped with **M4A/AAC** (the "fallback" described in §7.2 below). The current `LiveAudioRecorder` wraps `AVAudioRecorder` with iOS defaults rather than libopus. The Opus path remains the design target for v1.1+ when compression matters at scale; the file-upload pipeline is content-type-agnostic past the `MultipartFormBuilder` so the encoder swap is contained. See §18 for what's actually running.
 
 Runs in parallel with TranscriberFeed, consuming the same audio actor stream. Writes a single Ogg-Opus file per session.
 
@@ -929,3 +993,355 @@ App/Capture/
 ```
 
 Tests mirror this layout under `AppTests/Capture/`.
+
+---
+
+# Part II — As-Built File-Upload Pipeline (PRs #24, #26, #27, #28)
+
+This appendix documents what's actually running today. It pairs with §§2–16 above: §§2–16 describe the live-transcription / ZeroBus path that's still in design; §§17–20 below describe the audio-file / multipart-upload path that's shipped and exercising against dev. Both paths attach to the same `app.capture_sessions` row, so the lifecycle endpoints (§17) serve both.
+
+---
+
+## 17. CaptureAPIClient — Server-Side Session Lifecycle
+
+The four-route transport client for `app.capture_sessions`. All routes go through `LakeloomAppClient.request(...)` so they inherit the full two-layer iosAuth (Layer 0 M2M bearer + Layer 1 session token + ECDSA over canonical form). No bespoke URLRequest construction; no bespoke signing.
+
+### 17.1 Protocol
+
+```swift
+public protocol CaptureAPIClient: Sendable {
+    func createCaptureSession(
+        workspaceID: String, projectID: String,
+        label: String?, clientTimestamp: Date?
+    ) async throws -> CaptureSession
+
+    func updateCaptureSession(
+        workspaceID: String, captureSessionID: String,
+        state: CaptureSession.EndState, endedAt: Date?
+    ) async throws -> CaptureSession
+
+    func getCaptureSession(
+        workspaceID: String, captureSessionID: String,
+        includeUploads: Bool
+    ) async throws -> CaptureSession
+
+    func listProjectCaptureSessions(
+        workspaceID: String, projectID: String,
+        state: CaptureSession.State?, limit: Int, before: Date?
+    ) async throws -> [CaptureSession]
+}
+```
+
+### 17.2 Routes
+
+| Method | Path | Caller | Purpose |
+|--------|------|--------|---------|
+| `POST` | `/api/projects/:project_id/captures` | `CaptureService.startCapture` | Open active session |
+| `PATCH` | `/api/captures/:capture_session_id` | `CaptureService.stopCapture`/`cancelCapture`/watcher | Terminal transition |
+| `GET` | `/api/captures/:capture_session_id?include=uploads` | smoke-test sheet, Module 08 sessions tab | Detail + uploads |
+| `GET` | `/api/projects/:project_id/captures` | smoke-test sheet, Module 08 sessions tab | History list |
+
+### 17.3 Value Types
+
+`CaptureSession` mirrors `app.capture_sessions` exactly. `State` is `.active | .completed | .cancelled`; `EndState` is `.completed | .cancelled` (only terminal targets — `.active` can't be re-entered). Wire format uses snake_case (`project_id`, `started_at`, etc.); iOS maps via explicit `CodingKeys`.
+
+### 17.4 Error Mapping
+
+`CaptureAPIError` is the typed surface (§8.1 in Part I of this doc, restated):
+
+| Status / source | `CaptureAPIError` case |
+|-----------------|------------------------|
+| `workspaceNotConfigured` | `.notSignedIn` |
+| 400 | `.validationFailed(reason)` |
+| 403 | `.forbidden(reason)` |
+| 404 | `.notFound` |
+| 409 | `.invalidTransition(reason)` |
+| 401 (token kinds) | `.authFailed(reason)` |
+| `URLError.notConnectedToInternet` | `.networkUnavailable` |
+| `URLError.timedOut` | `.timeout` |
+| 5xx | `.serverUnavailable(status, reason)` |
+| Decode failure | `.decodeFailed(reason)` |
+| anything else | `.unexpectedResponse(reason)` |
+
+---
+
+## 18. AudioRecorder — Shipped Implementation
+
+The `LiveAudioRecorder` actor that's running today. M4A/AAC instead of Opus (see §7's as-built note).
+
+### 18.1 Protocol
+
+```swift
+public protocol AudioRecorder: Sendable {
+    func start(captureSessionID: String) async throws -> URL
+    func stop() async throws -> AudioRecording
+    func cancel() async
+    var state: AudioRecorderState { get async }
+}
+
+public enum AudioRecorderState: Sendable, Equatable {
+    case idle
+    case recording(captureSessionID: String, startedAt: Date)
+}
+
+public struct AudioRecording: Sendable, Equatable, Hashable {
+    public let captureSessionID: String
+    public let fileURL: URL
+    public let startedAt: Date
+    public let endedAt: Date
+    public let durationSeconds: Double
+    public let sizeBytes: Int64
+    public let mimeType: String          // always "audio/mp4"
+    public let fileExtension: String     // always "m4a"
+}
+```
+
+### 18.2 Engine Seam
+
+`LiveAudioRecorder` doesn't wrap `AVAudioRecorder` directly. It delegates CoreAudio specifics to an `AudioRecordingEngine` protocol so the recorder's state machine + file layout can be unit-tested without real audio hardware. The live engine handles permission, session config, file-write start/stop. Tests inject a fake engine.
+
+### 18.3 File Layout
+
+```
+<Application Support>/Captures/<captureSessionID>/audio-<ISO8601>.m4a
+```
+
+The `Captures/` directory is flagged `isExcludedFromBackup = true` so recordings (server-of-truth-on-Databricks) don't bloat iCloud backups.
+
+### 18.4 Encoder Settings
+
+iOS defaults via `AVAudioRecorder`:
+
+- `AVFormatIDKey = kAudioFormatMPEG4AAC`
+- `AVSampleRateKey = 44_100.0` (44.1 kHz)
+- `AVNumberOfChannelsKey = 1` (mono)
+- `AVEncoderAudioQualityKey = AVAudioQuality.medium.rawValue`
+
+Genie's server-side MIME allowlist accepts both `audio/m4a` and `audio/mp4`; iOS sends `audio/mp4`.
+
+### 18.5 Future: Camera + Screen Capture (PR 5/6)
+
+The same protocol-seam pattern will apply for the camera (`AVCapturePhotoOutput`) and screen-broadcast (`ReplayKit` extension) paths. Each will produce a finalized file on disk + a value type with metadata; `CaptureService` will hand them to `UploadCoordinator` exactly the way audio does today.
+
+---
+
+## 19. UploadCoordinator — Persistent Upload Pipeline
+
+The multipart-upload queue that drains finalized files from disk to UC Volume routes.
+
+### 19.1 Protocol
+
+```swift
+public protocol UploadCoordinator: Sendable {
+    func enqueue(_ pending: PendingUpload) async throws
+    func currentUploads() async -> [PendingUpload]
+    func stateUpdates() async -> AsyncStream<UploadStateChange>
+    func retry(uploadID: String) async
+    func discard(uploadID: String) async
+    func start() async
+    func stop() async
+}
+
+public struct PendingUpload: Sendable, Equatable, Codable, Identifiable {
+    public let id: String
+    public let workspaceID: String
+    public let captureSessionID: String
+    public let kind: Kind                       // .audio | .screenshot | .photo | .document
+    public let localFileURL: URL
+    public let mimeType: String
+    public let sizeBytes: Int64
+    public let sha256Hex: String                // streaming SHA-256 from FileSHA256
+    public let clientTimestamp: Date            // wall-clock at capture time
+    public let originalFilename: String?
+    public let createdAt: Date
+    public var state: State
+    public var attempts: Int
+    public var nextAttemptAt: Date?
+    public var lastError: String?
+    public var remoteUploadID: String?          // populated on success
+}
+
+public enum State: Sendable, Equatable, Codable {
+    case queued
+    case uploading
+    case succeeded
+    case failed(reason: String, permanent: Bool)
+}
+```
+
+### 19.2 Persistence
+
+The queue mirrors to disk at `<Application Support>/Captures/upload-queue.json` on every state change. Writes are atomic (tmp + rename) so a crash mid-write leaves the prior good snapshot intact. `JSONEncoder.dateEncodingStrategy = .iso8601`, sorted keys for deterministic on-disk hashing if needed later.
+
+On `start()`, the worker rehydrates the snapshot. Uploads stuck in `.uploading` from a prior launch are revived as `.queued` (the `revive` method) so a force-quit mid-upload is recoverable.
+
+### 19.3 Retry Policy
+
+Hard-coded backoff array: `[2, 4, 8, 16, 32]` seconds, max 5 attempts. The worker `await sleep(...)` is injected so tests can stub it.
+
+Permanent-vs-transient classification (in `isPermanent(error:)`):
+
+| `LakeloomAppError` case | Permanent? |
+|------------------------|-----------|
+| `.networkUnavailable` | no |
+| `.timeout` | no |
+| `.transport(...)` | no |
+| `.httpError(408 or 429 or 5xx, ...)` | no |
+| `.httpError(other 4xx, ...)` | yes |
+| `.tokenExchangeFailed` / `.unauthorized` | yes (route to re-pair) |
+| `.decodeFailed` / `.workspaceNotConfigured` | yes |
+
+Permanent failures park the upload in the queue at `.failed(permanent: true)`. The user (via `retry` UI in PR 7) or the smoke-test sheet's "Clear failed uploads" action can re-queue or drop it.
+
+### 19.4 Multipart Body
+
+`MultipartFormBuilder.build` constructs an RFC 2046-compliant `multipart/form-data` body. Field order:
+
+```
+--<boundary>\r\n
+Content-Disposition: form-data; name="client_ts"\r\n
+\r\n
+<unix-seconds string>\r\n
+--<boundary>\r\n
+Content-Disposition: form-data; name="client_filename"\r\n
+\r\n
+<filename>\r\n
+--<boundary>\r\n
+Content-Disposition: form-data; name="sha256_hex"\r\n
+\r\n
+<lowercase hex digest>\r\n
+--<boundary>\r\n
+Content-Disposition: form-data; name="file"; filename="<filename>"\r\n
+Content-Type: <mime>\r\n
+\r\n
+<raw file bytes>\r\n
+--<boundary>--\r\n
+```
+
+Boundary is `lakeloom.<UUID>`. Per the 2026-05-16 contract resolution: `BODY_SHA256_HEX` in the canonical form is `sha256(full multipart envelope)` — boundary markers + part headers + part bodies + closing boundary. Server-side iosAuth was updated to read raw bytes via `getRawBody` for non-JSON content types, hash those, and replay to busboy via `Readable.from(buffer)`.
+
+### 19.5 FileSHA256
+
+Streaming hash over a file URL via CryptoKit + `FileHandle`:
+
+```swift
+enum FileSHA256 {
+    static let defaultChunkSize = 1 * 1024 * 1024  // 1 MiB
+
+    static func hex(of url: URL, chunkSize: Int = defaultChunkSize) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while autoreleasepool(invoking: {
+            let chunk = try? handle.read(upToCount: chunkSize)
+            guard let chunk, !chunk.isEmpty else { return false }
+            hasher.update(data: chunk)
+            return true
+        }) {}
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+}
+```
+
+`autoreleasepool` per chunk keeps memory pressure flat on multi-MB recordings.
+
+---
+
+## 20. CaptureService — Orchestration + State Machine
+
+The glue layer. Owns one in-flight `CaptureContext`, exposes an `AsyncStream<CaptureServiceState>` for UI binding, and runs a background watcher that drains `pendingUploadIDs` and patches the server-side session to `.completed` when uploads finish.
+
+### 20.1 State Machine
+
+```
+                ┌────────────┐
+                │   .idle    │◀───────────────────────────┐
+                └─────┬──────┘                            │
+        startCapture  │                                   │ (next startCapture)
+                      ▼                                   │
+            ┌─────────────────────┐                       │
+            │     .recording      │◀─────────┐            │
+            │   (CaptureContext)  │          │            │
+            └──┬────────────────┬─┘          │            │
+   stopCapture │                │  cancelCapture          │
+               ▼                ▼                         │
+   ┌─────────────────────┐  ┌──────────────────────┐      │
+   │     .finalizing     │  │     .cancelled       │──────┤
+   │ (CaptureContext,    │  │   (CaptureContext)   │      │
+   │  pendingUploadIDs)  │  └──────────────────────┘      │
+   └────┬──────────┬─────┘                                │
+        │          │  cancelCapture                       │
+        │          ▼                                      │
+        │   ┌──────────────────────┐                      │
+        │   │     .cancelled       │──────────────────────┤
+        │   └──────────────────────┘                      │
+        │                                                 │
+        │  (watcher: pendingUploadIDs becomes empty)      │
+        ▼                                                 │
+   ┌─────────────────────┐                                │
+   │     .completed      │────────────────────────────────┘
+   │   (CaptureContext)  │
+   └─────────────────────┘
+```
+
+Any of `start`, `stop`, hashing, or enqueue can also surface `.failed(reason)`; the next successful `startCapture` resets to `.recording`.
+
+### 20.2 Watcher Race Avoidance
+
+The watcher subscribes to `UploadCoordinator.stateUpdates()` **synchronously inside `stopCapture`** before returning. Earlier attempts had the watcher Task subscribe inside its own body, racing the test harness's emit; that hung one test for 19 minutes. The fix is documented in code at `LiveCaptureService.spawnWatcher`.
+
+### 20.3 Rollback Semantics
+
+If `createCaptureSession` succeeds but `recorder.start` throws, the service best-effort patches the server-side session to `.cancelled` (errors swallowed and logged) before transitioning to `.failed`. No dangling `.active` rows.
+
+### 20.4 Persistence Gap
+
+`CaptureService` state is in-memory only. App-killed-mid-capture leaves:
+
+- Recording on disk (recoverable from `<Application Support>/Captures/.../audio-*.m4a`)
+- Upload queue (rehydrates via `UploadCoordinator.start()`)
+- Server-side `app.capture_sessions` row stuck at `.active` (no rehydration)
+
+Closing the persistence gap is tracked as a follow-on (capture-context snapshot to disk, similar to `UploadQueueStore`). The smoke-test sheet's PATCH actions provide a manual workaround for the demo.
+
+---
+
+## 21. Files Currently Shipped
+
+```
+iOS/App/Captures/
+├── CaptureAPIClient.swift         # protocol + LiveCaptureAPIClient
+├── CaptureAPIError.swift          # typed errors
+├── CaptureSession.swift           # value type + State/EndState
+├── CaptureService.swift           # protocol + state + errors
+├── LiveCaptureService.swift       # orchestrating actor
+├── FileSHA256.swift               # streaming hasher
+├── EndpointSmokeTestView.swift    # #if DEBUG diagnostic sheet
+├── Audio/
+│   ├── AudioRecorder.swift            # protocol + state + Recording + errors
+│   ├── AudioRecordingEngine.swift     # AVAudioRecorder seam + LiveAudioRecordingEngine
+│   └── LiveAudioRecorder.swift        # actor implementation
+└── Upload/
+    ├── PendingUpload.swift            # value type + state machine
+    ├── UploadCoordinator.swift        # protocol + errors
+    ├── LiveUploadCoordinator.swift    # actor + worker loop + retry policy
+    ├── UploadQueueStore.swift         # disk persistence
+    └── MultipartFormBuilder.swift     # multipart/form-data builder
+
+iOS/AppTests/Captures/
+├── CaptureAPIClientTests.swift          (12 tests)
+├── LiveCaptureServiceTests.swift        (10 tests)
+├── Audio/
+│   ├── FakeAudioRecordingEngine.swift
+│   └── LiveAudioRecorderTests.swift     (10 tests)
+├── Upload/
+│   ├── LiveUploadCoordinatorTests.swift  (9 tests)
+│   ├── MultipartFormBuilderTests.swift   (5 tests)
+│   └── UploadQueueStoreTests.swift       (5 tests)
+└── Helpers/
+    ├── FakeCaptureAPIClient.swift
+    ├── FakeAudioRecorder.swift
+    └── FakeUploadCoordinator.swift
+```
+
+42 unit tests across the module. Full suite (LakeloomApp + LakeloomAppTests) passes in ~0.6s on iPhone 17 Pro simulator.
