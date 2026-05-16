@@ -1,5 +1,7 @@
 # Session Index
 
+* [2026-05-16] Phase 2 Device UX + User Identity + Multipart Auth Fix — `2026-05-16_phase2-device-ux-identity-multipart-fix.md`
+
 | Date | Summary | File |
 |------|---------|------|
 | 2026-05-15 | Full project audit, Isaac messages reviewed, PROJECT_MEMORY + UI plan updated to reflect current state | [project-review-and-memory-update](./2026-05-15_project-review-and-memory-update.md) |

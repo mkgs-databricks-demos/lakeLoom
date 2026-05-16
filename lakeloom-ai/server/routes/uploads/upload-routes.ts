@@ -128,7 +128,16 @@ function parseMultipart(req: Request): Promise<ParsedUpload> {
     });
 
     busboy.on('error', reject);
-    req.pipe(busboy);
+
+    // If iosAuth already buffered the raw body (for signature verification on
+    // multipart requests), replay it into busboy via a Readable stream.
+    // Otherwise, pipe the live request stream as before.
+    const rawBody = (req as any)._rawBody as Buffer | undefined;
+    if (rawBody) {
+      Readable.from(rawBody).pipe(busboy);
+    } else {
+      req.pipe(busboy);
+    }
   });
 }
 

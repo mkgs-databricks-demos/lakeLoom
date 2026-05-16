@@ -1,7 +1,7 @@
 # Databricks App UI — Feature Plan & Implementation Order
 
-**Date:** 2026-05-14 (created) | **Last updated:** 2026-05-15
-**Status:** Phase 1 COMPLETE. Phase 2–7 planned and ready for implementation.
+**Date:** 2026-05-14 (created) | **Last updated:** 2026-05-16
+**Status:** Phase 1 COMPLETE. Phase 2 IN PROGRESS (device assignment, user identity shipped). Phase 3–7 planned.
 **Principle:** The Databricks App does everything the iOS app does EXCEPT record audio.
 
 ---
@@ -93,6 +93,16 @@ Review and manage capture sessions created from iOS.
 - Empty state when no captures exist yet (CTA: "Pair an iPhone to start capturing")
 
 **Dependencies:** Project Management (sessions belong to projects) — ✅ MET
+
+**Phase 2 Progress (2026-05-16):**
+- ✅ Device-to-project association — Migration 005 (`app.project_device_assignments`), POST/GET `/api/v1/projects/:id/devices`
+- ✅ Device selection in ProjectDetailPage — PairDeviceModal with active indicator (green bg, pulsing dot)
+- ✅ Device chip in "Capture Sessions" section header (green when assigned, gray "Connect device" when not)
+- ✅ Project card device indicators — green pill (device label) or gray pill ("Unpaired") on every card
+- ✅ Device-agnostic text — "Pair Device" instead of "Pair iPhone" (future Watch/iPad support)
+- ⬜ Session list per project (sortable by date, filterable by state)
+- ⬜ Session detail view (metadata header, upload timeline, state transition buttons)
+- ⬜ Session label editing
 
 ---
 
@@ -274,7 +284,7 @@ The ordering optimizes for: (a) unblocking iOS Module 06, (b) delivering reviewa
 | Phase | Feature | Status | Est. Effort |
 |-------|---------|--------|-------------|
 | **Phase 1** | Project Management | ✅ COMPLETE (2026-05-14) | — |
-| **Phase 2** | Capture Session Browser | Ready | 2 days |
+| **Phase 2** | Capture Session Browser | ⏳ IN PROGRESS (device assignment + UI shipped 2026-05-16) | 2 days |
 | **Phase 3** | Media Viewer & Audio Playback | Ready (depends on Phase 2) | 3–4 days |
 | **Phase 4** | Browser-Side Uploads | Ready (depends on Phase 2+3) | 1–2 days |
 | **Phase 5** | Device & Admin Panel | Ready (independent) | 1–2 days |
@@ -322,6 +332,44 @@ Reusable components serving multiple features:
 3. **Transcript storage before SDP pipeline exists:** Query bronze directly for v1, switch to silver when pipeline ships.
 4. **Agent implementation:** Notebook-based (triggered via Jobs API) or in-process (App backend calls foundation model)? → Suggest: Jobs API — decouples compute, leverages existing serverless, produces auditable runs.
 5. **Non-blocking onboarding issue:** iOS `GET /api/v1/projects` fails on first call after pairing. Isaac investigating — may require `dualAuth` query-param canonicalization fix on App side.
+
+---
+
+## Cross-Cutting Concerns (Phase 2+ Enhancements)
+
+### User Identity Display — ✅ COMPLETE (2026-05-16)
+
+Show the current user's identity in the top-right of the app shell so it's always clear who is logged in. The browser auth sidecar provides `X-Forwarded-Email` on every request.
+
+**Implementation (shipped):**
+- `GET /api/me` endpoint in `server/server.ts` — returns `{ email, display_name, scim_id }` from sidecar headers (`X-Forwarded-Email`, `X-Forwarded-User`, `X-Forwarded-Preferred-Username`)
+- `useCurrentUser` hook (`client/src/hooks/useCurrentUser.ts`) — fetches on mount, caches for session
+- Nav header pill: Lava 600 initials circle + truncated email, pushed right via `ml-auto`
+- Test 14 in `pairing-api-test` notebook validates endpoint (200 with identity OR 401 for no-header cases)
+
+**Commit:** `d151e5c` (branch `phase2-capture-session-browser`)
+
+---
+
+### Project Permissions Model
+
+Owner of a project should be able to grant scoped access to other workspace users. Three permission levels:
+
+| Level | Capabilities |
+|-------|-------------|
+| **View** | Read-only access to project, captures, uploads, transcripts |
+| **Edit** | Create/modify captures, upload files, transition session states |
+| **Manage** | Grant/revoke permissions, archive/restore, change project settings |
+
+**Implementation approach:**
+- New Lakebase table: `app.project_permissions` (project_id, user_id, role, granted_by, granted_at)
+- New middleware: `requireProjectAccess(minRole)` — checks permission table before handler
+- Project creator automatically gets `manage` role
+- `GET /api/v1/projects` returns only projects where user has at least `view` permission (or is creator)
+- UI: "Share" button on project detail → modal with user search + role selector + current collaborators list
+
+**Dependencies:** User identity display (need `/api/me` and user lookup)  
+**Priority:** Medium — enables team collaboration, but single-user flow works without it.
 
 ---
 
