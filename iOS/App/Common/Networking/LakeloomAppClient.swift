@@ -289,6 +289,19 @@ public actor LiveLakeloomAppClient: LakeloomAppClient {
             throw LakeloomAppError.transport(reason: "signing failed: \(error)")
         }
 
+        #if DEBUG
+        // Diagnostic trace for the canonical-form inputs — lets us
+        // diff what iOS hashes vs what the server hashes when the
+        // signature fails verification. Only logged in DEBUG so
+        // production isn't noisy.
+        await logCanonicalFormTrace(
+            method: method,
+            path: path,
+            body: body,
+            timestampHeader: signatureHeaders["X-Lakeloom-Timestamp"]
+        )
+        #endif
+
         // Build the request.
         guard let url = URL(string: path, relativeTo: config.appBaseURL)?.absoluteURL else {
             throw LakeloomAppError.transport(reason: "could not build URL for path \(path)")
@@ -433,4 +446,33 @@ public actor LiveLakeloomAppClient: LakeloomAppClient {
         }
         return UnauthorizedReason(rawValue: String(suffix)) ?? .unknown
     }
+
+    #if DEBUG
+    /// Logs the inputs to the canonical-form signing so we can diff
+    /// what iOS hashes vs what the server hashes when the signature
+    /// fails verification. Only compiled in DEBUG builds.
+    private func logCanonicalFormTrace(
+        method: HTTPMethod,
+        path: String,
+        body: Data?,
+        timestampHeader: String?
+    ) async {
+        let bytes = body ?? Data()
+        let hash = RequestSigner.bodyHash(for: bytes)
+        let head = bytes.prefix(64).map { String(format: "%02x", $0) }.joined()
+        let tail = bytes.suffix(64).map { String(format: "%02x", $0) }.joined()
+        await logger.debug(
+            "app.request.canonical_form_trace",
+            metadata: [
+                "method": .string(method.rawValue),
+                "path": .string(path),
+                "timestamp": .string(timestampHeader ?? "?"),
+                "body_bytes": .int(Int64(bytes.count)),
+                "body_sha256": .string(hash),
+                "body_head_hex_64": .string(head),
+                "body_tail_hex_64": .string(tail)
+            ]
+        )
+    }
+    #endif
 }
