@@ -280,7 +280,11 @@ private struct DebugPastePayloadOverlay: View {
                         .padding(.vertical, 8)
                         .background(.black.opacity(0.55), in: Capsule())
                 }
-                .padding(.top, 16)
+                // 60pt clears the iPhone 17's 59pt Dynamic Island
+                // even when the parent applies `.ignoresSafeArea`
+                // (which `QRScanStepView` does). Otherwise the
+                // status-bar / island region eats taps.
+                .padding(.top, 60)
                 .padding(.trailing, 16)
             }
             Spacer()
