@@ -38,13 +38,33 @@ struct LakeloomApp: App {
             auth: auth,
             endpointResolver: endpointResolver
         )
+        let captureAPI = LiveCaptureAPIClient(lakeloomApp: lakeloomApp)
+
+        // Upload pipeline. Worker loop is started from the App's
+        // `.task` modifier below so the queue rehydration happens on
+        // every cold launch, not only when bootstrap() runs.
+        let uploadCoordinator: (any UploadCoordinator)?
+        do {
+            let queueStore = try UploadQueueStore.makeDefault()
+            uploadCoordinator = LiveUploadCoordinator(
+                lakeloomApp: lakeloomApp,
+                queueStore: queueStore
+            )
+        } catch {
+            // Persistence init failure shouldn't block the app —
+            // capture features just won't be available until the
+            // filesystem is healthy enough to host the queue file.
+            uploadCoordinator = nil
+        }
 
         _coordinator = State(
             wrappedValue: AppCoordinator(
                 auth: auth,
                 projects: projects,
                 coreDataStack: coreDataStack,
-                endpointResolver: endpointResolver
+                endpointResolver: endpointResolver,
+                captureAPI: captureAPI,
+                uploadCoordinator: uploadCoordinator
             )
         )
     }
@@ -52,7 +72,12 @@ struct LakeloomApp: App {
     var body: some Scene {
         WindowGroup {
             RootView(coordinator: coordinator)
-                .task { await coordinator.bootstrap() }
+                .task {
+                    await coordinator.bootstrap()
+                    if let uploads = coordinator.uploadCoordinator {
+                        await uploads.start()
+                    }
+                }
         }
     }
 }
