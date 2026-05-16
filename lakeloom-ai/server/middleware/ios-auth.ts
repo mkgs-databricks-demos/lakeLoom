@@ -148,14 +148,41 @@ export function iosAuth(opts: IosAuthOptions) {
 
       if (devicePubkey) {
         // Compute body hash per canonical-form spec:
-        // - Request has meaningful body (POST/PATCH with content) → sha256(JSON.stringify(parsed body))
-        // - No body or empty body ({} from Express json() on GET) → EMPTY_BODY_HASH
+        //   BODY_SHA256_HEX = sha256(raw request body bytes)
+        //   Empty body → EMPTY_BODY_HASH (sha256 of empty string)
         //
-        // NOTE: Express json() middleware sets req.body = {} even for GET/DELETE.
-        // {} is truthy in JS but represents "no body" from the client's perspective.
-        // We detect this by checking if the body has any own keys.
-        const hasBody = req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0;
-        const bodyHash = hasBody ? sha256Hex(JSON.stringify(req.body)) : EMPTY_BODY_HASH;
+        // Two code paths:
+        //   1. JSON (application/json): body was parsed by express.json() → re-serialize
+        //      via JSON.stringify(req.body) for the hash. This is backwards-compatible
+        //      with all existing JSON endpoints (iOS sends compact JSON, server hashes
+        //      the same compact representation).
+        //   2. Multipart/other: express.json() does NOT parse these bodies, so req.body
+        //      remains {}. We must read the raw bytes from the request stream, hash them,
+        //      and store the buffer so downstream handlers (busboy) can still consume it.
+        //
+        // NOTE: Express json() sets req.body = {} even for GET/DELETE.
+        // We detect "no body" by checking Object.keys(req.body).length === 0.
+        const contentType = (req.headers['content-type'] || '').toLowerCase();
+        let bodyHash: string;
+
+        if (contentType.startsWith('multipart/') || (contentType && !contentType.includes('json') && req.method !== 'GET' && req.method !== 'DELETE')) {
+          // Non-JSON body: buffer raw bytes from the stream and hash them
+          const rawBody: Buffer = await new Promise((resolve, reject) => {
+            const chunks: Buffer[] = [];
+            req.on('data', (chunk: Buffer) => chunks.push(chunk));
+            req.on('end', () => resolve(Buffer.concat(chunks)));
+            req.on('error', reject);
+          });
+          bodyHash = rawBody.length > 0 ? sha256Hex(rawBody) : EMPTY_BODY_HASH;
+          // Store buffered body so downstream middleware (busboy) can consume it.
+          // parseMultipart() checks for _rawBody before piping req.
+          (req as any)._rawBody = rawBody;
+        } else {
+          // JSON body path (unchanged for backwards compat)
+          const hasBody = req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0;
+          bodyHash = hasBody ? sha256Hex(JSON.stringify(req.body)) : EMPTY_BODY_HASH;
+        }
+
         const canonical = buildCanonicalMessage(req.method, req.originalUrl, timestampStr, bodyHash);
         const signature = Buffer.from(signatureB64, 'base64url');
 
