@@ -234,9 +234,37 @@ export function ProjectDetailPage() {
 
       {/* ── Section header + filter ───────────────────────────────────────── */}
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-base font-semibold text-[var(--text-primary,#1B3139)]">
-          Capture Sessions
-        </h2>
+        <div className="flex items-center gap-3">
+          <h2 className="text-base font-semibold text-[var(--text-primary,#1B3139)]">
+            Capture Sessions
+          </h2>
+          {assignedDevice && (
+            <button
+              type="button"
+              onClick={() => setShowPairModal(true)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium
+                         bg-[var(--accent-success-subtle,#dcfce7)] text-[var(--accent-success,#00A972)]
+                         border border-[var(--accent-success,#00A972)]/20
+                         hover:brightness-95 transition-colors duration-100 cursor-pointer"
+            >
+              <Smartphone className="w-3 h-3" />
+              {assignedDevice.label}
+            </button>
+          )}
+          {!assignedDevice && !loading && (
+            <button
+              type="button"
+              onClick={() => setShowPairModal(true)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium
+                         bg-[var(--surface-tertiary,#EEEDE9)] text-[var(--text-secondary,#5A6F77)]
+                         border border-[var(--border-default,#DCE0E2)]
+                         hover:border-[var(--border-focus,#2272B4)] transition-colors duration-100 cursor-pointer"
+            >
+              <Smartphone className="w-3 h-3" />
+              Connect device
+            </button>
+          )}
+        </div>
         <div className="relative">
           <select
             value={stateFilter}
