@@ -394,12 +394,19 @@ function ProjectCard({
         <span className="text-xs text-[var(--text-tertiary,#618794)]">
           Updated {timeAgo} · by {project.created_by_username}
         </span>
-        {deviceLabel && (
+        {deviceLabel ? (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium
                          bg-[var(--accent-success-subtle,#dcfce7)] text-[var(--accent-success,#00A972)]
                          border border-[var(--accent-success,#00A972)]/20">
             <Smartphone className="w-3 h-3" />
             {deviceLabel}
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium
+                         bg-[var(--surface-tertiary,#EEEDE9)] text-[var(--text-tertiary,#618794)]
+                         border border-[var(--border-default,#DCE0E2)]">
+            <Smartphone className="w-3 h-3" />
+            No device
           </span>
         )}
       </div>
