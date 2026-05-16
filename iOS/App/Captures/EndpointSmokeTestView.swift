@@ -11,6 +11,7 @@ import SwiftUI
 struct EndpointSmokeTestView: View {
 
     let captureAPI: any CaptureAPIClient
+    let uploadCoordinator: (any UploadCoordinator)?
     let workspaceID: String
     let projectID: String
     let onDismiss: () -> Void
@@ -18,6 +19,13 @@ struct EndpointSmokeTestView: View {
     @State private var lines: [LogLine] = []
     @State private var lastCaptureID: String?
     @State private var inFlight: String?
+
+    // Audio-upload sub-flow state. The recorder is held by reference
+    // so a stop call always sees the start call's instance even if
+    // SwiftUI re-renders the view mid-recording.
+    @State private var audioRecorder: LiveAudioRecorder?
+    @State private var isRecording: Bool = false
+    @State private var uploadObserverTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
@@ -59,6 +67,31 @@ struct EndpointSmokeTestView: View {
                             action: completeLastCapture,
                             disabled: lastCaptureID == nil
                         )
+
+                        Divider()
+                            .padding(.vertical, 4)
+
+                        if uploadCoordinator == nil {
+                            Text("UploadCoordinator not wired — audio upload disabled.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            actionButton(
+                                isRecording ? "Stop + upload audio" : "Start recording audio",
+                                systemImage: isRecording ? "stop.circle.fill" : "mic.circle.fill",
+                                tag: isRecording ? "audio.stop" : "audio.start",
+                                action: isRecording ? stopAndUploadAudio : startRecordingAudio,
+                                disabled: lastCaptureID == nil
+                            )
+                            if lastCaptureID == nil {
+                                Text("Create a capture first to enable audio upload.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        Divider()
+                            .padding(.vertical, 4)
 
                         Button(role: .destructive) {
                             lines.removeAll()
@@ -234,6 +267,113 @@ struct EndpointSmokeTestView: View {
             append(.fail("PATCH", String(describing: error)))
         } catch {
             append(.fail("PATCH", error.localizedDescription))
+        }
+    }
+
+    // MARK: - Audio record + upload
+
+    private func startRecordingAudio() async {
+        guard let captureID = lastCaptureID else { return }
+        let recorder = LiveAudioRecorder()
+        audioRecorder = recorder
+        append(.start("AUDIO", "recorder.start", "capture=\(captureID.prefix(8))…"))
+        do {
+            let url = try await recorder.start(captureSessionID: captureID)
+            isRecording = true
+            append(.ok("AUDIO", "recording", url.lastPathComponent))
+        } catch let error as AudioRecorderError {
+            audioRecorder = nil
+            append(.fail("AUDIO", "recorder.start: \(String(describing: error))"))
+        } catch {
+            audioRecorder = nil
+            append(.fail("AUDIO", "recorder.start: \(error.localizedDescription)"))
+        }
+    }
+
+    private func stopAndUploadAudio() async {
+        guard let recorder = audioRecorder, let captureID = lastCaptureID,
+              let uploads = uploadCoordinator else { return }
+
+        // Stop the recorder.
+        let recording: AudioRecording
+        do {
+            recording = try await recorder.stop()
+        } catch let error as AudioRecorderError {
+            isRecording = false
+            audioRecorder = nil
+            append(.fail("AUDIO", "recorder.stop: \(String(describing: error))"))
+            return
+        } catch {
+            isRecording = false
+            audioRecorder = nil
+            append(.fail("AUDIO", "recorder.stop: \(error.localizedDescription)"))
+            return
+        }
+        isRecording = false
+        audioRecorder = nil
+        append(.ok(
+            "AUDIO",
+            "stopped",
+            "duration=\(String(format: "%.2f", recording.durationSeconds))s bytes=\(recording.sizeBytes)"
+        ))
+
+        // Hash + enqueue.
+        let sha: String
+        do {
+            sha = try FileSHA256.hex(of: recording.fileURL)
+        } catch {
+            append(.fail("AUDIO", "sha256: \(error.localizedDescription)"))
+            return
+        }
+        let uploadID = UUID().uuidString
+        let pending = PendingUpload(
+            id: uploadID,
+            workspaceID: workspaceID,
+            captureSessionID: captureID,
+            kind: .audio,
+            localFileURL: recording.fileURL,
+            mimeType: recording.mimeType,
+            sizeBytes: recording.sizeBytes,
+            sha256Hex: sha,
+            clientTimestamp: recording.startedAt,
+            originalFilename: recording.fileURL.lastPathComponent,
+            createdAt: Date()
+        )
+        append(.start("AUDIO", "upload.enqueue", "id=\(uploadID.prefix(8))… sha=\(sha.prefix(8))…"))
+        do {
+            try await uploads.enqueue(pending)
+        } catch let error as UploadCoordinatorError {
+            append(.fail("AUDIO", "enqueue: \(String(describing: error))"))
+            return
+        } catch {
+            append(.fail("AUDIO", "enqueue: \(error.localizedDescription)"))
+            return
+        }
+
+        // Watch the upload-coordinator's stream for this upload's
+        // terminal state. The worker drains synchronously after
+        // enqueue; we read the first relevant state change(s).
+        uploadObserverTask?.cancel()
+        uploadObserverTask = Task {
+            let stream = await uploads.stateUpdates()
+            for await change in stream {
+                if Task.isCancelled { return }
+                guard change.uploadID == uploadID else { continue }
+                await MainActor.run {
+                    switch change.state {
+                    case .queued:
+                        append(.start("AUDIO", "upload.queued", "id=\(uploadID.prefix(8))…"))
+                    case .uploading:
+                        append(.start("AUDIO", "upload.uploading", "id=\(uploadID.prefix(8))…"))
+                    case .succeeded:
+                        append(.ok("AUDIO", "upload.succeeded", "id=\(uploadID.prefix(8))…"))
+                    case .failed(let reason, let permanent):
+                        append(.fail("AUDIO", "upload.failed permanent=\(permanent) reason=\(reason)"))
+                    }
+                }
+                if change.state == .succeeded { return }
+                if case .failed(_, true) = change.state { return }
+            }
         }
     }
 

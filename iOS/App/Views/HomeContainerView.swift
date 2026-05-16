@@ -82,6 +82,7 @@ struct HomeContainerView: View {
                let context = coordinator.activeContext {
                 EndpointSmokeTestView(
                     captureAPI: api,
+                    uploadCoordinator: coordinator.uploadCoordinator,
                     workspaceID: context.workspace.id,
                     projectID: context.project.id,
                     onDismiss: { showingSmokeTest = false }

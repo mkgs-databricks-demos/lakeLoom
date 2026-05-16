@@ -42,6 +42,13 @@ public final class AppCoordinator {
     /// the coordinator). The endpoint smoke-test sheet on the home
     /// view reads this property.
     public let captureAPI: (any CaptureAPIClient)?
+    /// Optional upload-pipeline coordinator. Production wiring
+    /// constructs a `LiveUploadCoordinator` with the default
+    /// `Application Support/Captures/upload-queue.json` queue store
+    /// and starts the worker loop from the App's bootstrap path.
+    /// Tests omit it. The smoke-test sheet uses this directly to
+    /// enqueue ad-hoc audio uploads.
+    public let uploadCoordinator: (any UploadCoordinator)?
     let logger: AppLogger
     let nowProvider: @Sendable () -> Date
 
@@ -57,6 +64,7 @@ public final class AppCoordinator {
         coreDataStack: any CoreDataStacking,
         endpointResolver: any AppEndpointResolving,
         captureAPI: (any CaptureAPIClient)? = nil,
+        uploadCoordinator: (any UploadCoordinator)? = nil,
         logger: AppLogger = AppLogger(category: .coordinator),
         nowProvider: @Sendable @escaping () -> Date = Date.init
     ) {
@@ -65,6 +73,7 @@ public final class AppCoordinator {
         self.coreDataStack = coreDataStack
         self.endpointResolver = endpointResolver
         self.captureAPI = captureAPI
+        self.uploadCoordinator = uploadCoordinator
         self.logger = logger
         self.nowProvider = nowProvider
     }
