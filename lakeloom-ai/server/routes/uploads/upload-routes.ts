@@ -48,11 +48,17 @@ interface AppKitContext {
   server: { extend(fn: (app: Application) => void): void };
 }
 
+type DirectoryCreateRequest =
+  | string
+  | { directoryPath: string }
+  | { directory_path: string }
+  | { path: string };
+
 type FilesApi = {
-  upload(path: string, contents: Readable, options?: { overwrite?: boolean }): Promise<unknown>;
+  upload(path: string, contents: Buffer | Readable, options?: { overwrite?: boolean }): Promise<unknown>;
   delete(path: string): Promise<unknown>;
-  createDirectory?(path: string): Promise<unknown>;
-  create_directory?(path: string): Promise<unknown>;
+  createDirectory?(request: DirectoryCreateRequest): Promise<unknown>;
+  create_directory?(request: DirectoryCreateRequest): Promise<unknown>;
 };
 
 // ── MIME allowlist ────────────────────────────────────────────────────────────
@@ -71,6 +77,36 @@ const MIME_TO_EXT: Record<string, string> = {
 
 // ── Volume paths from environment ────────────────────────────────────────────
 
+function requireNonEmptyString(value: unknown, context: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(`${context} must be a string.`);
+  }
+
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new Error(`${context} cannot be empty.`);
+  }
+
+  return trimmed;
+}
+
+function toCanonicalVolumePath(path: string): string {
+  const withoutDbfsPrefix = path.startsWith('dbfs:/') ? path.slice('dbfs:'.length) : path;
+  const normalizedSlashes = withoutDbfsPrefix.replace(/\/{2,}/g, '/');
+  return normalizedSlashes.length > 1 ? normalizedSlashes.replace(/\/+$/, '') : normalizedSlashes;
+}
+
+function requireCanonicalVolumePath(path: unknown, context: string): string {
+  const rawPath = requireNonEmptyString(path, `Upload ${context} path`);
+  const canonicalPath = toCanonicalVolumePath(rawPath);
+
+  if (!canonicalPath.startsWith('/Volumes/')) {
+    throw new Error(`Upload ${context} path must be rooted under /Volumes: ${rawPath}`);
+  }
+
+  return canonicalPath;
+}
+
 function getVolumePath(volumeEnv: string): string {
   const path = process.env[volumeEnv];
   if (!path) {
@@ -84,38 +120,144 @@ function getVolumePath(volumeEnv: string): string {
       },
     );
   }
-  return toCanonicalVolumePath(path.replace(/\/+$/, ''));
+  return requireCanonicalVolumePath(path, `storage volume '${volumeEnv}'`);
 }
 
-function toCanonicalVolumePath(path: string): string {
-  if (path.startsWith('dbfs:/')) {
-    return path.slice('dbfs:'.length);
+function requireUploadPathComponent(
+  value: unknown,
+  context: string,
+  options?: { allowDots?: boolean },
+): string {
+  const trimmed = requireNonEmptyString(value, `Upload ${context}`);
+  const normalized = trimmed.replace(/^\/+|\/+$/g, '');
+
+  if (normalized.length === 0) {
+    throw new Error(`Upload ${context} cannot be empty after trimming slashes.`);
   }
-  return path;
-}
 
-function buildVolumePathCandidates(path: string): string[] {
-  const canonicalPath = toCanonicalVolumePath(path.trim());
-  if (canonicalPath.length === 0) {
-    return [];
+  if (normalized.includes('/')) {
+    throw new Error(`Upload ${context} must not contain '/': ${trimmed}`);
   }
 
-  return [canonicalPath];
+  if (normalized === '.' || normalized === '..') {
+    throw new Error(`Upload ${context} must not be '.' or '..'.`);
+  }
+
+  if (options?.allowDots === false && normalized.includes('.')) {
+    throw new Error(`Upload ${context} must not contain '.': ${trimmed}`);
+  }
+
+  return normalized;
 }
 
-function getParentDirectory(path: string): string {
-  const lastSlashIdx = path.lastIndexOf('/');
+function requireUploadFileExtension(value: unknown): string {
+  const trimmed = requireNonEmptyString(value, 'Upload file extension');
+  const normalized = trimmed.replace(/^\.+|\.+$/g, '').toLowerCase();
+
+  if (normalized.length === 0) {
+    throw new Error('Upload file extension cannot be empty after trimming dots.');
+  }
+
+  if (normalized.includes('/') || normalized.includes('\\')) {
+    throw new Error(`Upload file extension must not contain path separators: ${trimmed}`);
+  }
+
+  if (normalized.includes('.')) {
+    throw new Error(`Upload file extension must not contain '.': ${trimmed}`);
+  }
+
+  return normalized;
+}
+
+function joinVolumePath(basePath: unknown, ...pathComponents: string[]): string {
+  const canonicalBasePath = requireCanonicalVolumePath(basePath, 'base');
+  const normalizedComponents = pathComponents.map((component, index) =>
+    requireUploadPathComponent(component, `path component ${index + 1}`),
+  );
+
+  const joinedPath = [canonicalBasePath, ...normalizedComponents].join('/');
+  return requireCanonicalVolumePath(joinedPath, 'path');
+}
+
+type ResolvedUploadFilePath = {
+  canonicalPath: string;
+  volumeBasePath: string;
+  projectId: string;
+  captureSessionId: string | null;
+  uploadId: string;
+  extension: string;
+  fileName: string;
+};
+
+function buildUploadFilePath(params: {
+  volumeBasePath: unknown;
+  projectId: unknown;
+  captureSessionId?: unknown;
+  uploadId: unknown;
+  extension: unknown;
+}): ResolvedUploadFilePath {
+  const volumeBasePath = requireCanonicalVolumePath(params.volumeBasePath, 'storage volume');
+  const projectId = requireUploadPathComponent(params.projectId, 'project_id');
+  const captureSessionId =
+    params.captureSessionId == null
+      ? null
+      : requireUploadPathComponent(params.captureSessionId, 'capture_session_id');
+  const uploadId = requireUploadPathComponent(params.uploadId, 'upload_id');
+  const extension = requireUploadFileExtension(params.extension);
+  const fileName = requireUploadPathComponent(`${uploadId}.${extension}`, 'file name');
+  const canonicalPath = captureSessionId
+    ? joinVolumePath(volumeBasePath, projectId, captureSessionId, fileName)
+    : joinVolumePath(volumeBasePath, projectId, fileName);
+
+  return {
+    canonicalPath,
+    volumeBasePath,
+    projectId,
+    captureSessionId,
+    uploadId,
+    extension,
+    fileName,
+  };
+}
+
+function requireUploadBuffer(fileBuffer: unknown): Buffer {
+  if (!Buffer.isBuffer(fileBuffer)) {
+    throw new Error('Upload file contents must be provided as a Buffer.');
+  }
+
+  if (fileBuffer.length === 0) {
+    throw new Error('Upload file contents cannot be empty.');
+  }
+
+  return fileBuffer;
+}
+
+function buildVolumePathCandidates(path: unknown, context = 'path'): string[] {
+  return [requireCanonicalVolumePath(path, context)];
+}
+
+function maybeBuildVolumePathCandidates(path: unknown, context = 'path'): string[] | null {
+  try {
+    return buildVolumePathCandidates(path, context);
+  } catch {
+    return null;
+  }
+}
+
+function getParentDirectory(path: unknown): string {
+  const normalizedPath = requireCanonicalVolumePath(path, 'file');
+  const lastSlashIdx = normalizedPath.lastIndexOf('/');
   if (lastSlashIdx <= 0) {
-    throw new Error(`Unable to determine parent directory for path: ${path}`);
+    throw new Error(`Unable to determine parent directory for path: ${String(path)}`);
   }
-  return path.slice(0, lastSlashIdx);
+  return normalizedPath.slice(0, lastSlashIdx);
 }
 
-function getDirectoryChain(path: string): string[] {
-  const parentDirectory = toCanonicalVolumePath(getParentDirectory(path));
-  const pathParts = parentDirectory.split('/').filter(Boolean);
+function getDirectoryChain(directoryPath: string): string[] {
+  const normalizedDirectory = requireCanonicalVolumePath(directoryPath, 'directory');
+  const pathParts = normalizedDirectory.split('/').filter(Boolean);
   if (pathParts.length < 4 || pathParts[0] !== 'Volumes') {
-    throw new Error(`Upload volume path must be rooted under /Volumes: ${path}`);
+    throw new Error(`Upload volume path must be rooted under /Volumes: ${directoryPath}`);
   }
 
   const directoryChain: string[] = [];
@@ -123,6 +265,22 @@ function getDirectoryChain(path: string): string[] {
     directoryChain.push(`/${pathParts.slice(0, idx).join('/')}`);
   }
   return directoryChain;
+}
+
+function buildDirectoryCreateRequests(
+  directoryPath: string,
+  method: 'createDirectory' | 'create_directory',
+): DirectoryCreateRequest[] {
+  const normalizedDirectoryPath = requireCanonicalVolumePath(directoryPath, 'directory');
+  const objectRequests: DirectoryCreateRequest[] = [
+    { directoryPath: normalizedDirectoryPath },
+    { directory_path: normalizedDirectoryPath },
+    { path: normalizedDirectoryPath },
+  ];
+
+  return method === 'create_directory'
+    ? [...objectRequests, normalizedDirectoryPath]
+    : [normalizedDirectoryPath, ...objectRequests];
 }
 
 function normalizeSdkError(error: unknown): Record<string, unknown> {
@@ -169,20 +327,20 @@ function isAlreadyExistsError(error: unknown): boolean {
 async function createVolumeDirectory(filesApi: FilesApi, directoryPath: string): Promise<void> {
   const directoryMethods: Array<{
     method: 'createDirectory' | 'create_directory';
-    fn: (path: string) => Promise<unknown>;
+    fn: (request: DirectoryCreateRequest) => Promise<unknown>;
   }> = [];
 
   if (typeof filesApi.createDirectory === 'function') {
     directoryMethods.push({
       method: 'createDirectory',
-      fn: (path: string) => filesApi.createDirectory!(path),
+      fn: (request: DirectoryCreateRequest) => filesApi.createDirectory!(request),
     });
   }
 
   if (typeof filesApi.create_directory === 'function') {
     directoryMethods.push({
       method: 'create_directory',
-      fn: (path: string) => filesApi.create_directory!(path),
+      fn: (request: DirectoryCreateRequest) => filesApi.create_directory!(request),
     });
   }
 
@@ -190,22 +348,25 @@ async function createVolumeDirectory(filesApi: FilesApi, directoryPath: string):
     throw new Error('Workspace Files API does not expose a directory creation method.');
   }
 
-  const candidatePaths = buildVolumePathCandidates(directoryPath);
+  const candidatePaths = buildVolumePathCandidates(directoryPath, 'directory');
   const attempts: Array<Record<string, unknown>> = [];
   let lastError: unknown;
 
   for (const candidatePath of candidatePaths) {
     for (const directoryMethod of directoryMethods) {
-      try {
-        await directoryMethod.fn(candidatePath);
-        return;
-      } catch (error) {
-        lastError = error;
-        attempts.push({
-          attempted_path: candidatePath,
-          attempted_method: directoryMethod.method,
-          ...normalizeSdkError(error),
-        });
+      for (const requestPayload of buildDirectoryCreateRequests(candidatePath, directoryMethod.method)) {
+        try {
+          await directoryMethod.fn(requestPayload);
+          return;
+        } catch (error) {
+          lastError = error;
+          attempts.push({
+            attempted_path: candidatePath,
+            attempted_method: directoryMethod.method,
+            attempted_request: requestPayload,
+            ...normalizeSdkError(error),
+          });
+        }
       }
     }
   }
@@ -222,31 +383,36 @@ async function createVolumeDirectory(filesApi: FilesApi, directoryPath: string):
 
 async function uploadVolumeFile(
   filesApi: FilesApi,
-  path: string,
-  fileBuffer: Buffer,
+  path: unknown,
+  fileBuffer: unknown,
   options?: { overwrite?: boolean },
 ): Promise<void> {
-  const candidatePaths = buildVolumePathCandidates(path);
+  const candidatePaths = buildVolumePathCandidates(path, 'file');
+  const uploadBuffer = requireUploadBuffer(fileBuffer);
   const attempts: Array<Record<string, unknown>> = [];
   let lastError: unknown;
 
   for (const candidatePath of candidatePaths) {
     try {
-      await filesApi.upload(candidatePath, Readable.from(fileBuffer), options);
+      await filesApi.upload(candidatePath, uploadBuffer, options);
       return;
     } catch (error) {
       lastError = error;
       attempts.push({
         attempted_path: candidatePath,
+        upload_content_type: 'buffer',
+        upload_size_bytes: uploadBuffer.length,
         ...normalizeSdkError(error),
       });
     }
   }
 
-  const aggregatedError = new Error(`Workspace Files API upload failed for: ${path}`);
+  const aggregatedError = new Error(`Workspace Files API upload failed for: ${String(path)}`);
   (aggregatedError as Error & { details?: unknown; cause?: unknown }).details = {
     original_path: path,
     attempted_paths: candidatePaths,
+    upload_content_type: 'buffer',
+    upload_size_bytes: uploadBuffer.length,
     attempts,
   };
   (aggregatedError as Error & { details?: unknown; cause?: unknown }).cause = lastError;
@@ -254,7 +420,7 @@ async function uploadVolumeFile(
 }
 
 async function deleteVolumeFile(filesApi: FilesApi, path: string): Promise<void> {
-  const candidatePaths = buildVolumePathCandidates(path);
+  const candidatePaths = buildVolumePathCandidates(path, 'file');
   const attempts: Array<Record<string, unknown>> = [];
   let lastError: unknown;
 
@@ -282,7 +448,7 @@ async function deleteVolumeFile(filesApi: FilesApi, path: string): Promise<void>
 }
 
 async function ensureVolumeDirectory(filesApi: FilesApi, directoryPath: string): Promise<void> {
-  const directoryChain = getDirectoryChain(`${directoryPath}/placeholder`);
+  const directoryChain = getDirectoryChain(directoryPath);
   for (const currentDirectory of directoryChain) {
     try {
       await createVolumeDirectory(filesApi, currentDirectory);
@@ -682,20 +848,54 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
       const sha256Hash = createHash('sha256').update(parsed.fileBuffer).digest('hex');
       diagnostics.sha256Hex = sha256Hash;
 
-      const volumeBase = getVolumePath(opts.volumeEnvVar);
-      if (captureSessionId) {
-        volumeFilePath = `${volumeBase}/${projectId}/${captureSessionId}/${uploadId}.${ext}`;
-      } else {
-        volumeFilePath = `${volumeBase}/${projectId}/${uploadId}.${ext}`;
+      let resolvedUploadPath: ResolvedUploadFilePath | undefined;
+      try {
+        const volumeBase = getVolumePath(opts.volumeEnvVar);
+        resolvedUploadPath = buildUploadFilePath({
+          volumeBasePath: volumeBase,
+          projectId,
+          captureSessionId,
+          uploadId,
+          extension: ext,
+        });
+        volumeFilePath = resolvedUploadPath.canonicalPath;
+        diagnostics.volumeFilePath = volumeFilePath;
+
+        logUploadEvent('[upload] volume.path_resolved', diagnostics, {
+          canonical_volume_path: resolvedUploadPath.canonicalPath,
+          volume_base_path: resolvedUploadPath.volumeBasePath,
+          file_name: resolvedUploadPath.fileName,
+          path_project_id: resolvedUploadPath.projectId,
+          path_capture_session_id: resolvedUploadPath.captureSessionId,
+          path_upload_id: resolvedUploadPath.uploadId,
+          path_extension: resolvedUploadPath.extension,
+        });
+      } catch (pathErr) {
+        throw buildUploadAppError(
+          500,
+          'Upload storage failed',
+          'The upload destination path could not be derived from the request context.',
+          buildUploadContext(diagnostics, {
+            error_code: 'UPLOAD_VOLUME_PATH_INVALID',
+            volume_env_var: opts.volumeEnvVar,
+            raw_volume_base_path: process.env[opts.volumeEnvVar] ?? null,
+            raw_project_id: projectId ?? null,
+            raw_capture_session_id: captureSessionId ?? null,
+            raw_upload_id: uploadId,
+            raw_extension: ext,
+            ...normalizeSdkError(pathErr),
+          }),
+        );
       }
-      diagnostics.volumeFilePath = volumeFilePath;
 
       const volumeDirectory = getParentDirectory(volumeFilePath);
       try {
         await ensureVolumeDirectory(filesApi, volumeDirectory);
         logUploadEvent('[upload] volume.directory_ready', diagnostics, {
           volume_directory: volumeDirectory,
-          volume_directory_candidates: buildVolumePathCandidates(volumeDirectory),
+          volume_directory_candidates: maybeBuildVolumePathCandidates(volumeDirectory, 'directory'),
+          canonical_volume_path: volumeFilePath,
+          file_name: resolvedUploadPath?.fileName ?? null,
         });
       } catch (directoryErr) {
         throw buildUploadAppError(
@@ -705,11 +905,20 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
           buildUploadContext(diagnostics, {
             error_code: 'UPLOAD_VOLUME_DIRECTORY_CREATE_FAILED',
             volume_directory: volumeDirectory,
-            volume_directory_candidates: buildVolumePathCandidates(volumeDirectory),
+            volume_directory_candidates: maybeBuildVolumePathCandidates(volumeDirectory, 'directory'),
+            canonical_volume_path: volumeFilePath,
             ...normalizeSdkError(directoryErr),
           }),
         );
       }
+
+      logUploadEvent('[upload] volume.write_attempt', diagnostics, {
+        canonical_volume_path: volumeFilePath,
+        volume_path_candidates: maybeBuildVolumePathCandidates(volumeFilePath, 'file'),
+        upload_content_type: 'buffer',
+        upload_size_bytes: parsed.fileBuffer.length,
+        file_name: resolvedUploadPath?.fileName ?? null,
+      });
 
       try {
         await uploadVolumeFile(filesApi, volumeFilePath, parsed.fileBuffer, { overwrite: false });
@@ -721,13 +930,21 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
           buildUploadContext(diagnostics, {
             error_code: 'UPLOAD_VOLUME_WRITE_FAILED',
             volume_directory: volumeDirectory,
-            volume_path_candidates: buildVolumePathCandidates(volumeFilePath),
+            canonical_volume_path: volumeFilePath,
+            volume_path_candidates: maybeBuildVolumePathCandidates(volumeFilePath, 'file'),
+            upload_content_type: 'buffer',
+            upload_size_bytes: parsed.fileBuffer.length,
+            file_name: resolvedUploadPath?.fileName ?? null,
             ...normalizeSdkError(volumeErr),
           }),
         );
       }
       logUploadEvent('[upload] volume.write_succeeded', diagnostics, {
-        volume_path_candidates: buildVolumePathCandidates(volumeFilePath),
+        canonical_volume_path: volumeFilePath,
+        volume_path_candidates: maybeBuildVolumePathCandidates(volumeFilePath, 'file'),
+        upload_content_type: 'buffer',
+        upload_size_bytes: parsed.fileBuffer.length,
+        file_name: resolvedUploadPath?.fileName ?? null,
       });
 
       // ── Step 7: SHA-256 verification ─────────────────────────────────────
@@ -874,7 +1091,7 @@ export function registerUploadRoutes(ctx: AppKitContext): void {
   ctx.server.extend((app) => {
     app.post(
       '/api/captures/:capture_session_id/audio',
-      iosAuth,
+      iosAuth({ lakebase }),
       createUploadHandler(
         {
           kind: 'audio',
@@ -888,7 +1105,7 @@ export function registerUploadRoutes(ctx: AppKitContext): void {
 
     app.post(
       '/api/captures/:capture_session_id/screenshots',
-      iosAuth,
+      iosAuth({ lakebase }),
       createUploadHandler(
         {
           kind: 'screenshot',
@@ -902,7 +1119,7 @@ export function registerUploadRoutes(ctx: AppKitContext): void {
 
     app.post(
       '/api/captures/:capture_session_id/photos',
-      iosAuth,
+      iosAuth({ lakebase }),
       createUploadHandler(
         {
           kind: 'photo',
@@ -916,7 +1133,7 @@ export function registerUploadRoutes(ctx: AppKitContext): void {
 
     app.post(
       '/api/projects/:project_id/documents',
-      iosAuth,
+      iosAuth({ lakebase }),
       createUploadHandler(
         {
           kind: 'document',
