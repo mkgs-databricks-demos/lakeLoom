@@ -155,6 +155,11 @@
 		C0020A13C013C013C013C013 /* FakeUploadCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0010A13C013C013C013C013 /* FakeUploadCoordinator.swift */; };
 		C0020A14C014C014C014C014 /* LiveCaptureServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0010A14C014C014C014C014 /* LiveCaptureServiceTests.swift */; };
 		D0020A01D001D001D001D001 /* EndpointSmokeTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0010A01D001D001D001D001 /* EndpointSmokeTestView.swift */; };
+		E0020A01E001E001E001E001 /* PhotoCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0010A01E001E001E001E001 /* PhotoCapture.swift */; };
+		E0020A02E002E002E002E002 /* PhotoCaptureEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0010A02E002E002E002E002 /* PhotoCaptureEngine.swift */; };
+		E0020A03E003E003E003E003 /* LivePhotoCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0010A03E003E003E003E003 /* LivePhotoCapture.swift */; };
+		E0020A11E011E011E011E011 /* FakePhotoCaptureEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0010A11E011E011E011E011 /* FakePhotoCaptureEngine.swift */; };
+		E0020A12E012E012E012E012 /* LivePhotoCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0010A12E012E012E012E012 /* LivePhotoCaptureTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -325,6 +330,11 @@
 		C0010A13C013C013C013C013 /* FakeUploadCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeUploadCoordinator.swift; sourceTree = "<group>"; };
 		C0010A14C014C014C014C014 /* LiveCaptureServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveCaptureServiceTests.swift; sourceTree = "<group>"; };
 		D0010A01D001D001D001D001 /* EndpointSmokeTestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndpointSmokeTestView.swift; sourceTree = "<group>"; };
+		E0010A01E001E001E001E001 /* PhotoCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoCapture.swift; sourceTree = "<group>"; };
+		E0010A02E002E002E002E002 /* PhotoCaptureEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoCaptureEngine.swift; sourceTree = "<group>"; };
+		E0010A03E003E003E003E003 /* LivePhotoCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePhotoCapture.swift; sourceTree = "<group>"; };
+		E0010A11E011E011E011E011 /* FakePhotoCaptureEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakePhotoCaptureEngine.swift; sourceTree = "<group>"; };
+		E0010A12E012E012E012E012 /* LivePhotoCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePhotoCaptureTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -540,6 +550,7 @@
 			isa = PBXGroup;
 			children = (
 				A0030A01A001A001A001A001 /* Audio */,
+				E0030A01E001E001E001E001 /* Camera */,
 				B0030A01B001B001B001B001 /* Upload */,
 				5F242B88AF0A6339ED026919 /* CaptureAPIClient.swift */,
 				A6B53730F7F710DA0FE81E5D /* CaptureAPIError.swift */,
@@ -550,6 +561,16 @@
 				C0010A03C003C003C003C003 /* LiveCaptureService.swift */,
 			);
 			path = Captures;
+			sourceTree = "<group>";
+		};
+		E0030A01E001E001E001E001 /* Camera */ = {
+			isa = PBXGroup;
+			children = (
+				E0010A03E003E003E003E003 /* LivePhotoCapture.swift */,
+				E0010A01E001E001E001E001 /* PhotoCapture.swift */,
+				E0010A02E002E002E002E002 /* PhotoCaptureEngine.swift */,
+			);
+			path = Camera;
 			sourceTree = "<group>";
 		};
 		B0030A01B001B001B001B001 /* Upload */ = {
@@ -717,12 +738,22 @@
 			isa = PBXGroup;
 			children = (
 				A0030A02A002A002A002A002 /* Audio */,
+				E0030A02E002E002E002E002 /* Camera */,
 				B0030A02B002B002B002B002 /* Upload */,
 				C0030A01C001C001C001C001 /* Helpers */,
 				EF3EBEA3151F4C5C286DE55A /* CaptureAPIClientTests.swift */,
 				C0010A14C014C014C014C014 /* LiveCaptureServiceTests.swift */,
 			);
 			path = Captures;
+			sourceTree = "<group>";
+		};
+		E0030A02E002E002E002E002 /* Camera */ = {
+			isa = PBXGroup;
+			children = (
+				E0010A11E011E011E011E011 /* FakePhotoCaptureEngine.swift */,
+				E0010A12E012E012E012E012 /* LivePhotoCaptureTests.swift */,
+			);
+			path = Camera;
 			sourceTree = "<group>";
 		};
 		C0030A01C001C001C001C001 /* Helpers */ = {
@@ -978,6 +1009,7 @@
 				A0020A11A011A011A011A011 /* FakeAudioRecordingEngine.swift in Sources */,
 				C0020A11C011C011C011C011 /* FakeCaptureAPIClient.swift in Sources */,
 				DB133DD16795FF5D86BCB7EE /* FakeLakeloomAppClient.swift in Sources */,
+				E0020A11E011E011E011E011 /* FakePhotoCaptureEngine.swift in Sources */,
 				C0020A13C013C013C013C013 /* FakeUploadCoordinator.swift in Sources */,
 				973B1CF4EA081E24968E4C78 /* FakeM2MTokenClient.swift in Sources */,
 				8D9885169F6DDAF577760F9E /* InMemoryDeviceKeyStore.swift in Sources */,
@@ -985,6 +1017,7 @@
 				6F51D58B5DEDCCAADCBEE9C6 /* LakeloomAppClientTests.swift in Sources */,
 				A0020A12A012A012A012A012 /* LiveAudioRecorderTests.swift in Sources */,
 				C0020A14C014C014C014C014 /* LiveCaptureServiceTests.swift in Sources */,
+				E0020A12E012E012E012E012 /* LivePhotoCaptureTests.swift in Sources */,
 				B0020A13B013B013B013B013 /* LiveUploadCoordinatorTests.swift in Sources */,
 				D5D1B7CA8399CCEED871E460 /* LogEntryCollectorTests.swift in Sources */,
 				4A9FC4F3FEEDF893F6D80736 /* LogValueTests.swift in Sources */,
@@ -1030,11 +1063,14 @@
 				DD3C123A15564006D4260362 /* CaptureAPIClient.swift in Sources */,
 				907970D8A5089D5B3B4893A5 /* CaptureAPIError.swift in Sources */,
 				C0020A01C001C001C001C001 /* CaptureService.swift in Sources */,
+				E0020A01E001E001E001E001 /* PhotoCapture.swift in Sources */,
+				E0020A02E002E002E002E002 /* PhotoCaptureEngine.swift in Sources */,
 				964D84FECA40C505ADF6D9EC /* CaptureSession.swift in Sources */,
 				D0020A01D001D001D001D001 /* EndpointSmokeTestView.swift in Sources */,
 				C0020A02C002C002C002C002 /* FileSHA256.swift in Sources */,
 				C0020A03C003C003C003C003 /* LiveCaptureService.swift in Sources */,
 				A0020A03A003A003A003A003 /* LiveAudioRecorder.swift in Sources */,
+				E0020A03E003E003E003E003 /* LivePhotoCapture.swift in Sources */,
 				B0020A05B005B005B005B005 /* LiveUploadCoordinator.swift in Sources */,
 				B0020A03B003B003B003B003 /* MultipartFormBuilder.swift in Sources */,
 				B0020A01B001B001B001B001 /* PendingUpload.swift in Sources */,
@@ -1299,7 +1335,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = lakeLoom;
-				INFOPLIST_KEY_NSCameraUsageDescription = "lakeLoom uses the camera to scan the pairing QR code shown by the lakeLoom Databricks App.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "lakeLoom uses the camera to scan the pairing QR code shown by the lakeLoom Databricks App and to capture photos that attach to your active capture session.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "lakeLoom records audio during a capture session so the Databricks side can transcribe the conversation into a project brief.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -1325,7 +1361,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = lakeLoom;
-				INFOPLIST_KEY_NSCameraUsageDescription = "lakeLoom uses the camera to scan the pairing QR code shown by the lakeLoom Databricks App.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "lakeLoom uses the camera to scan the pairing QR code shown by the lakeLoom Databricks App and to capture photos that attach to your active capture session.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "lakeLoom records audio during a capture session so the Databricks side can transcribe the conversation into a project brief.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -1368,7 +1404,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = lakeLoom;
-				INFOPLIST_KEY_NSCameraUsageDescription = "lakeLoom uses the camera to scan the pairing QR code shown by the lakeLoom Databricks App.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "lakeLoom uses the camera to scan the pairing QR code shown by the lakeLoom Databricks App and to capture photos that attach to your active capture session.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "lakeLoom records audio during a capture session so the Databricks side can transcribe the conversation into a project brief.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
