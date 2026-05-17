@@ -12,12 +12,19 @@ struct EndpointSmokeTestView: View {
 
     let captureAPI: any CaptureAPIClient
     let uploadCoordinator: (any UploadCoordinator)?
+    let photoCapture: (any PhotoCapture)?
     let workspaceID: String
     let projectID: String
     let onDismiss: () -> Void
 
     @State private var lines: [LogLine] = []
     @State private var lastCaptureID: String?
+    /// Tracks which terminal PATCH (cancel / complete) the user has
+    /// already issued for `lastCaptureID`. Once set, both PATCH
+    /// buttons are disabled — prevents the
+    /// `Cannot transition from 'cancelled' to 'completed'` 400 the
+    /// server (correctly) returns on the second tap.
+    @State private var lastCaptureTerminalState: CaptureSession.EndState?
     @State private var inFlight: String?
 
     // Audio-upload sub-flow state. The recorder is held by reference
@@ -58,21 +65,21 @@ struct EndpointSmokeTestView: View {
                             systemImage: "xmark.octagon",
                             tag: "cancel",
                             action: cancelLastCapture,
-                            disabled: lastCaptureID == nil
+                            disabled: lastCaptureID == nil || lastCaptureTerminalState != nil
                         )
                         actionButton(
                             "PATCH /api/captures/:id (completed)",
                             systemImage: "checkmark.circle",
                             tag: "complete",
                             action: completeLastCapture,
-                            disabled: lastCaptureID == nil
+                            disabled: lastCaptureID == nil || lastCaptureTerminalState != nil
                         )
 
                         Divider()
                             .padding(.vertical, 4)
 
                         if uploadCoordinator == nil {
-                            Text("UploadCoordinator not wired — audio upload disabled.")
+                            Text("UploadCoordinator not wired — audio + photo upload disabled.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         } else {
@@ -83,8 +90,30 @@ struct EndpointSmokeTestView: View {
                                 action: isRecording ? stopAndUploadAudio : startRecordingAudio,
                                 disabled: lastCaptureID == nil
                             )
+
+                            if photoCapture != nil {
+                                actionButton(
+                                    "Capture photo + upload",
+                                    systemImage: "camera.fill",
+                                    tag: "photo",
+                                    action: capturePhotoAndUpload,
+                                    disabled: lastCaptureID == nil || isRecording
+                                )
+                            } else {
+                                Text("PhotoCapture not wired — photo capture disabled.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            actionButton(
+                                "Clear failed uploads",
+                                systemImage: "trash.slash",
+                                tag: "clearfailed",
+                                action: clearFailedUploads
+                            )
+
                             if lastCaptureID == nil {
-                                Text("Create a capture first to enable audio upload.")
+                                Text("Create a capture first to enable audio + photo upload.")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -195,6 +224,9 @@ struct EndpointSmokeTestView: View {
                 clientTimestamp: Date()
             )
             lastCaptureID = session.id
+            // Fresh capture session resets the cancel/complete mutex
+            // so the next PATCH can fire.
+            lastCaptureTerminalState = nil
             append(.ok("POST", session.id, "state=\(session.state.rawValue)"))
         } catch let error as CaptureAPIError {
             append(.fail("POST", String(describing: error)))
@@ -262,12 +294,88 @@ struct EndpointSmokeTestView: View {
                 state: state,
                 endedAt: Date()
             )
+            lastCaptureTerminalState = state
             append(.ok("PATCH", session.id, "state=\(session.state.rawValue)"))
         } catch let error as CaptureAPIError {
             append(.fail("PATCH", String(describing: error)))
         } catch {
             append(.fail("PATCH", error.localizedDescription))
         }
+    }
+
+    // MARK: - Photo capture + upload
+
+    private func capturePhotoAndUpload() async {
+        guard let captureID = lastCaptureID,
+              let photoCapture,
+              let uploads = uploadCoordinator else { return }
+
+        append(.start("PHOTO", "capture.attempt", "capture=\(captureID.prefix(8))…"))
+        let photo: CapturedPhoto
+        do {
+            photo = try await photoCapture.capturePhoto(captureSessionID: captureID)
+        } catch let error as PhotoCaptureError {
+            append(.fail("PHOTO", "capture: \(String(describing: error))"))
+            return
+        } catch {
+            append(.fail("PHOTO", "capture: \(error.localizedDescription)"))
+            return
+        }
+        append(.ok("PHOTO", "captured", "bytes=\(photo.sizeBytes) url=\(photo.fileURL.lastPathComponent)"))
+
+        let sha: String
+        do {
+            sha = try FileSHA256.hex(of: photo.fileURL)
+        } catch {
+            append(.fail("PHOTO", "sha256: \(error.localizedDescription)"))
+            return
+        }
+        let uploadID = UUID().uuidString
+        let pending = PendingUpload(
+            id: uploadID,
+            workspaceID: workspaceID,
+            captureSessionID: captureID,
+            kind: .photo,
+            localFileURL: photo.fileURL,
+            mimeType: photo.mimeType,
+            sizeBytes: photo.sizeBytes,
+            sha256Hex: sha,
+            clientTimestamp: photo.capturedAt,
+            originalFilename: photo.fileURL.lastPathComponent,
+            createdAt: Date()
+        )
+        append(.start("PHOTO", "upload.enqueue", "id=\(uploadID.prefix(8))… sha=\(sha.prefix(8))…"))
+        do {
+            try await uploads.enqueue(pending)
+        } catch let error as UploadCoordinatorError {
+            append(.fail("PHOTO", "enqueue: \(String(describing: error))"))
+            return
+        } catch {
+            append(.fail("PHOTO", "enqueue: \(error.localizedDescription)"))
+            return
+        }
+        // Reuse the same upload observer pattern as audio.
+        observeUpload(uploadID: uploadID, tag: "PHOTO", coordinator: uploads)
+    }
+
+    // MARK: - Clear failed uploads
+
+    private func clearFailedUploads() async {
+        guard let uploads = uploadCoordinator else { return }
+        let snapshot = await uploads.currentUploads()
+        let failed = snapshot.filter {
+            if case .failed = $0.state { return true }
+            return false
+        }
+        guard !failed.isEmpty else {
+            append(.ok("QUEUE", "clear", "no failed uploads"))
+            return
+        }
+        append(.start("QUEUE", "clear", "count=\(failed.count)"))
+        for upload in failed {
+            await uploads.discard(uploadID: upload.id)
+        }
+        append(.ok("QUEUE", "cleared", "discarded=\(failed.count)"))
     }
 
     // MARK: - Audio record + upload
@@ -350,25 +458,36 @@ struct EndpointSmokeTestView: View {
             return
         }
 
-        // Watch the upload-coordinator's stream for this upload's
-        // terminal state. The worker drains synchronously after
-        // enqueue; we read the first relevant state change(s).
+        observeUpload(uploadID: uploadID, tag: "AUDIO", coordinator: uploads)
+    }
+
+    // MARK: - Upload observer (shared by audio + photo)
+
+    /// Spawns a Task that watches the upload coordinator's stream
+    /// for this upload's terminal state. Cancels any previously-
+    /// running observer; the smoke-test sheet only observes one
+    /// upload at a time.
+    private func observeUpload(
+        uploadID: String,
+        tag: String,
+        coordinator: any UploadCoordinator
+    ) {
         uploadObserverTask?.cancel()
         uploadObserverTask = Task {
-            let stream = await uploads.stateUpdates()
+            let stream = await coordinator.stateUpdates()
             for await change in stream {
                 if Task.isCancelled { return }
                 guard change.uploadID == uploadID else { continue }
                 await MainActor.run {
                     switch change.state {
                     case .queued:
-                        append(.start("AUDIO", "upload.queued", "id=\(uploadID.prefix(8))…"))
+                        append(.start(tag, "upload.queued", "id=\(uploadID.prefix(8))…"))
                     case .uploading:
-                        append(.start("AUDIO", "upload.uploading", "id=\(uploadID.prefix(8))…"))
+                        append(.start(tag, "upload.uploading", "id=\(uploadID.prefix(8))…"))
                     case .succeeded:
-                        append(.ok("AUDIO", "upload.succeeded", "id=\(uploadID.prefix(8))…"))
+                        append(.ok(tag, "upload.succeeded", "id=\(uploadID.prefix(8))…"))
                     case .failed(let reason, let permanent):
-                        append(.fail("AUDIO", "upload.failed permanent=\(permanent) reason=\(reason)"))
+                        append(.fail(tag, "upload.failed permanent=\(permanent) reason=\(reason)"))
                     }
                 }
                 if change.state == .succeeded { return }

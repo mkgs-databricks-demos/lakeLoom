@@ -57,6 +57,8 @@ struct LakeloomApp: App {
             uploadCoordinator = nil
         }
 
+        let photoCapture = LivePhotoCapture()
+
         _coordinator = State(
             wrappedValue: AppCoordinator(
                 auth: auth,
@@ -64,7 +66,8 @@ struct LakeloomApp: App {
                 coreDataStack: coreDataStack,
                 endpointResolver: endpointResolver,
                 captureAPI: captureAPI,
-                uploadCoordinator: uploadCoordinator
+                uploadCoordinator: uploadCoordinator,
+                photoCapture: photoCapture
             )
         )
     }

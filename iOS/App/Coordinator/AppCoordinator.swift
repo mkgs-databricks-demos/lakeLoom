@@ -49,6 +49,11 @@ public final class AppCoordinator {
     /// Tests omit it. The smoke-test sheet uses this directly to
     /// enqueue ad-hoc audio uploads.
     public let uploadCoordinator: (any UploadCoordinator)?
+    /// Optional photo-capture client. Production wiring constructs a
+    /// `LivePhotoCapture`; tests omit it. Same nil-default pattern as
+    /// `captureAPI` and `uploadCoordinator` so the existing test
+    /// surface is unaffected.
+    public let photoCapture: (any PhotoCapture)?
     let logger: AppLogger
     let nowProvider: @Sendable () -> Date
 
@@ -65,6 +70,7 @@ public final class AppCoordinator {
         endpointResolver: any AppEndpointResolving,
         captureAPI: (any CaptureAPIClient)? = nil,
         uploadCoordinator: (any UploadCoordinator)? = nil,
+        photoCapture: (any PhotoCapture)? = nil,
         logger: AppLogger = AppLogger(category: .coordinator),
         nowProvider: @Sendable @escaping () -> Date = Date.init
     ) {
@@ -74,6 +80,7 @@ public final class AppCoordinator {
         self.endpointResolver = endpointResolver
         self.captureAPI = captureAPI
         self.uploadCoordinator = uploadCoordinator
+        self.photoCapture = photoCapture
         self.logger = logger
         self.nowProvider = nowProvider
     }
