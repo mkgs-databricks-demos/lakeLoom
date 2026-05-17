@@ -48,6 +48,13 @@ interface AppKitContext {
   server: { extend(fn: (app: Application) => void): void };
 }
 
+type FilesApi = {
+  upload(path: string, contents: Readable, options?: { overwrite?: boolean }): Promise<unknown>;
+  delete(path: string): Promise<unknown>;
+  createDirectory?(path: string): Promise<unknown>;
+  create_directory?(path: string): Promise<unknown>;
+};
+
 // ── MIME allowlist ────────────────────────────────────────────────────────────
 // Global map: resolves MIME → file extension. Per-endpoint filtering is handled
 // by the `allowedMimes` option on each handler (see UploadHandlerOpts).
@@ -77,7 +84,214 @@ function getVolumePath(volumeEnv: string): string {
       },
     );
   }
+  return toCanonicalVolumePath(path.replace(/\/+$/, ''));
+}
+
+function toCanonicalVolumePath(path: string): string {
+  if (path.startsWith('dbfs:/')) {
+    return path.slice('dbfs:'.length);
+  }
   return path;
+}
+
+function buildVolumePathCandidates(path: string): string[] {
+  const canonicalPath = toCanonicalVolumePath(path.trim());
+  if (canonicalPath.length === 0) {
+    return [];
+  }
+
+  return [canonicalPath];
+}
+
+function getParentDirectory(path: string): string {
+  const lastSlashIdx = path.lastIndexOf('/');
+  if (lastSlashIdx <= 0) {
+    throw new Error(`Unable to determine parent directory for path: ${path}`);
+  }
+  return path.slice(0, lastSlashIdx);
+}
+
+function getDirectoryChain(path: string): string[] {
+  const parentDirectory = toCanonicalVolumePath(getParentDirectory(path));
+  const pathParts = parentDirectory.split('/').filter(Boolean);
+  if (pathParts.length < 4 || pathParts[0] !== 'Volumes') {
+    throw new Error(`Upload volume path must be rooted under /Volumes: ${path}`);
+  }
+
+  const directoryChain: string[] = [];
+  for (let idx = 4; idx <= pathParts.length; idx += 1) {
+    directoryChain.push(`/${pathParts.slice(0, idx).join('/')}`);
+  }
+  return directoryChain;
+}
+
+function normalizeSdkError(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return {
+      error_name: error.name,
+      error_message: error.message,
+      error_stack: error.stack,
+      ...(('statusCode' in error && typeof error.statusCode !== 'undefined')
+        ? { error_status_code: (error as { statusCode?: unknown }).statusCode }
+        : {}),
+      ...(('errorCode' in error && typeof error.errorCode !== 'undefined')
+        ? { error_code_detail: (error as { errorCode?: unknown }).errorCode }
+        : {}),
+      ...(('details' in error && typeof error.details !== 'undefined')
+        ? { error_details: (error as { details?: unknown }).details }
+        : {}),
+      ...(('cause' in error && typeof error.cause !== 'undefined')
+        ? { error_cause: (error as { cause?: unknown }).cause }
+        : {}),
+    };
+  }
+
+  return {
+    error_message: String(error),
+    error_value: error,
+  };
+}
+
+function isAlreadyExistsError(error: unknown): boolean {
+  const details = normalizeSdkError(error);
+  const errorMessage = String(details.error_message ?? '').toLowerCase();
+  const statusCode = details.error_status_code;
+  const errorCode = String(details.error_code_detail ?? '').toUpperCase();
+
+  return (
+    statusCode === 409 ||
+    errorCode.includes('ALREADY_EXISTS') ||
+    errorMessage.includes('already exists') ||
+    errorMessage.includes('resource already exists')
+  );
+}
+
+async function createVolumeDirectory(filesApi: FilesApi, directoryPath: string): Promise<void> {
+  const directoryMethods: Array<{
+    method: 'createDirectory' | 'create_directory';
+    fn: (path: string) => Promise<unknown>;
+  }> = [];
+
+  if (typeof filesApi.createDirectory === 'function') {
+    directoryMethods.push({
+      method: 'createDirectory',
+      fn: (path: string) => filesApi.createDirectory!(path),
+    });
+  }
+
+  if (typeof filesApi.create_directory === 'function') {
+    directoryMethods.push({
+      method: 'create_directory',
+      fn: (path: string) => filesApi.create_directory!(path),
+    });
+  }
+
+  if (directoryMethods.length === 0) {
+    throw new Error('Workspace Files API does not expose a directory creation method.');
+  }
+
+  const candidatePaths = buildVolumePathCandidates(directoryPath);
+  const attempts: Array<Record<string, unknown>> = [];
+  let lastError: unknown;
+
+  for (const candidatePath of candidatePaths) {
+    for (const directoryMethod of directoryMethods) {
+      try {
+        await directoryMethod.fn(candidatePath);
+        return;
+      } catch (error) {
+        lastError = error;
+        attempts.push({
+          attempted_path: candidatePath,
+          attempted_method: directoryMethod.method,
+          ...normalizeSdkError(error),
+        });
+      }
+    }
+  }
+
+  const aggregatedError = new Error(`Workspace Files API directory creation failed for: ${directoryPath}`);
+  (aggregatedError as Error & { details?: unknown; cause?: unknown }).details = {
+    original_path: directoryPath,
+    attempted_paths: candidatePaths,
+    attempts,
+  };
+  (aggregatedError as Error & { details?: unknown; cause?: unknown }).cause = lastError;
+  throw aggregatedError;
+}
+
+async function uploadVolumeFile(
+  filesApi: FilesApi,
+  path: string,
+  fileBuffer: Buffer,
+  options?: { overwrite?: boolean },
+): Promise<void> {
+  const candidatePaths = buildVolumePathCandidates(path);
+  const attempts: Array<Record<string, unknown>> = [];
+  let lastError: unknown;
+
+  for (const candidatePath of candidatePaths) {
+    try {
+      await filesApi.upload(candidatePath, Readable.from(fileBuffer), options);
+      return;
+    } catch (error) {
+      lastError = error;
+      attempts.push({
+        attempted_path: candidatePath,
+        ...normalizeSdkError(error),
+      });
+    }
+  }
+
+  const aggregatedError = new Error(`Workspace Files API upload failed for: ${path}`);
+  (aggregatedError as Error & { details?: unknown; cause?: unknown }).details = {
+    original_path: path,
+    attempted_paths: candidatePaths,
+    attempts,
+  };
+  (aggregatedError as Error & { details?: unknown; cause?: unknown }).cause = lastError;
+  throw aggregatedError;
+}
+
+async function deleteVolumeFile(filesApi: FilesApi, path: string): Promise<void> {
+  const candidatePaths = buildVolumePathCandidates(path);
+  const attempts: Array<Record<string, unknown>> = [];
+  let lastError: unknown;
+
+  for (const candidatePath of candidatePaths) {
+    try {
+      await filesApi.delete(candidatePath);
+      return;
+    } catch (error) {
+      lastError = error;
+      attempts.push({
+        attempted_path: candidatePath,
+        ...normalizeSdkError(error),
+      });
+    }
+  }
+
+  const aggregatedError = new Error(`Workspace Files API delete failed for: ${path}`);
+  (aggregatedError as Error & { details?: unknown; cause?: unknown }).details = {
+    original_path: path,
+    attempted_paths: candidatePaths,
+    attempts,
+  };
+  (aggregatedError as Error & { details?: unknown; cause?: unknown }).cause = lastError;
+  throw aggregatedError;
+}
+
+async function ensureVolumeDirectory(filesApi: FilesApi, directoryPath: string): Promise<void> {
+  const directoryChain = getDirectoryChain(`${directoryPath}/placeholder`);
+  for (const currentDirectory of directoryChain) {
+    try {
+      await createVolumeDirectory(filesApi, currentDirectory);
+    } catch (error) {
+      if (!isAlreadyExistsError(error)) {
+        throw error;
+      }
+    }
+  }
 }
 
 // ── Multipart parsing helper ─────────────────────────────────────────────────
@@ -388,6 +602,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
     let volumeFilePath: string | undefined;
     let diagnostics: Partial<UploadDiagnostics> = { kind: opts.kind };
     const wc = new WorkspaceClient({ host: process.env.DATABRICKS_HOST });
+    const filesApi = wc.files as unknown as FilesApi;
 
     try {
       // ── Step 1: Auth already resolved by iosAuth middleware ───────────────
@@ -475,9 +690,29 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
       }
       diagnostics.volumeFilePath = volumeFilePath;
 
-      const stream = Readable.toWeb(Readable.from(parsed.fileBuffer)) as ReadableStream;
+      const volumeDirectory = getParentDirectory(volumeFilePath);
       try {
-        await (wc.files as any).upload(volumeFilePath, stream);
+        await ensureVolumeDirectory(filesApi, volumeDirectory);
+        logUploadEvent('[upload] volume.directory_ready', diagnostics, {
+          volume_directory: volumeDirectory,
+          volume_directory_candidates: buildVolumePathCandidates(volumeDirectory),
+        });
+      } catch (directoryErr) {
+        throw buildUploadAppError(
+          500,
+          'Upload storage failed',
+          'The upload destination directory could not be prepared on the configured storage volume.',
+          buildUploadContext(diagnostics, {
+            error_code: 'UPLOAD_VOLUME_DIRECTORY_CREATE_FAILED',
+            volume_directory: volumeDirectory,
+            volume_directory_candidates: buildVolumePathCandidates(volumeDirectory),
+            ...normalizeSdkError(directoryErr),
+          }),
+        );
+      }
+
+      try {
+        await uploadVolumeFile(filesApi, volumeFilePath, parsed.fileBuffer, { overwrite: false });
       } catch (volumeErr) {
         throw buildUploadAppError(
           500,
@@ -485,16 +720,20 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
           'The uploaded file could not be written to the configured storage volume.',
           buildUploadContext(diagnostics, {
             error_code: 'UPLOAD_VOLUME_WRITE_FAILED',
-            error_message: getErrorMessage(volumeErr),
+            volume_directory: volumeDirectory,
+            volume_path_candidates: buildVolumePathCandidates(volumeFilePath),
+            ...normalizeSdkError(volumeErr),
           }),
         );
       }
-      logUploadEvent('[upload] volume.write_succeeded', diagnostics);
+      logUploadEvent('[upload] volume.write_succeeded', diagnostics, {
+        volume_path_candidates: buildVolumePathCandidates(volumeFilePath),
+      });
 
       // ── Step 7: SHA-256 verification ─────────────────────────────────────
       if (parsed.clientSha256 && parsed.clientSha256 !== sha256Hash) {
         try {
-          await (wc.files as any).delete(volumeFilePath);
+          await deleteVolumeFile(filesApi, volumeFilePath);
           logUploadEvent('[upload] volume.deleted_after_sha_mismatch', diagnostics, {
             client_sha256: parsed.clientSha256,
           });
@@ -538,7 +777,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
         logUploadEvent('[upload] metadata.insert_succeeded', diagnostics);
       } catch (insertErr) {
         try {
-          await (wc.files as any).delete(volumeFilePath);
+          await deleteVolumeFile(filesApi, volumeFilePath);
           logUploadEvent('[upload] orphan_file_deleted', diagnostics);
         } catch (delErr) {
           logUploadError('[upload] orphan_file_delete_failed', diagnostics, delErr, { volumeFilePath });
@@ -627,21 +866,19 @@ async function resolveDocumentContext(
   return { projectId, captureSessionId: null };
 }
 
-// ── Route setup ──────────────────────────────────────────────────────────────
+// ── Route registration ───────────────────────────────────────────────────────
 
-export async function setupUploadRoutes(appkit: AppKitContext): Promise<void> {
-  const { lakebase } = appkit;
-  const auth = iosAuth({ lakebase });
+export function registerUploadRoutes(ctx: AppKitContext): void {
+  const { lakebase } = ctx;
 
-  appkit.server.extend((app) => {
-    // Audio uploads
+  ctx.server.extend((app) => {
     app.post(
       '/api/captures/:capture_session_id/audio',
-      auth,
+      iosAuth,
       createUploadHandler(
         {
           kind: 'audio',
-          volumeEnvVar: 'DATABRICKS_VOLUME_SESSION_AUDIO',
+          volumeEnvVar: 'LAKELOOM_AUDIO_VOLUME_PATH',
           allowedMimes: ['audio/wav', 'audio/m4a', 'audio/mp4'],
           resolveContext: resolveCaptureContext,
         },
@@ -649,14 +886,13 @@ export async function setupUploadRoutes(appkit: AppKitContext): Promise<void> {
       ),
     );
 
-    // Screenshot uploads — PNG primary (UIScreen.snapshot), JPEG fallback
     app.post(
       '/api/captures/:capture_session_id/screenshots',
-      auth,
+      iosAuth,
       createUploadHandler(
         {
           kind: 'screenshot',
-          volumeEnvVar: 'DATABRICKS_VOLUME_SCREENSHOTS',
+          volumeEnvVar: 'LAKELOOM_SCREENSHOT_VOLUME_PATH',
           allowedMimes: ['image/png', 'image/jpeg'],
           resolveContext: resolveCaptureContext,
         },
@@ -664,30 +900,31 @@ export async function setupUploadRoutes(appkit: AppKitContext): Promise<void> {
       ),
     );
 
-    // Photo uploads — camera captures (whiteboards, physical artifacts). JPEG only.
     app.post(
       '/api/captures/:capture_session_id/photos',
-      auth,
+      iosAuth,
       createUploadHandler(
         {
           kind: 'photo',
-          volumeEnvVar: 'DATABRICKS_VOLUME_SCREENSHOTS',
-          allowedMimes: ['image/jpeg'],
+          volumeEnvVar: 'LAKELOOM_PHOTO_VOLUME_PATH',
+          allowedMimes: ['image/png', 'image/jpeg'],
           resolveContext: resolveCaptureContext,
         },
         lakebase,
       ),
     );
 
-    // Document uploads (project-level, no capture session)
     app.post(
       '/api/projects/:project_id/documents',
-      auth,
+      iosAuth,
       createUploadHandler(
         {
           kind: 'document',
-          volumeEnvVar: 'DATABRICKS_VOLUME_DOCUMENTS',
-          allowedMimes: ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+          volumeEnvVar: 'LAKELOOM_DOCUMENT_VOLUME_PATH',
+          allowedMimes: [
+            'application/pdf',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          ],
           resolveContext: resolveDocumentContext,
         },
         lakebase,
@@ -695,7 +932,3 @@ export async function setupUploadRoutes(appkit: AppKitContext): Promise<void> {
     );
   });
 }
-
-export const __testables = {
-  normalizeClientTimestamp,
-};
