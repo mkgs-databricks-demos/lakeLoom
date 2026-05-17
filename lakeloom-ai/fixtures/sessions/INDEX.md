@@ -1,5 +1,6 @@
 # Session Index
 
+* [2026-05-16] Upload Handler P0 Hardening — `2026-05-16_upload-handler-p0-hardening.md`
 * [2026-05-16] Phase 2 Device UX + User Identity + Multipart Auth Fix — `2026-05-16_phase2-device-ux-identity-multipart-fix.md`
 
 | Date | Summary | File |
