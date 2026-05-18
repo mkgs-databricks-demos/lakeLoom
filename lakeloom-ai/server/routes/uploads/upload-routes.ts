@@ -509,6 +509,11 @@ interface ParsedUpload {
   clientSha256?: string;
 }
 
+function getBufferedRequestBody(req: Request): Buffer | null {
+  const rawBody = (req as Request & { _rawBody?: unknown })._rawBody;
+  return Buffer.isBuffer(rawBody) ? rawBody : null;
+}
+
 type UploadDiagnostics = {
   uploadId: string;
   kind: UploadKind;
@@ -670,6 +675,7 @@ function parseMultipart(req: Request): Promise<ParsedUpload> {
 
     const busboy = Busboy({ headers: req.headers });
     const chunks: Buffer[] = [];
+    const bufferedBody = getBufferedRequestBody(req);
     let fileMimeType = '';
     let clientTs: string | undefined;
     let clientFilename: string | undefined;
@@ -742,6 +748,11 @@ function parseMultipart(req: Request): Promise<ParsedUpload> {
         clientSha256,
       });
     });
+
+    if (bufferedBody) {
+      Readable.from(bufferedBody).pipe(busboy);
+      return;
+    }
 
     req.pipe(busboy);
   });
