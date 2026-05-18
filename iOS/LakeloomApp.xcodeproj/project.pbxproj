@@ -160,6 +160,9 @@
 		E0020A03E003E003E003E003 /* LivePhotoCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0010A03E003E003E003E003 /* LivePhotoCapture.swift */; };
 		E0020A11E011E011E011E011 /* FakePhotoCaptureEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0010A11E011E011E011E011 /* FakePhotoCaptureEngine.swift */; };
 		E0020A12E012E012E012E012 /* LivePhotoCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0010A12E012E012E012E012 /* LivePhotoCaptureTests.swift */; };
+		F0020A01F001F001F001F001 /* CaptureContextStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0010A01F001F001F001F001 /* CaptureContextStore.swift */; };
+		F0020A11F011F011F011F011 /* CaptureContextStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0010A11F011F011F011F011 /* CaptureContextStoreTests.swift */; };
+		F0020A12F012F012F012F012 /* CaptureServicePersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0010A12F012F012F012F012 /* CaptureServicePersistenceTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -335,6 +338,9 @@
 		E0010A03E003E003E003E003 /* LivePhotoCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePhotoCapture.swift; sourceTree = "<group>"; };
 		E0010A11E011E011E011E011 /* FakePhotoCaptureEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakePhotoCaptureEngine.swift; sourceTree = "<group>"; };
 		E0010A12E012E012E012E012 /* LivePhotoCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePhotoCaptureTests.swift; sourceTree = "<group>"; };
+		F0010A01F001F001F001F001 /* CaptureContextStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureContextStore.swift; sourceTree = "<group>"; };
+		F0010A11F011F011F011F011 /* CaptureContextStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureContextStoreTests.swift; sourceTree = "<group>"; };
+		F0010A12F012F012F012F012 /* CaptureServicePersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureServicePersistenceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -554,6 +560,7 @@
 				B0030A01B001B001B001B001 /* Upload */,
 				5F242B88AF0A6339ED026919 /* CaptureAPIClient.swift */,
 				A6B53730F7F710DA0FE81E5D /* CaptureAPIError.swift */,
+				F0010A01F001F001F001F001 /* CaptureContextStore.swift */,
 				C0010A01C001C001C001C001 /* CaptureService.swift */,
 				7F84DC6843AC8EE019EF2578 /* CaptureSession.swift */,
 				D0010A01D001D001D001D001 /* EndpointSmokeTestView.swift */,
@@ -742,6 +749,8 @@
 				B0030A02B002B002B002B002 /* Upload */,
 				C0030A01C001C001C001C001 /* Helpers */,
 				EF3EBEA3151F4C5C286DE55A /* CaptureAPIClientTests.swift */,
+				F0010A11F011F011F011F011 /* CaptureContextStoreTests.swift */,
+				F0010A12F012F012F012F012 /* CaptureServicePersistenceTests.swift */,
 				C0010A14C014C014C014C014 /* LiveCaptureServiceTests.swift */,
 			);
 			path = Captures;
@@ -1002,6 +1011,8 @@
 				30E9AD6243747BE6CA676371 /* AppCoordinatorTests.swift in Sources */,
 				B3DB9694585016D260636697 /* AuthServiceTests.swift in Sources */,
 				67126C18774407E4CEDC24CD /* CaptureAPIClientTests.swift in Sources */,
+				F0020A11F011F011F011F011 /* CaptureContextStoreTests.swift in Sources */,
+				F0020A12F012F012F012F012 /* CaptureServicePersistenceTests.swift in Sources */,
 				FDA2D314BA3A39B6FAA6C67F /* CoreDataStackTests.swift in Sources */,
 				A2FD09D632F81D97C7AB04E7 /* DeviceKeyStoreTests.swift in Sources */,
 				571A999C7E8036A9A8FE564C /* EntityRoundTripTests.swift in Sources */,
@@ -1062,6 +1073,7 @@
 				A0020A02A002A002A002A002 /* AudioRecordingEngine.swift in Sources */,
 				DD3C123A15564006D4260362 /* CaptureAPIClient.swift in Sources */,
 				907970D8A5089D5B3B4893A5 /* CaptureAPIError.swift in Sources */,
+				F0020A01F001F001F001F001 /* CaptureContextStore.swift in Sources */,
 				C0020A01C001C001C001C001 /* CaptureService.swift in Sources */,
 				E0020A01E001E001E001E001 /* PhotoCapture.swift in Sources */,
 				E0020A02E002E002E002E002 /* PhotoCaptureEngine.swift in Sources */,

@@ -24,6 +24,10 @@ public actor LiveCaptureService: CaptureService {
     private let nowProvider: @Sendable () -> Date
     private let uploadIDProvider: @Sendable () -> String
     private let fileHasher: @Sendable (URL) throws -> String
+    /// Optional disk-persistent capture-context snapshot. Production
+    /// wiring sets this; older tests that don't exercise the rehydrate
+    /// path pass `nil` so they keep working unchanged.
+    private let contextStore: CaptureContextStore?
 
     // MARK: State
 
@@ -38,11 +42,13 @@ public actor LiveCaptureService: CaptureService {
         captureAPI: any CaptureAPIClient,
         recorder: any AudioRecorder,
         uploadCoordinator: any UploadCoordinator,
+        contextStore: CaptureContextStore? = nil,
         logger: AppLogger = AppLogger(category: .capture)
     ) {
         self.captureAPI = captureAPI
         self.recorder = recorder
         self.uploadCoordinator = uploadCoordinator
+        self.contextStore = contextStore
         self.logger = logger
         self.nowProvider = Date.init
         self.uploadIDProvider = { UUID().uuidString }
@@ -56,6 +62,7 @@ public actor LiveCaptureService: CaptureService {
         captureAPI: any CaptureAPIClient,
         recorder: any AudioRecorder,
         uploadCoordinator: any UploadCoordinator,
+        contextStore: CaptureContextStore? = nil,
         logger: AppLogger = AppLogger(category: .capture),
         nowProvider: @Sendable @escaping () -> Date,
         uploadIDProvider: @Sendable @escaping () -> String,
@@ -64,6 +71,7 @@ public actor LiveCaptureService: CaptureService {
         self.captureAPI = captureAPI
         self.recorder = recorder
         self.uploadCoordinator = uploadCoordinator
+        self.contextStore = contextStore
         self.logger = logger
         self.nowProvider = nowProvider
         self.uploadIDProvider = uploadIDProvider
@@ -92,6 +100,97 @@ public actor LiveCaptureService: CaptureService {
         if !didStart {
             await uploadCoordinator.start()
             didStart = true
+            // Rehydrate any in-flight capture from disk and reconcile
+            // it against the upload queue (which has just rehydrated
+            // inside `uploadCoordinator.start()`). Runs after the
+            // queue is restored so we see the true terminal state of
+            // each upload, not an empty queue.
+            await recoverInFlightCapture()
+        }
+    }
+
+    // MARK: - Recovery
+
+    /// Reads the persisted snapshot (if any) and either patches the
+    /// server-side session to its appropriate terminal state or
+    /// re-attaches the upload watcher to drive the in-flight capture
+    /// to completion.
+    private func recoverInFlightCapture() async {
+        guard let store = contextStore,
+              let snapshot = await store.load() else {
+            return
+        }
+        let context = CaptureContext(
+            captureSessionID: snapshot.captureSessionID,
+            projectID: snapshot.projectID,
+            workspaceID: snapshot.workspaceID,
+            startedAt: snapshot.startedAt
+        )
+        await logger.info(
+            "capture.recover.start",
+            metadata: [
+                "capture_session_id": .uuidPrefix(context.captureSessionID),
+                "phase": .string(snapshot.phase.rawValue),
+                "pending_uploads": .int(Int64(snapshot.pendingUploadIDs.count))
+            ]
+        )
+        switch snapshot.phase {
+        case .recording:
+            // App died with the recorder active. No uploads were
+            // enqueued (the audio file may exist on disk but is
+            // unfinalized and unsigned). Patch the server-side
+            // session to `.cancelled` so the row never lingers
+            // `.active` and clear the snapshot.
+            await patchServerCancelled(context: context)
+            await store.clear()
+            await logger.info(
+                "capture.recover.recording_orphan_cancelled",
+                metadata: ["capture_session_id": .uuidPrefix(context.captureSessionID)]
+            )
+
+        case .finalizing:
+            // App died after the recorder finalized + the uploads
+            // were enqueued. The upload queue has rehydrated. Check
+            // each persisted upload ID against the queue:
+            //   - if all are `.succeeded` (or no longer present)
+            //     → patch the server to `.completed`.
+            //   - if any are still non-terminal → re-attach the
+            //     watcher so the existing finalize flow drives the
+            //     session to `.completed` once they drain.
+            //   - if all remaining are terminally-failed → patch the
+            //     server to `.completed` anyway and surface a
+            //     warning; the user can retry the failed uploads
+            //     manually from the smoke-test sheet / future UI.
+            let allUploads = await uploadCoordinator.currentUploads()
+            let stillInFlight = snapshot.pendingUploadIDs.filter { id in
+                guard let upload = allUploads.first(where: { $0.id == id }) else {
+                    // Queue store doesn't know about it anymore —
+                    // treat as terminal (likely discarded).
+                    return false
+                }
+                return !upload.state.isTerminal
+            }
+            if stillInFlight.isEmpty {
+                await patchServerCompleted(context: context)
+                await store.clear()
+                await logger.info(
+                    "capture.recover.finalizing_all_done_completed",
+                    metadata: ["capture_session_id": .uuidPrefix(context.captureSessionID)]
+                )
+            } else {
+                let pending = Set(stillInFlight)
+                let stream = await uploadCoordinator.stateUpdates()
+                transition(to: .finalizing(context, pendingUploadIDs: pending))
+                await persistFinalizingIfNeeded(context: context, pending: pending)
+                spawnWatcher(stream: stream, for: context, pendingUploadIDs: pending)
+                await logger.info(
+                    "capture.recover.finalizing_reattached_watcher",
+                    metadata: [
+                        "capture_session_id": .uuidPrefix(context.captureSessionID),
+                        "remaining_uploads": .int(Int64(pending.count))
+                    ]
+                )
+            }
         }
     }
 
@@ -156,6 +255,7 @@ public actor LiveCaptureService: CaptureService {
             startedAt: nowProvider()
         )
         transition(to: .recording(context))
+        await persistRecording(context: context)
         await logger.info(
             "capture.start.ok",
             metadata: [
@@ -175,11 +275,15 @@ public actor LiveCaptureService: CaptureService {
         } catch let error as AudioRecorderError {
             // Recorder failed mid-stop. Leave the server-side session
             // `.active` and surface `.failed` — caller can invoke
-            // `cancelCapture` to clean up.
+            // `cancelCapture` to clean up. Clear the snapshot so the
+            // next launch doesn't try to recover an unrecoverable
+            // state.
             transition(to: .failed(reason: "recorder.stop: \(String(describing: error))"))
+            await contextStore?.clear()
             throw CaptureServiceError.recorderStopFailed(reason: String(describing: error))
         } catch {
             transition(to: .failed(reason: "recorder.stop: \(error.localizedDescription)"))
+            await contextStore?.clear()
             throw CaptureServiceError.recorderStopFailed(reason: error.localizedDescription)
         }
 
@@ -188,6 +292,7 @@ public actor LiveCaptureService: CaptureService {
             sha = try fileHasher(recording.fileURL)
         } catch {
             transition(to: .failed(reason: "hash: \(error.localizedDescription)"))
+            await contextStore?.clear()
             throw CaptureServiceError.hashingFailed(reason: error.localizedDescription)
         }
 
@@ -209,9 +314,11 @@ public actor LiveCaptureService: CaptureService {
             try await uploadCoordinator.enqueue(pending)
         } catch let error as UploadCoordinatorError {
             transition(to: .failed(reason: "enqueue: \(String(describing: error))"))
+            await contextStore?.clear()
             throw CaptureServiceError.enqueueFailed(reason: String(describing: error))
         } catch {
             transition(to: .failed(reason: "enqueue: \(error.localizedDescription)"))
+            await contextStore?.clear()
             throw CaptureServiceError.enqueueFailed(reason: error.localizedDescription)
         }
 
@@ -224,6 +331,7 @@ public actor LiveCaptureService: CaptureService {
         // forever for a transition that already happened.
         let stream = await uploadCoordinator.stateUpdates()
         transition(to: .finalizing(context, pendingUploadIDs: [pending.id]))
+        await persistFinalizingIfNeeded(context: context, pending: [pending.id])
         spawnWatcher(stream: stream, for: context, pendingUploadIDs: [pending.id])
     }
 
@@ -233,6 +341,7 @@ public actor LiveCaptureService: CaptureService {
             await recorder.cancel()
             await patchServerCancelled(context: context)
             transition(to: .cancelled(context))
+            await contextStore?.clear()
 
         case .finalizing(let context, let pendingUploadIDs):
             // Stop the watcher first so it doesn't race with the
@@ -244,6 +353,7 @@ public actor LiveCaptureService: CaptureService {
             }
             await patchServerCancelled(context: context)
             transition(to: .cancelled(context))
+            await contextStore?.clear()
 
         case .idle, .completed, .cancelled, .failed:
             throw CaptureServiceError.notRecording
@@ -366,9 +476,11 @@ public actor LiveCaptureService: CaptureService {
             case .succeeded:
                 pending.remove(change.uploadID)
                 refreshFinalizingState(context: context, pending: pending)
+                await persistFinalizingIfNeeded(context: context, pending: pending)
                 if pending.isEmpty {
                     await patchServerCompleted(context: context)
                     transition(to: .completed(context))
+                    await contextStore?.clear()
                     return
                 }
             case .failed(_, let permanent):
@@ -391,6 +503,60 @@ public actor LiveCaptureService: CaptureService {
     private func refreshFinalizingState(context: CaptureContext, pending: Set<String>) {
         if case .finalizing(let ctx, _) = current, ctx == context {
             transition(to: .finalizing(context, pendingUploadIDs: pending))
+        }
+    }
+
+    // MARK: - Persistence helpers
+
+    private func persistRecording(context: CaptureContext) async {
+        guard let store = contextStore else { return }
+        let snapshot = PersistedCaptureContext(
+            captureSessionID: context.captureSessionID,
+            projectID: context.projectID,
+            workspaceID: context.workspaceID,
+            startedAt: context.startedAt,
+            phase: .recording,
+            pendingUploadIDs: []
+        )
+        do {
+            try await store.save(snapshot)
+        } catch {
+            await logger.warning(
+                "capture.context.persist_failed",
+                metadata: [
+                    "phase": .string("recording"),
+                    "reason": .string(error.localizedDescription)
+                ]
+            )
+        }
+    }
+
+    private func persistFinalizingIfNeeded(
+        context: CaptureContext,
+        pending: Set<String>
+    ) async {
+        guard let store = contextStore else { return }
+        let snapshot = PersistedCaptureContext(
+            captureSessionID: context.captureSessionID,
+            projectID: context.projectID,
+            workspaceID: context.workspaceID,
+            startedAt: context.startedAt,
+            phase: .finalizing,
+            // Stable order so the on-disk JSON byte representation
+            // is deterministic across runs (helps when diffing or
+            // hashing the snapshot file in tests).
+            pendingUploadIDs: pending.sorted()
+        )
+        do {
+            try await store.save(snapshot)
+        } catch {
+            await logger.warning(
+                "capture.context.persist_failed",
+                metadata: [
+                    "phase": .string("finalizing"),
+                    "reason": .string(error.localizedDescription)
+                ]
+            )
         }
     }
 }

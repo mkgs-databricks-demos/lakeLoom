@@ -59,6 +59,28 @@ struct LakeloomApp: App {
 
         let photoCapture = LivePhotoCapture()
 
+        // Capture orchestrator. Bundles captureAPI + a shared
+        // AudioRecorder + the upload coordinator + the
+        // capture-context store so app-killed-mid-capture
+        // recoveries happen automatically on next launch.
+        let captureService: (any CaptureService)?
+        if let uploadCoordinator {
+            let contextStore: CaptureContextStore?
+            do { contextStore = try CaptureContextStore.makeDefault() }
+            catch { contextStore = nil }
+            captureService = LiveCaptureService(
+                captureAPI: captureAPI,
+                recorder: LiveAudioRecorder(),
+                uploadCoordinator: uploadCoordinator,
+                contextStore: contextStore
+            )
+        } else {
+            // Without an upload coordinator the capture flow has
+            // nothing to drain into; surface nil so the UI hides
+            // capture affordances rather than half-instantiating.
+            captureService = nil
+        }
+
         _coordinator = State(
             wrappedValue: AppCoordinator(
                 auth: auth,
@@ -67,7 +89,8 @@ struct LakeloomApp: App {
                 endpointResolver: endpointResolver,
                 captureAPI: captureAPI,
                 uploadCoordinator: uploadCoordinator,
-                photoCapture: photoCapture
+                photoCapture: photoCapture,
+                captureService: captureService
             )
         )
     }
@@ -77,7 +100,19 @@ struct LakeloomApp: App {
             RootView(coordinator: coordinator)
                 .task {
                     await coordinator.bootstrap()
-                    if let uploads = coordinator.uploadCoordinator {
+                    // captureService.start() rehydrates the upload
+                    // queue (via uploadCoordinator.start()) AND
+                    // reconciles the persisted capture context, so
+                    // a single call covers both recovery paths.
+                    if let captureService = coordinator.captureService {
+                        await captureService.start()
+                    } else if let uploads = coordinator.uploadCoordinator {
+                        // Belt-and-suspenders: if the captureService
+                        // wasn't wired (e.g., uploadCoordinator init
+                        // failed earlier and we left captureService
+                        // nil), still kick the upload coordinator
+                        // directly so any queued uploads from a
+                        // previous run can drain.
                         await uploads.start()
                     }
                 }
