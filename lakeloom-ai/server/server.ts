@@ -1,7 +1,7 @@
 import { createApp, analytics, lakebase, server } from '@databricks/appkit';
 import { setupPairingRoutes } from './routes/pairing/pairing-routes';
 import { setupCaptureRoutes } from './routes/captures/capture-routes';
-import { registerUploadRoutes } from './routes/uploads/upload-routes';
+import registerUploads from './routes/uploads/upload-routes';
 import { setupEventRoutes } from './routes/events/event-routes';
 import { setupProjectRoutes } from './routes/projects/project-routes';
 import { runMigrations } from './migrations/migrate';
@@ -73,7 +73,7 @@ createApp({
     // ── Register routes ───────────────────────────────────────────────────
     await setupPairingRoutes(appkit);
     await setupCaptureRoutes(appkit);
-    registerUploadRoutes(appkit);
+    registerUploads(appkit);
     await setupEventRoutes(appkit);
     await setupProjectRoutes(appkit);
 

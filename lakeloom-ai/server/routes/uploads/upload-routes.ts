@@ -90,6 +90,27 @@ function requireNonEmptyString(value: unknown, context: string): string {
   return trimmed;
 }
 
+function requireSingleRouteParam(value: string | string[] | undefined, context: string): string {
+  if (Array.isArray(value)) {
+    if (value.length !== 1) {
+      throw buildUploadAppError(
+        400,
+        'Invalid route parameter',
+        `Expected exactly one '${context}' route parameter value.`,
+        {
+          error_code: 'UPLOAD_INVALID_ROUTE_PARAM',
+          route_param: context,
+          route_param_count: value.length,
+        },
+      );
+    }
+
+    return requireNonEmptyString(value[0], `Route parameter '${context}'`);
+  }
+
+  return requireNonEmptyString(value, `Route parameter '${context}'`);
+}
+
 function toCanonicalVolumePath(path: string): string {
   const withoutDbfsPrefix = path.startsWith('dbfs:/') ? path.slice('dbfs:'.length) : path;
   const normalizedSlashes = withoutDbfsPrefix.replace(/\/{2,}/g, '/');
@@ -732,7 +753,7 @@ async function resolveCaptureContext(
   req: Request,
   lakebase: LakebaseClient,
 ): Promise<{ projectId: string; captureSessionId: string }> {
-  const captureSessionId = req.params.capture_session_id;
+  const captureSessionId = requireSingleRouteParam(req.params.capture_session_id, 'capture_session_id');
   const result = await lakebase.query(
     `SELECT project_id
        FROM app.capture_sessions
@@ -759,7 +780,7 @@ async function resolveProjectContext(
   req: Request,
   lakebase: LakebaseClient,
 ): Promise<{ projectId: string; captureSessionId: null }> {
-  const projectId = req.params.project_id;
+  const projectId = requireSingleRouteParam(req.params.project_id, 'project_id');
   const result = await lakebase.query(
     `SELECT id
        FROM app.projects
