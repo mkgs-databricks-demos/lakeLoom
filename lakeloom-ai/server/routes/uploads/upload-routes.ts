@@ -769,7 +769,7 @@ async function resolveCaptureContext(
     `SELECT project_id
        FROM app.capture_sessions
       WHERE id = $1::uuid
-        AND status = 'active'
+        AND state = 'active'
       LIMIT 1`,
     [captureSessionId],
   );
@@ -1144,11 +1144,11 @@ export default function registerUploads(ctx: AppKitContext): void {
     // All upload endpoints are protected by iOS device-auth middleware
     app.post(
       '/api/captures/:capture_session_id/audio',
-      iosAuth,
+      iosAuth({ lakebase: ctx.lakebase }),
       createUploadHandler(
         {
           kind: 'audio',
-          volumeEnvVar: 'LAKELOOM_AUDIO_VOLUME',
+          volumeEnvVar: 'LAKELOOM_AUDIO_VOLUME_PATH',
           allowedMimes: ['audio/wav', 'audio/m4a', 'audio/mp4'],
           resolveContext: resolveCaptureContext,
         },
@@ -1158,11 +1158,11 @@ export default function registerUploads(ctx: AppKitContext): void {
 
     app.post(
       '/api/captures/:capture_session_id/screenshots',
-      iosAuth,
+      iosAuth({ lakebase: ctx.lakebase }),
       createUploadHandler(
         {
           kind: 'screenshot',
-          volumeEnvVar: 'LAKELOOM_SCREENSHOT_VOLUME',
+          volumeEnvVar: 'LAKELOOM_SCREENSHOT_VOLUME_PATH',
           allowedMimes: ['image/png', 'image/jpeg'],
           resolveContext: resolveCaptureContext,
         },
@@ -1172,11 +1172,11 @@ export default function registerUploads(ctx: AppKitContext): void {
 
     app.post(
       '/api/captures/:capture_session_id/photos',
-      iosAuth,
+      iosAuth({ lakebase: ctx.lakebase }),
       createUploadHandler(
         {
           kind: 'photo',
-          volumeEnvVar: 'LAKELOOM_SCREENSHOT_VOLUME',
+          volumeEnvVar: 'LAKELOOM_PHOTO_VOLUME_PATH',
           allowedMimes: ['image/png', 'image/jpeg'],
           resolveContext: resolveCaptureContext,
         },
@@ -1186,11 +1186,11 @@ export default function registerUploads(ctx: AppKitContext): void {
 
     app.post(
       '/api/projects/:project_id/documents',
-      iosAuth,
+      iosAuth({ lakebase: ctx.lakebase }),
       createUploadHandler(
         {
           kind: 'document',
-          volumeEnvVar: 'LAKELOOM_DOCUMENT_VOLUME',
+          volumeEnvVar: 'LAKELOOM_DOCUMENT_VOLUME_PATH',
           allowedMimes: [
             'application/pdf',
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
