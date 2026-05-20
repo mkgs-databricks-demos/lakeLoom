@@ -1042,6 +1042,20 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
       }
 
       // ── Step 8: INSERT INTO app.uploads ──────────────────────────────────
+      logUploadEvent('[upload] metadata.insert_attempt', diagnostics, {
+        insert_target: 'app.uploads',
+        insert_kind: opts.kind,
+        insert_project_id: projectId,
+        insert_capture_session_id: captureSessionId,
+        insert_paired_session_id: pairedSessionId,
+        insert_user_id: userId,
+        insert_volume_path: volumeFilePath,
+        insert_mime_type: parsed.fileMimeType,
+        insert_size_bytes: parsed.fileBuffer.length,
+        insert_original_filename: parsed.clientFilename ?? null,
+        insert_client_ts: normalizedTimestamp.isoTimestamp,
+      });
+
       try {
         await lakebase.query(
           `INSERT INTO app.uploads
@@ -1063,8 +1077,26 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
             normalizedTimestamp.isoTimestamp,
           ],
         );
-        logUploadEvent('[upload] metadata.insert_succeeded', diagnostics);
+        logUploadEvent('[upload] metadata.insert_succeeded', diagnostics, {
+          insert_target: 'app.uploads',
+          insert_volume_path: volumeFilePath,
+          insert_client_ts: normalizedTimestamp.isoTimestamp,
+        });
       } catch (insertErr) {
+        logUploadError('[upload] metadata.insert_failed', diagnostics, insertErr, {
+          insert_target: 'app.uploads',
+          insert_kind: opts.kind,
+          insert_project_id: projectId,
+          insert_capture_session_id: captureSessionId,
+          insert_paired_session_id: pairedSessionId,
+          insert_user_id: userId,
+          insert_volume_path: volumeFilePath,
+          insert_mime_type: parsed.fileMimeType,
+          insert_size_bytes: parsed.fileBuffer.length,
+          insert_original_filename: parsed.clientFilename ?? null,
+          insert_client_ts: normalizedTimestamp.isoTimestamp,
+        });
+
         try {
           await deleteVolumeFile(filesApi, volumeFilePath);
           logUploadEvent('[upload] volume.deleted_after_metadata_failure', diagnostics);
