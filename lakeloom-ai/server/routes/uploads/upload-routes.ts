@@ -22,18 +22,18 @@
  *   3. Parse multipart body (busboy). Reject if file field missing/empty.
  *   4. Generate UUIDv7 → upload_id (also the filename root)
  *   5. Validate MIME against per-endpoint allowlist, derive extension
- *   6. Stream file to UC Volume, compute SHA-256 during stream
+ *   6. Write file to UC Volume via FUSE mount, compute SHA-256 from buffer
  *   7. If iOS sent sha256_hex, compare. Mismatch → 400 + delete file.
  *   8. INSERT INTO app.uploads
  *   9. Return 201 { id, kind, volume_path, size_bytes, sha256_hex, uploaded_at }
  */
 
 import { createHash } from 'node:crypto';
+import { writeFile, mkdir, unlink } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import type { Application, Request, Response, NextFunction } from 'express';
 import Busboy from 'busboy';
 import { v7 as uuidv7 } from 'uuid';
-import { WorkspaceClient } from '@databricks/sdk-experimental';
 import { iosAuth } from '../../middleware/ios-auth';
 import { AppError, ErrorTypes } from '../../lib/errors';
 
@@ -47,12 +47,6 @@ interface AppKitContext {
   lakebase: LakebaseClient;
   server: { extend(fn: (app: Application) => void): void };
 }
-
-type FilesApi = {
-  upload(request: { file_path: string; contents?: ReadableStream; overwrite?: boolean }): Promise<unknown>;
-  delete(request: { file_path: string }): Promise<unknown>;
-  createDirectory(request: { directory_path: string }): Promise<unknown>;
-};
 
 // ── MIME allowlist ────────────────────────────────────────────────────────────
 // Global map: resolves MIME → file extension. Per-endpoint filtering is handled
@@ -270,24 +264,7 @@ function getParentDirectory(path: unknown): string {
   return requireCanonicalVolumePath(directoryPath, 'directory');
 }
 
-function getDirectoryChain(directoryPath: unknown): string[] {
-  const normalizedDirectoryPath = requireCanonicalVolumePath(directoryPath, 'directory');
-  const relativeDirectory = normalizedDirectoryPath.slice('/Volumes/'.length);
-  const segments = relativeDirectory.split('/').filter((segment) => segment.length > 0);
-
-  if (segments.length < 3) {
-    throw new Error(`Volume directory path must include catalog/schema/volume: ${normalizedDirectoryPath}`);
-  }
-
-  const directoryChain: string[] = [];
-  for (let idx = 3; idx <= segments.length; idx += 1) {
-    directoryChain.push(`/Volumes/${segments.slice(0, idx).join('/')}`);
-  }
-  return directoryChain;
-}
-
-
-function normalizeSdkError(error: unknown): Record<string, unknown> {
+function normalizeError(error: unknown): Record<string, unknown> {
   if (error instanceof AppError) {
     return {
       error_name: error.name,
@@ -303,14 +280,8 @@ function normalizeSdkError(error: unknown): Record<string, unknown> {
       error_name: error.name,
       error_message: error.message,
       error_stack: error.stack,
-      ...(('statusCode' in error && typeof error.statusCode !== 'undefined')
-        ? { error_status_code: (error as { statusCode?: unknown }).statusCode }
-        : {}),
-      ...(('errorCode' in error && typeof error.errorCode !== 'undefined')
-        ? { error_code_detail: (error as { errorCode?: unknown }).errorCode }
-        : {}),
-      ...(('details' in error && typeof error.details !== 'undefined')
-        ? { error_details: (error as { details?: unknown }).details }
+      ...(('code' in error && typeof error.code !== 'undefined')
+        ? { error_code_detail: (error as { code?: unknown }).code }
         : {}),
       ...(('cause' in error && typeof error.cause !== 'undefined')
         ? { error_cause: (error as { cause?: unknown }).cause }
@@ -324,65 +295,27 @@ function normalizeSdkError(error: unknown): Record<string, unknown> {
   };
 }
 
-function isAlreadyExistsError(error: unknown): boolean {
-  const details = normalizeSdkError(error);
-  const errorMessage = String(details.error_message ?? '').toLowerCase();
-  const statusCode = details.error_status_code;
-  const errorCode = String(details.error_code_detail ?? '').toUpperCase();
+// ── Volume I/O (FUSE mount — direct filesystem access) ───────────────────────
+//
+// UC Volumes are FUSE-mounted at /Volumes/ inside the Databricks App container.
+// Writing via node:fs/promises eliminates the SDK HTTP round-trip and the
+// ReadableStream serialization bug that caused 0-byte writes with SDK 0.17.0.
+// The FUSE mount authenticates as the App SPN — no manual auth needed.
 
-  return (
-    statusCode === 409 ||
-    errorCode.includes('ALREADY_EXISTS') ||
-    errorMessage.includes('already exists') ||
-    errorMessage.includes('resource already exists')
-  );
+async function ensureVolumeDirectory(directoryPath: string): Promise<void> {
+  const canonicalPath = requireCanonicalVolumePath(directoryPath, 'directory');
+  await mkdir(canonicalPath, { recursive: true });
 }
 
-async function createVolumeDirectory(filesApi: FilesApi, directoryPath: string): Promise<void> {
-  // SDK 0.17.0: createDirectory expects { directory_path: string }
-  await filesApi.createDirectory({ directory_path: directoryPath });
-}
-
-async function uploadVolumeFile(
-  filesApi: FilesApi,
-  path: unknown,
-  fileBuffer: unknown,
-  options?: { overwrite?: boolean },
-): Promise<void> {
+async function uploadVolumeFile(path: unknown, fileBuffer: unknown): Promise<void> {
   const canonicalPath = requireCanonicalVolumePath(path, 'file');
   const uploadBuffer = requireUploadBuffer(fileBuffer);
-
-  // SDK 0.17.0: upload expects { file_path, contents (Web ReadableStream), overwrite }
-  const webStream = new ReadableStream({
-    start(controller) {
-      controller.enqueue(uploadBuffer);
-      controller.close();
-    },
-  });
-
-  await (filesApi as any).upload({
-    file_path: canonicalPath,
-    contents: webStream,
-    overwrite: options?.overwrite ?? false,
-  });
+  await writeFile(canonicalPath, uploadBuffer);
 }
-async function deleteVolumeFile(filesApi: FilesApi, path: string): Promise<void> {
+
+async function deleteVolumeFile(path: string): Promise<void> {
   const canonicalPath = requireCanonicalVolumePath(path, 'file');
-  // SDK 0.17.0: delete expects { file_path: string }
-  await (filesApi as any).delete({ file_path: canonicalPath });
-}
-
-async function ensureVolumeDirectory(filesApi: FilesApi, directoryPath: string): Promise<void> {
-  const directoryChain = getDirectoryChain(directoryPath);
-  for (const currentDirectory of directoryChain) {
-    try {
-      await createVolumeDirectory(filesApi, currentDirectory);
-    } catch (error) {
-      if (!isAlreadyExistsError(error)) {
-        throw error;
-      }
-    }
-  }
+  await unlink(canonicalPath);
 }
 
 // ── Multipart parsing helper ─────────────────────────────────────────────────
@@ -516,7 +449,7 @@ function logUploadError(
     message,
     buildUploadContext(diagnostics, {
       ...extra,
-      ...normalizeSdkError(error),
+      ...normalizeError(error),
       ...(error instanceof AppError ? error.extra : {}),
     }),
   );
@@ -726,8 +659,6 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     let volumeFilePath: string | undefined;
     let diagnostics: Partial<UploadDiagnostics> = { kind: opts.kind };
-    const wc = new WorkspaceClient({ host: process.env.DATABRICKS_HOST });
-    const filesApi = wc.files as unknown as FilesApi;
 
     try {
       // ── Step 1: Auth already resolved by iosAuth middleware ───────────────
@@ -807,7 +738,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
       const sha256Hash = createHash('sha256').update(parsed.fileBuffer).digest('hex');
       diagnostics.sha256Hex = sha256Hash;
 
-      // ── Step 6: Build path and write to UC Volume ────────────────────────
+      // ── Step 6: Build path and write to UC Volume (FUSE mount) ───────────
       let resolvedUploadPath: ResolvedUploadFilePath | undefined;
       try {
         resolvedUploadPath = buildUploadFilePath({
@@ -841,14 +772,14 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
             raw_capture_session_id: captureSessionId ?? null,
             raw_upload_id: uploadId,
             raw_extension: ext,
-            ...normalizeSdkError(pathErr),
+            ...normalizeError(pathErr),
           }),
         );
       }
 
       const volumeDirectory = getParentDirectory(volumeFilePath);
       try {
-        await ensureVolumeDirectory(filesApi, volumeDirectory);
+        await ensureVolumeDirectory(volumeDirectory);
         logUploadEvent('[upload] volume.directory_ready', diagnostics, {
           volume_directory: volumeDirectory,
           volume_directory_candidates: maybeBuildVolumePathCandidates(volumeDirectory, 'directory'),
@@ -865,7 +796,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
             volume_directory: volumeDirectory,
             volume_directory_candidates: maybeBuildVolumePathCandidates(volumeDirectory, 'directory'),
             canonical_volume_path: volumeFilePath,
-            ...normalizeSdkError(directoryErr),
+            ...normalizeError(directoryErr),
           }),
         );
       }
@@ -873,13 +804,13 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
       logUploadEvent('[upload] volume.write_attempt', diagnostics, {
         canonical_volume_path: volumeFilePath,
         volume_path_candidates: maybeBuildVolumePathCandidates(volumeFilePath, 'file'),
-        upload_content_type: 'readable',
+        upload_content_type: 'buffer',
         upload_size_bytes: parsed.fileBuffer.length,
         file_name: resolvedUploadPath?.fileName ?? null,
       });
 
       try {
-        await uploadVolumeFile(filesApi, volumeFilePath, parsed.fileBuffer, { overwrite: false });
+        await uploadVolumeFile(volumeFilePath, parsed.fileBuffer);
       } catch (volumeErr) {
         throw buildUploadAppError(
           500,
@@ -890,17 +821,17 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
             volume_directory: volumeDirectory,
             canonical_volume_path: volumeFilePath,
             volume_path_candidates: maybeBuildVolumePathCandidates(volumeFilePath, 'file'),
-            upload_content_type: 'readable',
+            upload_content_type: 'buffer',
             upload_size_bytes: parsed.fileBuffer.length,
             file_name: resolvedUploadPath?.fileName ?? null,
-            ...normalizeSdkError(volumeErr),
+            ...normalizeError(volumeErr),
           }),
         );
       }
       logUploadEvent('[upload] volume.write_succeeded', diagnostics, {
         canonical_volume_path: volumeFilePath,
         volume_path_candidates: maybeBuildVolumePathCandidates(volumeFilePath, 'file'),
-        upload_content_type: 'readable',
+        upload_content_type: 'buffer',
         upload_size_bytes: parsed.fileBuffer.length,
         file_name: resolvedUploadPath?.fileName ?? null,
       });
@@ -908,7 +839,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
       // ── Step 7: SHA-256 verification ─────────────────────────────────────
       if (parsed.clientSha256 && parsed.clientSha256 !== sha256Hash) {
         try {
-          await deleteVolumeFile(filesApi, volumeFilePath);
+          await deleteVolumeFile(volumeFilePath);
           logUploadEvent('[upload] volume.deleted_after_sha_mismatch', diagnostics, {
             client_sha256: parsed.clientSha256,
           });
@@ -984,7 +915,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
         });
 
         try {
-          await deleteVolumeFile(filesApi, volumeFilePath);
+          await deleteVolumeFile(volumeFilePath);
           logUploadEvent('[upload] volume.deleted_after_metadata_failure', diagnostics);
         } catch (delErr) {
           logUploadError('[upload] delete_after_metadata_failure_failed', diagnostics, delErr, { volumeFilePath });
