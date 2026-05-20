@@ -26,14 +26,20 @@
  *   7. If iOS sent sha256_hex, compare. Mismatch → 400 + delete file.
  *   8. INSERT INTO app.uploads
  *   9. Return 201 { id, kind, volume_path, size_bytes, sha256_hex, uploaded_at }
+ *
+ * Volume I/O strategy (hybrid):
+ *   - Directory creation: SDK Files API (UC Volume dirs are virtual — no POSIX mkdir)
+ *   - File write: node:fs/promises writeFile via FUSE mount (fixes SDK 0.17.0 0-byte bug)
+ *   - File delete: node:fs/promises unlink via FUSE mount
  */
 
 import { createHash } from 'node:crypto';
-import { writeFile, mkdir, unlink } from 'node:fs/promises';
+import { writeFile, unlink } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import type { Application, Request, Response, NextFunction } from 'express';
 import Busboy from 'busboy';
 import { v7 as uuidv7 } from 'uuid';
+import { WorkspaceClient } from '@databricks/sdk-experimental';
 import { iosAuth } from '../../middleware/ios-auth';
 import { AppError, ErrorTypes } from '../../lib/errors';
 
@@ -47,6 +53,10 @@ interface AppKitContext {
   lakebase: LakebaseClient;
   server: { extend(fn: (app: Application) => void): void };
 }
+
+type FilesApi = {
+  createDirectory(request: { directory_path: string }): Promise<unknown>;
+};
 
 // ── MIME allowlist ────────────────────────────────────────────────────────────
 // Global map: resolves MIME → file extension. Per-endpoint filtering is handled
@@ -264,6 +274,23 @@ function getParentDirectory(path: unknown): string {
   return requireCanonicalVolumePath(directoryPath, 'directory');
 }
 
+function getDirectoryChain(directoryPath: unknown): string[] {
+  const normalizedDirectoryPath = requireCanonicalVolumePath(directoryPath, 'directory');
+  const relativeDirectory = normalizedDirectoryPath.slice('/Volumes/'.length);
+  const segments = relativeDirectory.split('/').filter((segment) => segment.length > 0);
+
+  if (segments.length < 3) {
+    throw new Error(`Volume directory path must include catalog/schema/volume: ${normalizedDirectoryPath}`);
+  }
+
+  const directoryChain: string[] = [];
+  for (let idx = 3; idx <= segments.length; idx += 1) {
+    directoryChain.push(`/Volumes/${segments.slice(0, idx).join('/')}`);
+  }
+  return directoryChain;
+}
+
+
 function normalizeError(error: unknown): Record<string, unknown> {
   if (error instanceof AppError) {
     return {
@@ -280,8 +307,14 @@ function normalizeError(error: unknown): Record<string, unknown> {
       error_name: error.name,
       error_message: error.message,
       error_stack: error.stack,
-      ...(('code' in error && typeof error.code !== 'undefined')
-        ? { error_code_detail: (error as { code?: unknown }).code }
+      ...(('statusCode' in error && typeof error.statusCode !== 'undefined')
+        ? { error_status_code: (error as { statusCode?: unknown }).statusCode }
+        : {}),
+      ...(('errorCode' in error && typeof error.errorCode !== 'undefined')
+        ? { error_code_detail: (error as { errorCode?: unknown }).errorCode }
+        : {}),
+      ...(('details' in error && typeof error.details !== 'undefined')
+        ? { error_details: (error as { details?: unknown }).details }
         : {}),
       ...(('cause' in error && typeof error.cause !== 'undefined')
         ? { error_cause: (error as { cause?: unknown }).cause }
@@ -295,16 +328,38 @@ function normalizeError(error: unknown): Record<string, unknown> {
   };
 }
 
-// ── Volume I/O (FUSE mount — direct filesystem access) ───────────────────────
-//
-// UC Volumes are FUSE-mounted at /Volumes/ inside the Databricks App container.
-// Writing via node:fs/promises eliminates the SDK HTTP round-trip and the
-// ReadableStream serialization bug that caused 0-byte writes with SDK 0.17.0.
-// The FUSE mount authenticates as the App SPN — no manual auth needed.
+function isAlreadyExistsError(error: unknown): boolean {
+  const details = normalizeError(error);
+  const errorMessage = String(details.error_message ?? '').toLowerCase();
+  const statusCode = details.error_status_code;
+  const errorCode = String(details.error_code_detail ?? '').toUpperCase();
 
-async function ensureVolumeDirectory(directoryPath: string): Promise<void> {
-  const canonicalPath = requireCanonicalVolumePath(directoryPath, 'directory');
-  await mkdir(canonicalPath, { recursive: true });
+  return (
+    statusCode === 409 ||
+    errorCode.includes('ALREADY_EXISTS') ||
+    errorMessage.includes('already exists') ||
+    errorMessage.includes('resource already exists')
+  );
+}
+
+// ── Volume I/O (hybrid: SDK for directories, FUSE for file read/write) ───────
+//
+// UC Volume directories are virtual path prefixes — they must be created via
+// the SDK Files API (POSIX mkdir is not supported on the FUSE mount).
+// File writes use node:fs/promises writeFile directly to the FUSE-mounted path,
+// which fixes the 0-byte bug caused by SDK 0.17.0's broken ReadableStream upload.
+
+async function ensureVolumeDirectory(filesApi: FilesApi, directoryPath: string): Promise<void> {
+  const directoryChain = getDirectoryChain(directoryPath);
+  for (const currentDirectory of directoryChain) {
+    try {
+      await filesApi.createDirectory({ directory_path: currentDirectory });
+    } catch (error) {
+      if (!isAlreadyExistsError(error)) {
+        throw error;
+      }
+    }
+  }
 }
 
 async function uploadVolumeFile(path: unknown, fileBuffer: unknown): Promise<void> {
@@ -659,6 +714,9 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     let volumeFilePath: string | undefined;
     let diagnostics: Partial<UploadDiagnostics> = { kind: opts.kind };
+    // SDK for directory creation only (virtual UC Volume dirs require API calls)
+    const wc = new WorkspaceClient({ host: process.env.DATABRICKS_HOST });
+    const filesApi = wc.files as unknown as FilesApi;
 
     try {
       // ── Step 1: Auth already resolved by iosAuth middleware ───────────────
@@ -777,9 +835,10 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
         );
       }
 
+      // Directory creation via SDK (UC Volume dirs are virtual path prefixes)
       const volumeDirectory = getParentDirectory(volumeFilePath);
       try {
-        await ensureVolumeDirectory(volumeDirectory);
+        await ensureVolumeDirectory(filesApi, volumeDirectory);
         logUploadEvent('[upload] volume.directory_ready', diagnostics, {
           volume_directory: volumeDirectory,
           volume_directory_candidates: maybeBuildVolumePathCandidates(volumeDirectory, 'directory'),
@@ -801,10 +860,11 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
         );
       }
 
+      // File write via FUSE mount (bypasses SDK 0.17.0 ReadableStream 0-byte bug)
       logUploadEvent('[upload] volume.write_attempt', diagnostics, {
         canonical_volume_path: volumeFilePath,
         volume_path_candidates: maybeBuildVolumePathCandidates(volumeFilePath, 'file'),
-        upload_content_type: 'buffer',
+        upload_content_type: 'buffer_fuse',
         upload_size_bytes: parsed.fileBuffer.length,
         file_name: resolvedUploadPath?.fileName ?? null,
       });
@@ -821,7 +881,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
             volume_directory: volumeDirectory,
             canonical_volume_path: volumeFilePath,
             volume_path_candidates: maybeBuildVolumePathCandidates(volumeFilePath, 'file'),
-            upload_content_type: 'buffer',
+            upload_content_type: 'buffer_fuse',
             upload_size_bytes: parsed.fileBuffer.length,
             file_name: resolvedUploadPath?.fileName ?? null,
             ...normalizeError(volumeErr),
@@ -831,7 +891,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient) 
       logUploadEvent('[upload] volume.write_succeeded', diagnostics, {
         canonical_volume_path: volumeFilePath,
         volume_path_candidates: maybeBuildVolumePathCandidates(volumeFilePath, 'file'),
-        upload_content_type: 'buffer',
+        upload_content_type: 'buffer_fuse',
         upload_size_bytes: parsed.fileBuffer.length,
         file_name: resolvedUploadPath?.fileName ?? null,
       });
