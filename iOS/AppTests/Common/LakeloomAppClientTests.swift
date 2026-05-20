@@ -263,7 +263,7 @@ struct LiveLakeloomAppClientTests {
             Issue.record("expected httpError")
         } catch let error as LakeloomAppError {
             switch error {
-            case .httpError(let status, let detail):
+            case .httpError(let status, let detail, _):
                 #expect(status == 500)
                 #expect(detail == "server died")
             default:

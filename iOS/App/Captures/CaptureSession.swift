@@ -85,6 +85,12 @@ public struct CaptureUpload: Sendable, Equatable, Hashable, Codable, Identifiabl
     public let sha256Hex: String
     public let originalFilename: String?
     public let clientTs: Date?
+    /// Per Genie's 2026-05-20 contract: server populates with
+    /// `"client"` when the client supplied `client_ts` in the
+    /// multipart body, or `"server"` when the server used its own
+    /// clock as a fallback. iOS surfaces this so the UI can hint
+    /// "captured at" vs "recorded at" if the distinction matters.
+    public let clientTsSource: ClientTimestampSource?
     public let uploadedAt: Date
 
     public init(
@@ -96,6 +102,7 @@ public struct CaptureUpload: Sendable, Equatable, Hashable, Codable, Identifiabl
         sha256Hex: String,
         originalFilename: String?,
         clientTs: Date?,
+        clientTsSource: ClientTimestampSource? = nil,
         uploadedAt: Date
     ) {
         self.id = id
@@ -106,6 +113,7 @@ public struct CaptureUpload: Sendable, Equatable, Hashable, Codable, Identifiabl
         self.sha256Hex = sha256Hex
         self.originalFilename = originalFilename
         self.clientTs = clientTs
+        self.clientTsSource = clientTsSource
         self.uploadedAt = uploadedAt
     }
 
@@ -116,7 +124,12 @@ public struct CaptureUpload: Sendable, Equatable, Hashable, Codable, Identifiabl
         case document
     }
 
-    private enum CodingKeys: String, CodingKey {
+    public enum ClientTimestampSource: String, Sendable, Equatable, Hashable, Codable {
+        case client
+        case server
+    }
+
+    enum CodingKeys: String, CodingKey {
         case id
         case kind
         case volumePath = "volume_path"
@@ -125,6 +138,73 @@ public struct CaptureUpload: Sendable, Equatable, Hashable, Codable, Identifiabl
         case sha256Hex = "sha256_hex"
         case originalFilename = "original_filename"
         case clientTs = "client_ts"
+        case clientTsSource = "client_ts_source"
         case uploadedAt = "uploaded_at"
+    }
+
+    // MARK: - Lenient decoder
+
+    /// Custom decoder that accepts `size_bytes` as either a JSON
+    /// number (`134931`) or a JSON string (`"134931"`).
+    ///
+    /// Background: as of 2026-05-20, `GET /api/captures/:id?include=uploads`
+    /// on dev serializes `size_bytes` as a string. This appears to be
+    /// a Lakebase bigint-as-string serialization quirk — `BIGINT`
+    /// columns in PostgreSQL drivers (including the one Genie's
+    /// `lakeloom-ai` server uses) commonly serialize as strings to
+    /// avoid JavaScript `Number` precision loss for values
+    /// > `2^53 - 1`. iOS can't ask the server to abandon precision,
+    /// so we just accept either shape. See
+    /// `architecture/hi_genie/2026-05-20_smoke-test-records-and-size-bytes-decode.md`
+    /// for the full discussion.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(String.self, forKey: .id)
+        self.kind = try c.decode(Kind.self, forKey: .kind)
+        self.volumePath = try c.decode(String.self, forKey: .volumePath)
+        self.mimeType = try c.decode(String.self, forKey: .mimeType)
+        self.sizeBytes = try Self.decodeLenientInt64(from: c, forKey: .sizeBytes)
+        self.sha256Hex = try c.decode(String.self, forKey: .sha256Hex)
+        self.originalFilename = try c.decodeIfPresent(String.self, forKey: .originalFilename)
+        self.clientTs = try c.decodeIfPresent(Date.self, forKey: .clientTs)
+        self.clientTsSource = try c.decodeIfPresent(ClientTimestampSource.self, forKey: .clientTsSource)
+        self.uploadedAt = try c.decode(Date.self, forKey: .uploadedAt)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(kind, forKey: .kind)
+        try c.encode(volumePath, forKey: .volumePath)
+        try c.encode(mimeType, forKey: .mimeType)
+        try c.encode(sizeBytes, forKey: .sizeBytes)
+        try c.encode(sha256Hex, forKey: .sha256Hex)
+        try c.encodeIfPresent(originalFilename, forKey: .originalFilename)
+        try c.encodeIfPresent(clientTs, forKey: .clientTs)
+        try c.encodeIfPresent(clientTsSource, forKey: .clientTsSource)
+        try c.encode(uploadedAt, forKey: .uploadedAt)
+    }
+
+    /// Decode an `Int64` from a container that may hold either a JSON
+    /// number or a JSON string representation. Throws the standard
+    /// `DecodingError.typeMismatch` if the value is neither.
+    static func decodeLenientInt64(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) throws -> Int64 {
+        if let direct = try? container.decode(Int64.self, forKey: key) {
+            return direct
+        }
+        if let string = try? container.decode(String.self, forKey: key),
+           let parsed = Int64(string) {
+            return parsed
+        }
+        throw DecodingError.typeMismatch(
+            Int64.self,
+            DecodingError.Context(
+                codingPath: container.codingPath + [key],
+                debugDescription: "Expected Int64 as a number or numeric string"
+            )
+        )
     }
 }

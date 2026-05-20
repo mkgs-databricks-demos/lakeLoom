@@ -270,12 +270,17 @@ public actor LiveUploadCoordinator: UploadCoordinator {
             body: body,
             contentType: contentType
         )
-        // Server returns the inserted `app.uploads` row; capture the
-        // remote ID if present so the UI can deep-link.
-        if let response = try? JSONDecoder().decode(UploadResponse.self, from: data),
-           let remoteID = response.id {
+        // Server returns the inserted `app.uploads` row (same shape
+        // as the `uploads` array element in
+        // `GET /api/captures/:id?include=uploads`). Decode using
+        // CaptureUpload — it owns the lenient sizeBytes decoder
+        // and the `client_ts_source` field, so a contract evolution
+        // on either path is captured in one place.
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        if let response = try? decoder.decode(CaptureUpload.self, from: data) {
             if var live = uploads[upload.id] {
-                live.remoteUploadID = remoteID
+                live.remoteUploadID = response.id
                 uploads[upload.id] = live
             }
         }
@@ -334,7 +339,16 @@ public actor LiveUploadCoordinator: UploadCoordinator {
             // surfaces it; AppCoordinator picks up the auth-failed
             // signal separately and routes to the QR re-scan.
             return true
-        case .httpError(let status, _):
+        case .httpError(let status, _, let code):
+            // Honor server-typed error codes first when present —
+            // they carry intent the status code alone can't.
+            // Mapping locked in
+            // `architecture/hey_isaac/2026-05-20_audio-uploads-working.md`.
+            if let typed = code.flatMap(UploadErrorCode.init(rawValue:)) {
+                return typed.isPermanent
+            }
+            // Fallback by status: 408/429/5xx are transient; other
+            // 4xx and unknown statuses are permanent.
             switch status {
             case 408, 429:        return false
             case 500...599:       return false
@@ -354,7 +368,9 @@ public actor LiveUploadCoordinator: UploadCoordinator {
         case .transport:               return "transport"
         case .tokenExchangeFailed:     return "token_exchange_failed"
         case .unauthorized(let kind, _): return "unauthorized_\(kind.rawValue)"
-        case .httpError(let status, _): return "http_\(status)"
+        case .httpError(let status, _, let code):
+            if let code, !code.isEmpty { return "http_\(status)_\(code)" }
+            return "http_\(status)"
         case .decodeFailed:            return "decode_failed"
         }
     }
@@ -414,11 +430,5 @@ public actor LiveUploadCoordinator: UploadCoordinator {
             break
         }
         return revived
-    }
-
-    // MARK: - Decoding
-
-    private struct UploadResponse: Decodable {
-        let id: String?
     }
 }

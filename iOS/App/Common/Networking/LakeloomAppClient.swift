@@ -133,7 +133,14 @@ public enum LakeloomAppError: Error, Sendable, Equatable {
     case unauthorized(kind: UnauthorizedReason, detail: String)
 
     /// Non-200 response that wasn't a Layer 1 unauthorized.
-    case httpError(status: Int, detail: String)
+    ///
+    /// `code` carries the RFC 9457 `type` URI suffix when the server
+    /// surfaces one (e.g. `"UPLOAD_VOLUME_WRITE_FAILED"`,
+    /// `"UPLOAD_INTEGRITY_MISMATCH"`, `"UNSUPPORTED_MEDIA_TYPE"`).
+    /// Callers that care about typed semantics (retry policy in
+    /// `UploadCoordinator`, etc.) can pattern-match on it; callers
+    /// that only care about status keep working unchanged.
+    case httpError(status: Int, detail: String, code: String? = nil)
 
     /// Successful HTTP but body didn't decode into the expected type.
     case decodeFailed(reason: String)
@@ -366,6 +373,7 @@ public actor LiveLakeloomAppClient: LakeloomAppClient {
         default:
             let problem = Self.parseProblemDetails(data)
             let detail = problem.detail ?? problem.title ?? "HTTP \(http.statusCode)"
+            let code = Self.errorCode(from: problem)
             // Full URL so it's obvious which host the request actually
             // hit — useful when diagnosing whether the QR delivered the
             // right app.base_url vs a stale/wrong one.
@@ -375,11 +383,12 @@ public actor LiveLakeloomAppClient: LakeloomAppClient {
                     "url": .string(url.absoluteString),
                     "path": .string(path),
                     "http_status": .int(Int64(http.statusCode)),
+                    "code": .string(code ?? ""),
                     "detail": .string(detail)
                 ],
                 errorCode: "http_error"
             )
-            throw LakeloomAppError.httpError(status: http.statusCode, detail: detail)
+            throw LakeloomAppError.httpError(status: http.statusCode, detail: detail, code: code)
         }
     }
 
@@ -445,6 +454,21 @@ public actor LiveLakeloomAppClient: LakeloomAppClient {
             return .unknown
         }
         return UnauthorizedReason(rawValue: String(suffix)) ?? .unknown
+    }
+
+    /// Extract the RFC 9457 typed error code from the `type` URI's
+    /// last path segment. For example,
+    /// `https://lakeloom/errors/UPLOAD_INTEGRITY_MISMATCH` →
+    /// `"UPLOAD_INTEGRITY_MISMATCH"`. Returns nil if the response
+    /// didn't carry a `type` field or was un-parseable. Callers
+    /// either match on a specific `UploadErrorCode` raw value or
+    /// fall back to the bare status-code-based retry policy.
+    private static func errorCode(from problem: ProblemDetails) -> String? {
+        guard let typeURI = problem.type, !typeURI.isEmpty else { return nil }
+        if let suffix = typeURI.split(separator: "/").last, !suffix.isEmpty {
+            return String(suffix)
+        }
+        return typeURI
     }
 
     #if DEBUG
