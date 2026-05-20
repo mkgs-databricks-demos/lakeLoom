@@ -48,17 +48,10 @@ interface AppKitContext {
   server: { extend(fn: (app: Application) => void): void };
 }
 
-type DirectoryCreateRequest =
-  | string
-  | { directoryPath: string }
-  | { directory_path: string }
-  | { path: string };
-
 type FilesApi = {
-  upload(path: string, contents: Readable, options?: { overwrite?: boolean }): Promise<unknown>;
-  delete(path: string): Promise<unknown>;
-  createDirectory?(request: DirectoryCreateRequest): Promise<unknown>;
-  create_directory?(request: DirectoryCreateRequest): Promise<unknown>;
+  upload(request: { file_path: string; contents?: ReadableStream; overwrite?: boolean }): Promise<unknown>;
+  delete(request: { file_path: string }): Promise<unknown>;
+  createDirectory(request: { directory_path: string }): Promise<unknown>;
 };
 
 // ── MIME allowlist ────────────────────────────────────────────────────────────
@@ -253,9 +246,6 @@ function requireUploadBuffer(fileBuffer: unknown): Buffer {
   return fileBuffer;
 }
 
-function createUploadStream(fileBuffer: Buffer): Readable {
-  return Readable.from(fileBuffer);
-}
 
 function buildVolumePathCandidates(path: unknown, context = 'path'): string[] {
   return [requireCanonicalVolumePath(path, context)];
@@ -264,7 +254,7 @@ function buildVolumePathCandidates(path: unknown, context = 'path'): string[] {
 function maybeBuildVolumePathCandidates(path: unknown, context = 'path'): string[] | null {
   try {
     return buildVolumePathCandidates(path, context);
-  } catch {
+  } catch (_e) {
     return null;
   }
 }
@@ -296,21 +286,6 @@ function getDirectoryChain(directoryPath: unknown): string[] {
   return directoryChain;
 }
 
-function buildDirectoryCreateRequests(
-  directoryPath: string,
-  method: 'createDirectory' | 'create_directory',
-): DirectoryCreateRequest[] {
-  const normalizedDirectoryPath = requireCanonicalVolumePath(directoryPath, 'directory');
-  const objectRequests: DirectoryCreateRequest[] = [
-    { directoryPath: normalizedDirectoryPath },
-    { directory_path: normalizedDirectoryPath },
-    { path: normalizedDirectoryPath },
-  ];
-
-  return method === 'create_directory'
-    ? [...objectRequests, normalizedDirectoryPath]
-    : [normalizedDirectoryPath, ...objectRequests];
-}
 
 function normalizeSdkError(error: unknown): Record<string, unknown> {
   if (error instanceof AppError) {
@@ -364,60 +339,8 @@ function isAlreadyExistsError(error: unknown): boolean {
 }
 
 async function createVolumeDirectory(filesApi: FilesApi, directoryPath: string): Promise<void> {
-  const directoryMethods: Array<{
-    method: 'createDirectory' | 'create_directory';
-    fn: (request: DirectoryCreateRequest) => Promise<unknown>;
-  }> = [];
-
-  if (typeof filesApi.createDirectory === 'function') {
-    directoryMethods.push({
-      method: 'createDirectory',
-      fn: (request: DirectoryCreateRequest) => filesApi.createDirectory!(request),
-    });
-  }
-
-  if (typeof filesApi.create_directory === 'function') {
-    directoryMethods.push({
-      method: 'create_directory',
-      fn: (request: DirectoryCreateRequest) => filesApi.create_directory!(request),
-    });
-  }
-
-  if (directoryMethods.length === 0) {
-    throw new Error('Workspace Files API does not expose a directory creation method.');
-  }
-
-  const candidatePaths = buildVolumePathCandidates(directoryPath, 'directory');
-  const attempts: Array<Record<string, unknown>> = [];
-  let lastError: unknown;
-
-  for (const candidatePath of candidatePaths) {
-    for (const directoryMethod of directoryMethods) {
-      for (const requestPayload of buildDirectoryCreateRequests(candidatePath, directoryMethod.method)) {
-        try {
-          await directoryMethod.fn(requestPayload);
-          return;
-        } catch (error) {
-          lastError = error;
-          attempts.push({
-            attempted_path: candidatePath,
-            attempted_method: directoryMethod.method,
-            attempted_request: requestPayload,
-            ...normalizeSdkError(error),
-          });
-        }
-      }
-    }
-  }
-
-  const aggregatedError = new Error(`Workspace Files API directory creation failed for: ${directoryPath}`);
-  (aggregatedError as Error & { details?: unknown; cause?: unknown }).details = {
-    original_path: directoryPath,
-    attempted_paths: candidatePaths,
-    attempts,
-  };
-  (aggregatedError as Error & { details?: unknown; cause?: unknown }).cause = lastError;
-  throw aggregatedError;
+  // SDK 0.17.0: createDirectory expects { directory_path: string }
+  await filesApi.createDirectory({ directory_path: directoryPath });
 }
 
 async function uploadVolumeFile(
@@ -426,64 +349,27 @@ async function uploadVolumeFile(
   fileBuffer: unknown,
   options?: { overwrite?: boolean },
 ): Promise<void> {
-  const candidatePaths = buildVolumePathCandidates(path, 'file');
+  const canonicalPath = requireCanonicalVolumePath(path, 'file');
   const uploadBuffer = requireUploadBuffer(fileBuffer);
-  const attempts: Array<Record<string, unknown>> = [];
-  let lastError: unknown;
 
-  for (const candidatePath of candidatePaths) {
-    try {
-      await filesApi.upload(candidatePath, createUploadStream(uploadBuffer), options);
-      return;
-    } catch (error) {
-      lastError = error;
-      attempts.push({
-        attempted_path: candidatePath,
-        upload_content_type: 'readable',
-        upload_size_bytes: uploadBuffer.length,
-        ...normalizeSdkError(error),
-      });
-    }
-  }
+  // SDK 0.17.0: upload expects { file_path, contents (Web ReadableStream), overwrite }
+  const webStream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(uploadBuffer);
+      controller.close();
+    },
+  });
 
-  const aggregatedError = new Error(`Workspace Files API upload failed for: ${String(path)}`);
-  (aggregatedError as Error & { details?: unknown; cause?: unknown }).details = {
-    original_path: path,
-    attempted_paths: candidatePaths,
-    upload_content_type: 'readable',
-    upload_size_bytes: uploadBuffer.length,
-    attempts,
-  };
-  (aggregatedError as Error & { details?: unknown; cause?: unknown }).cause = lastError;
-  throw aggregatedError;
+  await (filesApi as any).upload({
+    file_path: canonicalPath,
+    contents: webStream,
+    overwrite: options?.overwrite ?? false,
+  });
 }
-
 async function deleteVolumeFile(filesApi: FilesApi, path: string): Promise<void> {
-  const candidatePaths = buildVolumePathCandidates(path, 'file');
-  const attempts: Array<Record<string, unknown>> = [];
-  let lastError: unknown;
-
-  for (const candidatePath of candidatePaths) {
-    try {
-      await filesApi.delete(candidatePath);
-      return;
-    } catch (error) {
-      lastError = error;
-      attempts.push({
-        attempted_path: candidatePath,
-        ...normalizeSdkError(error),
-      });
-    }
-  }
-
-  const aggregatedError = new Error(`Workspace Files API delete failed for: ${path}`);
-  (aggregatedError as Error & { details?: unknown; cause?: unknown }).details = {
-    original_path: path,
-    attempted_paths: candidatePaths,
-    attempts,
-  };
-  (aggregatedError as Error & { details?: unknown; cause?: unknown }).cause = lastError;
-  throw aggregatedError;
+  const canonicalPath = requireCanonicalVolumePath(path, 'file');
+  // SDK 0.17.0: delete expects { file_path: string }
+  await (filesApi as any).delete({ file_path: canonicalPath });
 }
 
 async function ensureVolumeDirectory(filesApi: FilesApi, directoryPath: string): Promise<void> {
