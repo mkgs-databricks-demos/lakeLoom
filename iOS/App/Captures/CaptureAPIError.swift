@@ -68,7 +68,7 @@ extension CaptureAPIError {
             case .signatureInvalid, .timestampSkew, .unknown:
                 return .unexpectedResponse(reason: "Layer 1 \(kind.rawValue): \(detail)")
             }
-        case .httpError(let status, let detail):
+        case .httpError(let status, let detail, _):
             switch status {
             case 400: return .validationFailed(reason: detail)
             case 403: return .forbidden(reason: detail)

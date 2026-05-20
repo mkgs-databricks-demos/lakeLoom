@@ -523,7 +523,7 @@ public actor AuthService: AuthServicing {
                 return .unknownWorkspace(id)
             case .transport(let reason), .decodeFailed(let reason):
                 return .unexpectedResponse(reason: reason)
-            case .httpError(let status, let detail):
+            case .httpError(let status, let detail, _):
                 return .pairingFailed(reason: "HTTP \(status): \(detail)")
             }
         }

@@ -163,6 +163,8 @@
 		F0020A01F001F001F001F001 /* CaptureContextStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0010A01F001F001F001F001 /* CaptureContextStore.swift */; };
 		F0020A11F011F011F011F011 /* CaptureContextStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0010A11F011F011F011F011 /* CaptureContextStoreTests.swift */; };
 		F0020A12F012F012F012F012 /* CaptureServicePersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0010A12F012F012F012F012 /* CaptureServicePersistenceTests.swift */; };
+		11020A01110011001100110A /* CaptureUploadDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11010A01110011001100110A /* CaptureUploadDecodeTests.swift */; };
+		11020A02110011001100110B /* UploadErrorCodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11010A02110011001100110B /* UploadErrorCodeTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -341,6 +343,8 @@
 		F0010A01F001F001F001F001 /* CaptureContextStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureContextStore.swift; sourceTree = "<group>"; };
 		F0010A11F011F011F011F011 /* CaptureContextStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureContextStoreTests.swift; sourceTree = "<group>"; };
 		F0010A12F012F012F012F012 /* CaptureServicePersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureServicePersistenceTests.swift; sourceTree = "<group>"; };
+		11010A01110011001100110A /* CaptureUploadDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureUploadDecodeTests.swift; sourceTree = "<group>"; };
+		11010A02110011001100110B /* UploadErrorCodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadErrorCodeTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -751,6 +755,7 @@
 				EF3EBEA3151F4C5C286DE55A /* CaptureAPIClientTests.swift */,
 				F0010A11F011F011F011F011 /* CaptureContextStoreTests.swift */,
 				F0010A12F012F012F012F012 /* CaptureServicePersistenceTests.swift */,
+				11010A01110011001100110A /* CaptureUploadDecodeTests.swift */,
 				C0010A14C014C014C014C014 /* LiveCaptureServiceTests.swift */,
 			);
 			path = Captures;
@@ -780,6 +785,7 @@
 			children = (
 				B0010A13B013B013B013B013 /* LiveUploadCoordinatorTests.swift */,
 				B0010A11B011B011B011B011 /* MultipartFormBuilderTests.swift */,
+				11010A02110011001100110B /* UploadErrorCodeTests.swift */,
 				B0010A12B012B012B012B012 /* UploadQueueStoreTests.swift */,
 			);
 			path = Upload;
@@ -1013,6 +1019,8 @@
 				67126C18774407E4CEDC24CD /* CaptureAPIClientTests.swift in Sources */,
 				F0020A11F011F011F011F011 /* CaptureContextStoreTests.swift in Sources */,
 				F0020A12F012F012F012F012 /* CaptureServicePersistenceTests.swift in Sources */,
+				11020A01110011001100110A /* CaptureUploadDecodeTests.swift in Sources */,
+				11020A02110011001100110B /* UploadErrorCodeTests.swift in Sources */,
 				FDA2D314BA3A39B6FAA6C67F /* CoreDataStackTests.swift in Sources */,
 				A2FD09D632F81D97C7AB04E7 /* DeviceKeyStoreTests.swift in Sources */,
 				571A999C7E8036A9A8FE564C /* EntityRoundTripTests.swift in Sources */,

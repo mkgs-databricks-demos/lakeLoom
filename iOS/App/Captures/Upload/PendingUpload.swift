@@ -146,3 +146,39 @@ public struct UploadStateChange: Sendable, Equatable {
         self.state = state
     }
 }
+
+/// Server-typed error codes the upload routes can return in the
+/// RFC 9457 Problem Details `type` URI. Documented in
+/// `architecture/hey_isaac/2026-05-20_audio-uploads-working.md`.
+///
+/// The retry classification carries the server's intent: some
+/// errors are safe to retry on (storage transients) while others
+/// are permanent and would re-fire the same way (integrity or
+/// content-type rejections).
+public enum UploadErrorCode: String, Sendable, Equatable, Hashable {
+    /// Server couldn't write the file to the UC Volume — typically
+    /// a transient backend issue (network blip, sync sweep, etc.).
+    /// Worth retrying.
+    case uploadVolumeWriteFailed = "UPLOAD_VOLUME_WRITE_FAILED"
+
+    /// Client-supplied `sha256_hex` field didn't match the hash of
+    /// the received file bytes. Retrying with the same bytes will
+    /// fail identically; iOS needs to re-hash (and likely re-record
+    /// or re-stage the file) before another attempt.
+    case uploadIntegrityMismatch = "UPLOAD_INTEGRITY_MISMATCH"
+
+    /// MIME type isn't on the endpoint's allowlist (HTTP 415).
+    /// Permanent — the caller passed an unsupported file type.
+    case unsupportedMediaType = "UNSUPPORTED_MEDIA_TYPE"
+
+    /// Returns true for codes the upload coordinator should NOT
+    /// auto-retry. Honored by ``LiveUploadCoordinator/isPermanent``
+    /// in preference to the bare HTTP-status-based fallback.
+    public var isPermanent: Bool {
+        switch self {
+        case .uploadVolumeWriteFailed:  return false
+        case .uploadIntegrityMismatch:  return true
+        case .unsupportedMediaType:     return true
+        }
+    }
+}
