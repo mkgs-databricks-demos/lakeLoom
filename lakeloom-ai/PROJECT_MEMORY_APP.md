@@ -93,6 +93,7 @@ lakeLoom/
 * **App name (dev):** `lakeloom-ai-dev`
 * **Compute:** Medium AppKit container
 * **Source path:** `/Workspace/Users/matthew.giglia@databricks.com/.bundle/lakeloom-ai/dev/files`
+* **SDK version:** `@databricks/sdk-experimental` 0.17.0 (upgraded from 0.14.2 on 2026-05-20)
 * **deploy.sh** handles end-to-end: infra validation → readiness checks → bundle deploy → app source push.
 * **Runtime variables passed via `--var`:** `xcode_spn_id` (discovered from secret scope at deploy time).
 * All other values (catalog, schema, warehouse ID, Lakebase IDs) use target defaults in `databricks.yml`.
@@ -111,6 +112,7 @@ lakeLoom/
 * **Isaac notified** (2026-05-12) about `screenshots` and `documents` volumes via `lakeLoom/architecture/hey_isaac/2026-05-12_new-upload-volumes.md`.
 * **Isaac notified** (2026-05-13) about pairing endpoint contract via `lakeLoom/architecture/hey_isaac/2026-05-13_pairing-auth-endpoints-live.md`. Covers: Layer 1/2 auth headers, POST /confirm contract, QR payload structure, error format, open questions (device_label, pubkey encoding, filename convention).
 * **2026-05-15: QR pairing validated end-to-end on physical iPhone.** Full chain: QR scan → M2M → confirm → device-key binding → project create → home screen. iOS Module 01 merged (PR #18). Collaboration model (hi_genie/hey_isaac) proven effective for cross-domain debugging.
+* **2026-05-20: First successful upload (audio).** Both blocking bugs fixed (iosAuth invocation + SDK 0.17 signatures). Upload confirmed in `lb_uploads_history`. Isaac notified via `hey_isaac/2026-05-20_audio-uploads-working.md`.
 
 
 ## Resolved Target Variables (dev)
@@ -238,6 +240,23 @@ Host field path: `endpoint['status']['hosts']['host']`
 Pooled host: `endpoint['status']['hosts']['read_write_pooled_host']`
 
 The SDK's `Endpoint` object does NOT have a `hostname` attribute. Use the REST API directly.
+
+### SDK 0.17 Files API Signatures
+
+As of `@databricks/sdk-experimental` 0.17.0, the `FilesService` uses object-signature methods:
+
+```typescript
+filesApi.createDirectory({ directory_path: string }): Promise<EmptyResponse>
+filesApi.upload({ file_path: string, contents?: ReadableStream, overwrite?: boolean }): Promise<EmptyResponse>
+filesApi.delete({ file_path: string }): Promise<EmptyResponse>
+```
+
+**Key notes:**
+* `contents` must be a Web Streams API `ReadableStream`, not a Node `Readable`.
+* Pattern for buffer → ReadableStream: `new ReadableStream({ start(c) { c.enqueue(buffer); c.close(); } })`
+* `createDirectory` is still needed for nested UC Volume paths (volumes don't auto-create parent dirs).
+* Previous positional-arg patterns (`filesApi.upload(path, stream, opts)`) no longer work.
+
 ## hi_genie Findings That Change Infra Planning
 
 ### QR-pair auth is now the primary auth model
@@ -351,9 +370,12 @@ The SDK's `Endpoint` object does NOT have a `hostname` attribute. Use the REST A
 * ~~**Next feature branch:** Orphan-byte sweeper — scheduled job to scan UC Volumes for files without a matching `app.uploads` row.~~ **DONE 2026-05-14 — `orphan_byte_sweeper` job, weekly Sunday 2am UTC, report-only v1.**
 * ~~Await Isaac's confirmation: (1) HEIC vs JPEG/PNG from iOS, (2) base64url vs standard base64 for `device_pubkey`.~~ **DONE 2026-05-14 — iOS sends JPEG only (no HEIC), base64url no-padding confirmed.**
 * ~~End-to-end QR pairing on physical iPhone.~~ **DONE 2026-05-15 — Module 01 validated, PR #18 merged.**
-* **~~Next: Browser UI Phase 2~~ — IN PROGRESS (2026-05-16).** Device assignment, project card indicators, user identity pill all shipped. Remaining: session list, session detail view, session label editing. See `fixtures/databricks-app-ui-plan.md`.
-* **Next: iOS Module 02** — CaptureEngine. Will exercise audio + screenshot + photo upload endpoints.
+* ~~**Browser UI Phase 2** — Device assignment, project card indicators, user identity pill.~~ **DONE 2026-05-16.** Remaining: session list, session detail view, session label editing. See `fixtures/databricks-app-ui-plan.md`.
+* ~~**Upload pipeline E2E** — Fix iosAuth middleware invocation + SDK 0.17 object signatures.~~ **DONE 2026-05-20 — First successful audio upload. All four upload endpoints (audio/screenshots/photos/documents) now operational.**
+* **Next: iOS Module 02** — CaptureEngine. Will exercise audio + screenshot + photo upload endpoints. Isaac notified 2026-05-20.
+* **Next: Browser UI Phase 3** — Session list per project, session detail view, upload timeline, state transition buttons.
 * **Non-blocking follow-up:** Isaac investigating `GET /api/v1/projects` list failure during onboarding (likely iOS `LiveProjectAPIClient` not routing through full header injector).
+* **Non-blocking cleanup:** `package-lock.json` regeneration, remove diagnostic helpers (`buildVolumePathCandidates`), test screenshot/photo/document uploads from iOS.
 
 ## App Bundle (lakeloom-ai) — Implementation Status
 
@@ -371,6 +393,15 @@ All server components implemented: crypto lib, migration runner, `paired_session
 * Physical iPhone scanned QR, paired, persisted credential to Keychain, created a project, landed on home screen.
 * First time full auth chain worked on device since pivot to QR pairing (2026-05-09).
 * Three server-side bug fixes enabled this: `sha256(Buffer)` token-hash (PR #21), `x-forwarded-host` (PR #20), OTel trace investigation.
+
+### Upload Pipeline: OPERATIONAL (2026-05-20)
+* **First successful upload:** 2026-05-20, audio WAV, 3244 bytes, 2.2s E2E.
+* **Bugs fixed:** (1) `iosAuth` factory passed bare instead of invoked — requests hung 60s. (2) SDK 0.17 object-signature mismatch — 404s to malformed paths. (3) Env var names missing `_PATH` suffix.
+* **SDK:** `@databricks/sdk-experimental` upgraded 0.14.2 → 0.17.0. Uses object signatures for `createDirectory`, `upload`, `delete`.
+* **Volume write pattern:** `ReadableStream` (Web Streams API) wrapping buffer → `filesApi.upload({ file_path, contents, overwrite })`.
+* **Directory creation:** Still needed for nested paths. Single correct call: `filesApi.createDirectory({ directory_path })`.
+* **Confirmed working:** Audio endpoint. Screenshots/photos/documents share same code path — expected to work but not yet tested from iOS.
+* **Metadata sync:** Upload row confirmed in `lb_uploads_history` via Lakebase Lakehouse Sync.
 
 ### Upload Traceability & Capture Sessions: COMPLETE (2026-05-14)
 * **Migrations:** `002_capture_sessions.ts` (state machine table, 4 partial indexes, REPLICA IDENTITY FULL), `003_uploads.ts` (UUIDv7 PK, 6 partial indexes incl. sha256, REPLICA IDENTITY FULL)
@@ -430,9 +461,7 @@ All server components implemented: crypto lib, migration runner, `paired_session
 * **Test 9:** Added to `pairing-api-test` notebook — validates all 6 routes are registered and dualAuth active.
 * **Lakebase extension support confirmed:** `CREATE EXTENSION IF NOT EXISTS pg_trgm` succeeded. Positive signal for future `pgvector` use.
 
-### Browser UI Phase 2 — Device Assignment & User Identity: IN PROGRESS (2026-05-16)
-
-**Branch:** `phase2-capture-session-browser`
+### Browser UI Phase 2 — Device Assignment & User Identity: COMPLETE (2026-05-16)
 
 **Migration 005:** `app.project_device_assignments` — links `project_id` to `paired_session_id`. Unique constraint prevents duplicates. `ON CONFLICT DO UPDATE` makes assignment idempotent.
 
@@ -488,6 +517,7 @@ Per spec (locked 2026-05-13):
 - Body present: `sha256Hex(JSON.stringify(parsed_body))` (compact JSON)
 - Empty body: constant `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
 - **WARNING:** Express json() middleware sets `req.body = {}` on GET/DELETE. Use `Object.keys(req.body).length > 0` to detect actual body presence.
+- **Multipart uploads:** Body hash is over the raw multipart body bytes (not parsed fields). iOS must SHA-256 the entire request body before sending.
 
 ### Public Key Format
 
@@ -498,9 +528,9 @@ Per spec (locked 2026-05-13):
 
 ### Post-Deploy Validation
 
-Test suite expanded to 10 tests. Test 10 performs full E2E pairing:
+Test suite expanded to 14 tests. Test 10 performs full E2E pairing:
 QR → ECDSA keygen → signed confirm → authenticated GET with bound device key.
-CI/CD gate asserts all 10 pass.
+CI/CD gate asserts all 14 pass.
 
 ### IP Access List
 
