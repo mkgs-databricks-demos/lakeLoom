@@ -29,6 +29,15 @@ public actor FakeUploadCoordinator: UploadCoordinator {
         enqueueErrors.append(error)
     }
 
+    /// Test-only: seed the in-memory upload list with arbitrary state.
+    /// Used by the persistence-recovery tests to simulate uploads
+    /// that the upload coordinator's queue store would have rehydrated
+    /// in their post-app-kill state (e.g., `.succeeded` already, or
+    /// still `.queued`).
+    public func setStoredUploads(_ uploads: [PendingUpload]) {
+        stored = uploads
+    }
+
     /// Push a state change onto every subscribed stateUpdates stream.
     /// Tests call this to drive `CaptureService`'s upload watcher.
     public func emit(_ uploadID: String, state: PendingUpload.State) {

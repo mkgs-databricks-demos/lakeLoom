@@ -40,6 +40,7 @@ protocol AudioRecordingEngine: Sendable {
 actor LiveAudioRecordingEngine: AudioRecordingEngine {
 
     private var recorder: AVAudioRecorder?
+    private var delegateProxy: RecorderDelegateProxy?
     /// Captured the moment we hit `record()` because
     /// `AVAudioRecorder.currentTime` jumps to 0 after `stop()`.
     private var recordingStartedAt: Date?
@@ -89,21 +90,38 @@ actor LiveAudioRecordingEngine: AudioRecordingEngine {
         } catch {
             throw AudioRecorderError.engineFailure(reason: "AVAudioRecorder init: \(error.localizedDescription)")
         }
+        // Install a delegate proxy so `stop()` can await
+        // `audioRecorderDidFinishRecording` and only return once
+        // Core Audio has flushed the file to disk. Without this,
+        // callers can read the file before `AVAudioRecorder` is
+        // finished closing it — which is exactly the
+        // "Waiting for Stop to be signaled timed out. Forcing Stop"
+        // log the iOS Simulator surfaces under load.
+        let proxy = RecorderDelegateProxy()
+        avRecorder.delegate = proxy
         avRecorder.prepareToRecord()
         guard avRecorder.record() else {
             throw AudioRecorderError.engineFailure(reason: "AVAudioRecorder.record() returned false")
         }
         self.recorder = avRecorder
+        self.delegateProxy = proxy
         self.recordingStartedAt = Date()
     }
 
     func stop() async throws -> Double {
-        guard let recorder, let startedAt = recordingStartedAt else {
+        guard let recorder, let proxy = delegateProxy, let startedAt = recordingStartedAt else {
             throw AudioRecorderError.notRecording
         }
         let duration = recorder.currentTime
+        // Subscribe to the delegate's finalize stream BEFORE calling
+        // stop(), so we never miss the delegate yield if it fires
+        // synchronously inside `stop()`.
+        var iterator = proxy.finishedStream.makeAsyncIterator()
         recorder.stop()
+        _ = await iterator.next()
+
         self.recorder = nil
+        self.delegateProxy = nil
         self.recordingStartedAt = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
         // Fallback in case `currentTime` was 0 (e.g., very short
@@ -116,9 +134,51 @@ actor LiveAudioRecordingEngine: AudioRecordingEngine {
     }
 
     func cancel() async {
+        // Cancel is a fire-and-forget tear-down. We don't await the
+        // delegate because the caller is discarding the file anyway —
+        // they don't need the post-flush guarantee. Cleanup happens
+        // best-effort.
         recorder?.stop()
         recorder = nil
+        delegateProxy = nil
         recordingStartedAt = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+    }
+}
+
+/// Bridges `AVAudioRecorderDelegate` (an Obj-C protocol requiring an
+/// `NSObject` subclass) into the Swift-concurrency world. Each delegate
+/// callback yields onto an `AsyncStream<Bool>`; the engine's `stop()`
+/// awaits one element from that stream so callers see a fully-flushed
+/// file when `stop()` returns.
+///
+/// `@unchecked Sendable` because the proxy is single-use and only ever
+/// produces values from inside Core Audio's callback queue — the actor
+/// retains it for the lifetime of one recording and drops it after
+/// consuming the stream.
+private final class RecorderDelegateProxy: NSObject, AVAudioRecorderDelegate, @unchecked Sendable {
+
+    let finishedStream: AsyncStream<Bool>
+    private let continuation: AsyncStream<Bool>.Continuation
+
+    override init() {
+        let (stream, continuation) = AsyncStream<Bool>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        self.finishedStream = stream
+        self.continuation = continuation
+        super.init()
+    }
+
+    deinit {
+        continuation.finish()
+    }
+
+    func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
+        continuation.yield(flag)
+    }
+
+    func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: Error?) {
+        // Encode failure still yields so `stop()` doesn't hang; the
+        // engine reports the resulting duration based on wall clock.
+        continuation.yield(false)
     }
 }

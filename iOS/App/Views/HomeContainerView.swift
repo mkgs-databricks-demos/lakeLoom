@@ -83,6 +83,7 @@ struct HomeContainerView: View {
                 EndpointSmokeTestView(
                     captureAPI: api,
                     uploadCoordinator: coordinator.uploadCoordinator,
+                    photoCapture: coordinator.photoCapture,
                     workspaceID: context.workspace.id,
                     projectID: context.project.id,
                     onDismiss: { showingSmokeTest = false }
