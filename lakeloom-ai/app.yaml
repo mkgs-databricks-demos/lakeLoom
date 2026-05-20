@@ -2,11 +2,13 @@ command: ['npm', 'run', 'start']
 env:
   - name: DATABRICKS_WAREHOUSE_ID
     valueFrom: sql-warehouse
-  - name: DATABRICKS_VOLUME_SESSION_AUDIO
+  - name: LAKELOOM_AUDIO_VOLUME_PATH
     valueFrom: session-audio
-  - name: DATABRICKS_VOLUME_SCREENSHOTS
+  - name: LAKELOOM_SCREENSHOT_VOLUME_PATH
     valueFrom: screenshots
-  - name: DATABRICKS_VOLUME_DOCUMENTS
+  - name: LAKELOOM_PHOTO_VOLUME_PATH
+    valueFrom: screenshots
+  - name: LAKELOOM_DOCUMENT_VOLUME_PATH
     valueFrom: documents
   - name: LAKEBASE_ENDPOINT
     valueFrom: postgres
