@@ -36,9 +36,9 @@ createApp({
     lakebase(),
     files({
       volumes: {
-        'session_audio': {},
-        'screenshots': {},
-        'documents': {},
+        'session_audio': { policy: files.policy.allowAll() },
+        'screenshots': { policy: files.policy.allowAll() },
+        'documents': { policy: files.policy.allowAll() },
       },
     }),
   ],
