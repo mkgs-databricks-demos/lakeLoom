@@ -31,7 +31,7 @@ function classifyUploadIngressPath(path: string): 'audio' | 'screenshot' | 'phot
 
 createApp({
   plugins: [
-    server({ autoStart: false }),
+    server(),
     analytics(),
     lakebase(),
     files({
@@ -42,8 +42,8 @@ createApp({
       },
     }),
   ],
-})
-  .then(async (appkit) => {
+
+  async onPluginsReady(appkit) {
     // ── Initialize secrets from Databricks secret scope ────────────────────
     // Non-fatal: missing secrets are logged; pairing endpoints return 503.
     await initSecrets().catch((err) => {
@@ -161,7 +161,6 @@ createApp({
       app.use(problemDetailsHandler);
     });
 
-    await appkit.server.start();
 
     // ── Graceful shutdown ─────────────────────────────────────────────────
     // The platform sends SIGTERM on redeploy/stop. We have 15s before a
@@ -206,5 +205,5 @@ createApp({
 
     process.on('SIGTERM', () => shutdown('SIGTERM'));
     process.on('SIGINT', () => shutdown('SIGINT'));
-  })
-  .catch(console.error);
+  },
+}).catch(console.error);
