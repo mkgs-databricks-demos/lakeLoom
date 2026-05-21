@@ -10,6 +10,18 @@ env:
     valueFrom: screenshots
   - name: LAKELOOM_DOCUMENT_VOLUME_PATH
     valueFrom: documents
+
+  # ── AppKit files() plugin auto-discovery env vars ─────────────────────
+  # The files plugin scans for DATABRICKS_VOLUME_* to discover volumes.
+  # These MUST match the volume keys in server.ts files() config.
+  - name: DATABRICKS_VOLUME_FILES
+    valueFrom: files
+  - name: DATABRICKS_VOLUME_SESSION_AUDIO
+    valueFrom: session-audio
+  - name: DATABRICKS_VOLUME_SCREENSHOTS
+    valueFrom: screenshots
+  - name: DATABRICKS_VOLUME_DOCUMENTS
+    valueFrom: documents
   - name: LAKEBASE_ENDPOINT
     valueFrom: postgres
 

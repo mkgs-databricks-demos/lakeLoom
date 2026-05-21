@@ -1,4 +1,4 @@
-import { createApp, analytics, lakebase, server } from '@databricks/appkit';
+import { createApp, analytics, lakebase, server, files } from '@databricks/appkit';
 import { setupPairingRoutes } from './routes/pairing/pairing-routes';
 import { setupCaptureRoutes } from './routes/captures/capture-routes';
 import registerUploads from './routes/uploads/upload-routes';
@@ -34,6 +34,13 @@ createApp({
     server({ autoStart: false }),
     analytics(),
     lakebase(),
+    files({
+      volumes: {
+        'session_audio': {},
+        'screenshots': {},
+        'documents': {},
+      },
+    }),
   ],
 })
   .then(async (appkit) => {
