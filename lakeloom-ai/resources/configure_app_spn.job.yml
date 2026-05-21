@@ -4,6 +4,7 @@
 #   2. Runs the bundle-local Lakebase schema notebook (workspace)
 #   3. Applies volume access for the App SPN via a forEach task
 #      (session_audio, screenshots, documents)
+#   4. Applies volume access for the Xcode SPN (iOS OBO uploads)
 # Triggered by deploy.sh after app registration, before compute startup.
 
 resources:
@@ -51,6 +52,27 @@ resources:
                   catalog_use: ${var.catalog}
                   schema_use: ${var.schema}
                   spn_application_id: ${var.app_spn_id}
+                  volume_name: "{{input}}"
+
+        # Task 4: forEach — applies volume access for Xcode SPN (iOS)
+        # The AppKit files() plugin uses OBO (on-behalf-of-user). iOS uploads
+        # authenticate as the Xcode SPN, so it needs WRITE_VOLUME too.
+        - task_key: grant_xcode_spn_volume_access
+          depends_on:
+            - task_key: update_secrets_acls
+          for_each_task:
+            inputs: '["session_audio", "screenshots", "documents"]'
+            concurrency: 3
+            task:
+              task_key: grant_single_volume_xcode
+              notebook_task:
+                notebook_path: ../src/admin/grant-app-spn-volume-access.ipynb
+                source: WORKSPACE
+                warehouse_id: ${var.sql_warehouse_id}
+                base_parameters:
+                  catalog_use: ${var.catalog}
+                  schema_use: ${var.schema}
+                  spn_application_id: ${var.xcode_spn_id}
                   volume_name: "{{input}}"
 
       environments:

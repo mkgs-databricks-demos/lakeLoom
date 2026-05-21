@@ -1,11 +1,13 @@
 # Session Index
 
+* [2026-05-21] AppKit Files Plugin: Zero-Byte Upload Fix — `2026-05-21_appkit-files-plugin-zero-byte-fix.md`
 * [2026-05-20] Audio Upload E2E Fix — `2026-05-20_audio-upload-e2e-fix.md`
 * [2026-05-16] Upload Handler P0 Hardening — `2026-05-16_upload-handler-p0-hardening.md`
 * [2026-05-16] Phase 2 Device UX + User Identity + Multipart Auth Fix — `2026-05-16_phase2-device-ux-identity-multipart-fix.md`
 
 | Date | Summary | File |
 |------|---------|------|
+| 2026-05-21 | Replaced broken SDK upload with AppKit 0.36.0 files() plugin; SP mode + allowAll policy; bytes verified on volume | [appkit-files-plugin-zero-byte-fix](./2026-05-21_appkit-files-plugin-zero-byte-fix.md) |
 | 2026-05-20 | Fixed iosAuth middleware invocation + SDK 0.17 object-signature mismatch; first successful audio upload E2E | [audio-upload-e2e-fix](./2026-05-20_audio-upload-e2e-fix.md) |
 | 2026-05-15 | Full project audit, Isaac messages reviewed, PROJECT_MEMORY + UI plan updated to reflect current state | [project-review-and-memory-update](./2026-05-15_project-review-and-memory-update.md) |
 | 2026-05-14 | iOS auth 3-bug fix (token hash, empty body, Express req.body), E2E pairing test, IP access list docs | [ios-auth-fixes-e2e-pairing](./2026-05-14_ios-auth-fixes-e2e-pairing.md) |
