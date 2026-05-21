@@ -33,8 +33,8 @@
   "license": "Unlicensed",
   "description": "A Databricks App powered by AppKit",
   "dependencies": {
-    "@databricks/appkit": "0.24.0",
-    "@databricks/appkit-ui": "0.24.0",
+    "@databricks/appkit": "0.36.0",
+    "@databricks/appkit-ui": "0.36.0",
     "@databricks/sdk-experimental": "0.17.0",
     "@databricks/zerobus-ingest-sdk": "^1.0.2",
     "busboy": "^1.6.0",
