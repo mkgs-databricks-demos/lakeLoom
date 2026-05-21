@@ -13,7 +13,7 @@ import { z } from 'zod';
 import type { Application } from 'express';
 import { iosAuth } from '../../middleware/ios-auth';
 import { validationError } from '../../lib/errors';
-import { ingestRecord } from '../../services/zerobus-service';
+import { zeroBusService } from '../../services/zerobus-service';
 import { isZerobusReady } from '../../services/secrets-service';
 
 // ── Interfaces ───────────────────────────────────────────────────────────────
@@ -71,14 +71,20 @@ export async function setupEventRoutes(appkit: AppKitContext): Promise<void> {
         const serverTs = new Date().toISOString();
 
         // Enrich and ingest each event
-        for (const event of events) {
-          const enriched = JSON.stringify({
+        const records = events.map((event) =>
+          JSON.stringify({
             ...event,
             _user_id: userId,
             _session_id: sessionId,
             _server_received_at: serverTs,
-          });
-          await ingestRecord(enriched);
+          }),
+        );
+
+        // Use batch ingest for multiple events, single for one
+        if (records.length === 1) {
+          await zeroBusService.ingestRecord(records[0]);
+        } else {
+          await zeroBusService.ingestBatch(records);
         }
 
         res.status(202).json({ accepted: events.length });
