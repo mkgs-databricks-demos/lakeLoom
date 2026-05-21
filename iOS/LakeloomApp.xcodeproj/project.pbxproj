@@ -173,6 +173,10 @@
 		12020A13120012001200120F /* BrandMotionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12010A13120012001200120F /* BrandMotionTests.swift */; };
 		14020A0114001400140014DD /* DocumentPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14010A0114001400140014DD /* DocumentPicker.swift */; };
 		14020A0214001400140014DE /* PendingUploadRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14010A0214001400140014DE /* PendingUploadRoutingTests.swift */; };
+		15020A0115001500150015A1 /* ElapsedTimer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15010A0115001500150015A1 /* ElapsedTimer.swift */; };
+		15020A0215001500150015A2 /* RecordingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15010A0215001500150015A2 /* RecordingView.swift */; };
+		15020A0315001500150015A3 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15010A0315001500150015A3 /* HomeView.swift */; };
+		15020A1115001500150015B1 /* ElapsedTimerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15010A1115001500150015B1 /* ElapsedTimerTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -361,6 +365,10 @@
 		12010A13120012001200120F /* BrandMotionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrandMotionTests.swift; sourceTree = "<group>"; };
 		14010A0114001400140014DD /* DocumentPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentPicker.swift; sourceTree = "<group>"; };
 		14010A0214001400140014DE /* PendingUploadRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingUploadRoutingTests.swift; sourceTree = "<group>"; };
+		15010A0115001500150015A1 /* ElapsedTimer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ElapsedTimer.swift; sourceTree = "<group>"; };
+		15010A0215001500150015A2 /* RecordingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingView.swift; sourceTree = "<group>"; };
+		15010A0315001500150015A3 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		15010A1115001500150015B1 /* ElapsedTimerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ElapsedTimerTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -558,9 +566,18 @@
 		13030A01130013001300130A /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				15030A1115001500150015D1 /* Recording */,
 				13030A02130013001300130B /* Style */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		15030A1115001500150015D1 /* Recording */ = {
+			isa = PBXGroup;
+			children = (
+				15010A1115001500150015B1 /* ElapsedTimerTests.swift */,
+			);
+			path = Recording;
 			sourceTree = "<group>";
 		};
 		13030A02130013001300130B /* Style */ = {
@@ -865,7 +882,9 @@
 		D8D2CD6ABFE5DA02EEDD781D /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				15030A0115001500150015C1 /* Home */,
 				0FC443C43262E9D1D57FB523 /* Onboarding */,
+				15030A0215001500150015C2 /* Recording */,
 				49B25674CBFEAACC580FC175 /* Style */,
 				D0A223937E0DF993D7F14980 /* ErrorScreenView.swift */,
 				237934713C8A40239F2DFFCD /* HomeContainerView.swift */,
@@ -873,6 +892,23 @@
 				77239E5F929E3C7B6AFC5012 /* SplashView.swift */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		15030A0115001500150015C1 /* Home */ = {
+			isa = PBXGroup;
+			children = (
+				15010A0315001500150015A3 /* HomeView.swift */,
+			);
+			path = Home;
+			sourceTree = "<group>";
+		};
+		15030A0215001500150015C2 /* Recording */ = {
+			isa = PBXGroup;
+			children = (
+				15010A0115001500150015A1 /* ElapsedTimer.swift */,
+				15010A0215001500150015A2 /* RecordingView.swift */,
+			);
+			path = Recording;
 			sourceTree = "<group>";
 		};
 		E4BB99D44F748984A8F7745B /* Coordinator */ = {
@@ -1098,6 +1134,7 @@
 				12020A11120012001200120D /* BrandColorsTests.swift in Sources */,
 				12020A13120012001200120F /* BrandMotionTests.swift in Sources */,
 				12020A12120012001200120E /* BrandTypographyTests.swift in Sources */,
+				15020A1115001500150015B1 /* ElapsedTimerTests.swift in Sources */,
 				14020A0214001400140014DE /* PendingUploadRoutingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1155,6 +1192,9 @@
 				8C36A635B5F9A2CC67A00168 /* DeviceKeyStore.swift in Sources */,
 				8EB2DD347CDF4FB8A5C89018 /* ErrorScreenView.swift in Sources */,
 				89DACF879A4F35AAFEB1E3D4 /* HistogramSnapshot.swift in Sources */,
+				15020A0115001500150015A1 /* ElapsedTimer.swift in Sources */,
+				15020A0315001500150015A3 /* HomeView.swift in Sources */,
+				15020A0215001500150015A2 /* RecordingView.swift in Sources */,
 				96E9B37C1A79DDAE84360FA8 /* HomeContainerView.swift in Sources */,
 				522C74694FC1B3C71FC40B7A /* IdentityConfirmationStepView.swift in Sources */,
 				7D74F03B661421CD063B543C /* InMemoryDefaultsStore.swift in Sources */,
