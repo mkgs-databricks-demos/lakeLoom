@@ -50,6 +50,11 @@ interface LakebaseClient {
 /** AppKit files plugin accessor — callable with volume key, returns VolumeHandle */
 interface AppKitFiles {
   (volumeKey: string): {
+    asUser(req: Request): {
+      upload(filePath: string, contents: ReadableStream | Buffer | string, options?: { overwrite?: boolean }): Promise<void>;
+      delete(filePath: string): Promise<void>;
+      createDirectory(directoryPath: string): Promise<void>;
+    };
     upload(filePath: string, contents: ReadableStream | Buffer | string, options?: { overwrite?: boolean }): Promise<void>;
     delete(filePath: string): Promise<void>;
     createDirectory(directoryPath: string): Promise<void>;
@@ -458,7 +463,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
       });
 
       try {
-        await appkitFiles(opts.volumeKey).upload(relativePath, parsed.fileBuffer, { overwrite: false });
+        await appkitFiles(opts.volumeKey).asUser(req).upload(relativePath, parsed.fileBuffer, { overwrite: false });
       } catch (volumeErr) {
         throw buildUploadAppError(500, 'Upload storage failed',
           'The uploaded file could not be written to the configured storage volume.',
@@ -482,7 +487,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
       // ── Step 7: SHA-256 verification ─────────────────────────────────────
       if (parsed.clientSha256 && parsed.clientSha256 !== sha256Hash) {
         try {
-          await appkitFiles(opts.volumeKey).delete(relativePath);
+          await appkitFiles(opts.volumeKey).asUser(req).delete(relativePath);
           logUploadEvent('[upload] volume.deleted_after_sha_mismatch', diagnostics, { client_sha256: parsed.clientSha256 });
         } catch (delErr) {
           logUploadError('[upload] delete_after_sha_mismatch_failed', diagnostics, delErr, { volumeFilePath });
@@ -513,7 +518,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
       } catch (insertErr) {
         logUploadError('[upload] metadata.insert_failed', diagnostics, insertErr);
         try {
-          await appkitFiles(opts.volumeKey).delete(relativePath);
+          await appkitFiles(opts.volumeKey).asUser(req).delete(relativePath);
           logUploadEvent('[upload] volume.deleted_after_metadata_failure', diagnostics);
         } catch (delErr) {
           logUploadError('[upload] delete_after_metadata_failure_failed', diagnostics, delErr, { volumeFilePath });
