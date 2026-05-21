@@ -171,6 +171,8 @@
 		12020A11120012001200120D /* BrandColorsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12010A11120012001200120D /* BrandColorsTests.swift */; };
 		12020A12120012001200120E /* BrandTypographyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12010A12120012001200120E /* BrandTypographyTests.swift */; };
 		12020A13120012001200120F /* BrandMotionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12010A13120012001200120F /* BrandMotionTests.swift */; };
+		14020A0114001400140014DD /* DocumentPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14010A0114001400140014DD /* DocumentPicker.swift */; };
+		14020A0214001400140014DE /* PendingUploadRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14010A0214001400140014DE /* PendingUploadRoutingTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -357,6 +359,8 @@
 		12010A11120012001200120D /* BrandColorsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrandColorsTests.swift; sourceTree = "<group>"; };
 		12010A12120012001200120E /* BrandTypographyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrandTypographyTests.swift; sourceTree = "<group>"; };
 		12010A13120012001200120F /* BrandMotionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrandMotionTests.swift; sourceTree = "<group>"; };
+		14010A0114001400140014DD /* DocumentPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentPicker.swift; sourceTree = "<group>"; };
+		14010A0214001400140014DE /* PendingUploadRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingUploadRoutingTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -601,6 +605,7 @@
 				F0010A01F001F001F001F001 /* CaptureContextStore.swift */,
 				C0010A01C001C001C001C001 /* CaptureService.swift */,
 				7F84DC6843AC8EE019EF2578 /* CaptureSession.swift */,
+				14010A0114001400140014DD /* DocumentPicker.swift */,
 				D0010A01D001D001D001D001 /* EndpointSmokeTestView.swift */,
 				C0010A02C002C002C002C002 /* FileSHA256.swift */,
 				C0010A03C003C003C003C003 /* LiveCaptureService.swift */,
@@ -819,6 +824,7 @@
 			children = (
 				B0010A13B013B013B013B013 /* LiveUploadCoordinatorTests.swift */,
 				B0010A11B011B011B011B011 /* MultipartFormBuilderTests.swift */,
+				14010A0214001400140014DE /* PendingUploadRoutingTests.swift */,
 				11010A02110011001100110B /* UploadErrorCodeTests.swift */,
 				B0010A12B012B012B012B012 /* UploadQueueStoreTests.swift */,
 			);
@@ -1092,6 +1098,7 @@
 				12020A11120012001200120D /* BrandColorsTests.swift in Sources */,
 				12020A13120012001200120F /* BrandMotionTests.swift in Sources */,
 				12020A12120012001200120E /* BrandTypographyTests.swift in Sources */,
+				14020A0214001400140014DE /* PendingUploadRoutingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1123,6 +1130,7 @@
 				E0020A01E001E001E001E001 /* PhotoCapture.swift in Sources */,
 				E0020A02E002E002E002E002 /* PhotoCaptureEngine.swift in Sources */,
 				964D84FECA40C505ADF6D9EC /* CaptureSession.swift in Sources */,
+				14020A0114001400140014DD /* DocumentPicker.swift in Sources */,
 				D0020A01D001D001D001D001 /* EndpointSmokeTestView.swift in Sources */,
 				C0020A02C002C002C002C002 /* FileSHA256.swift in Sources */,
 				C0020A03C003C003C003C003 /* LiveCaptureService.swift in Sources */,
