@@ -177,6 +177,7 @@
 		15020A0215001500150015A2 /* RecordingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15010A0215001500150015A2 /* RecordingView.swift */; };
 		15020A0315001500150015A3 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15010A0315001500150015A3 /* HomeView.swift */; };
 		15020A1115001500150015B1 /* ElapsedTimerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15010A1115001500150015B1 /* ElapsedTimerTests.swift */; };
+		16020A1116001600160016B1 /* HomeViewResultMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16010A1116001600160016B1 /* HomeViewResultMappingTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -369,6 +370,7 @@
 		15010A0215001500150015A2 /* RecordingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingView.swift; sourceTree = "<group>"; };
 		15010A0315001500150015A3 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 		15010A1115001500150015B1 /* ElapsedTimerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ElapsedTimerTests.swift; sourceTree = "<group>"; };
+		16010A1116001600160016B1 /* HomeViewResultMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeViewResultMappingTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -566,10 +568,19 @@
 		13030A01130013001300130A /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				16030A1116001600160016E1 /* Home */,
 				15030A1115001500150015D1 /* Recording */,
 				13030A02130013001300130B /* Style */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		16030A1116001600160016E1 /* Home */ = {
+			isa = PBXGroup;
+			children = (
+				16010A1116001600160016B1 /* HomeViewResultMappingTests.swift */,
+			);
+			path = Home;
 			sourceTree = "<group>";
 		};
 		15030A1115001500150015D1 /* Recording */ = {
@@ -1135,6 +1146,7 @@
 				12020A13120012001200120F /* BrandMotionTests.swift in Sources */,
 				12020A12120012001200120E /* BrandTypographyTests.swift in Sources */,
 				15020A1115001500150015B1 /* ElapsedTimerTests.swift in Sources */,
+				16020A1116001600160016B1 /* HomeViewResultMappingTests.swift in Sources */,
 				14020A0214001400140014DE /* PendingUploadRoutingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
