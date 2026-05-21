@@ -105,7 +105,7 @@ export async function setupZerobusRoutes(appkit: AppKitContext): Promise<void> {
     //
     // Aggregate statistics from the full pool event history in Lakebase.
 
-    app.get('/api/zerobus/stats', async (req, res) => {
+    app.get('/api/zerobus/stats', async (_req, res) => {
       try {
         const stats = await getPoolStats();
 
