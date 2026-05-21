@@ -46,112 +46,15 @@ struct EndpointSmokeTestView: View {
                 contextHeader
 
                 ScrollView {
-                    VStack(spacing: 8) {
-                        actionButton(
-                            "POST /api/projects/:id/captures",
-                            systemImage: "plus.circle",
-                            tag: "create",
-                            action: createCaptureSession
-                        )
-                        actionButton(
-                            "GET /api/projects/:id/captures",
-                            systemImage: "list.bullet",
-                            tag: "list",
-                            action: listCaptures
-                        )
-                        actionButton(
-                            "GET /api/captures/:id",
-                            systemImage: "doc.text.magnifyingglass",
-                            tag: "get",
-                            action: getLastCapture,
-                            disabled: lastCaptureID == nil
-                        )
-                        actionButton(
-                            "PATCH /api/captures/:id (cancelled)",
-                            systemImage: "xmark.octagon",
-                            tag: "cancel",
-                            action: cancelLastCapture,
-                            disabled: lastCaptureID == nil || lastCaptureTerminalState != nil
-                        )
-                        actionButton(
-                            "PATCH /api/captures/:id (completed)",
-                            systemImage: "checkmark.circle",
-                            tag: "complete",
-                            action: completeLastCapture,
-                            disabled: lastCaptureID == nil || lastCaptureTerminalState != nil
-                        )
-
-                        Divider()
-                            .padding(.vertical, 4)
-
-                        if uploadCoordinator == nil {
-                            Text("UploadCoordinator not wired — audio + photo upload disabled.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            actionButton(
-                                isRecording ? "Stop + upload audio" : "Start recording audio",
-                                systemImage: isRecording ? "stop.circle.fill" : "mic.circle.fill",
-                                tag: isRecording ? "audio.stop" : "audio.start",
-                                action: isRecording ? stopAndUploadAudio : startRecordingAudio,
-                                disabled: lastCaptureID == nil
-                            )
-
-                            if photoCapture != nil {
-                                actionButton(
-                                    "Capture photo + upload",
-                                    systemImage: "camera.fill",
-                                    tag: "photo",
-                                    action: capturePhotoAndUpload,
-                                    disabled: lastCaptureID == nil || isRecording
-                                )
-                            } else {
-                                Text("PhotoCapture not wired — photo capture disabled.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            // Documents are project-level — they don't
-                            // hang off a capture session. Always
-                            // available once UploadCoordinator is wired.
-                            actionButton(
-                                "Pick + upload document",
-                                systemImage: "doc.fill.badge.plus",
-                                tag: "document",
-                                action: { showingDocumentPicker = true }
-                            )
-
-                            actionButton(
-                                "Clear failed uploads",
-                                systemImage: "trash.slash",
-                                tag: "clearfailed",
-                                action: clearFailedUploads
-                            )
-
-                            if lastCaptureID == nil {
-                                Text("Create a capture first to enable audio + photo upload.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-
-                        Divider()
-                            .padding(.vertical, 4)
-
-                        Button(role: .destructive) {
-                            lines.removeAll()
-                            lastCaptureID = nil
-                        } label: {
-                            Label("Clear log", systemImage: "trash")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
-                        .padding(.top, 8)
+                    VStack(alignment: .leading, spacing: 18) {
+                        captureLifecycleSection
+                        uploadSmokeTestsSection
+                        resetSection
                     }
                     .padding(.horizontal)
                     .padding(.vertical, 12)
                 }
-                .frame(maxHeight: 320)
+                .frame(maxHeight: 480)
 
                 Divider()
 
@@ -207,13 +110,190 @@ struct EndpointSmokeTestView: View {
         .background(Color(uiColor: .secondarySystemBackground))
     }
 
+    // MARK: - Section layouts
+
+    private var captureLifecycleSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            sectionHeader(
+                title: "Capture lifecycle",
+                subtitle: "Server-side capture_sessions CRUD"
+            )
+            VStack(spacing: 6) {
+                actionButton(
+                    "POST /api/projects/:id/captures",
+                    systemImage: "plus.circle",
+                    tag: "create",
+                    action: createCaptureSession
+                )
+                actionButton(
+                    "GET /api/projects/:id/captures",
+                    systemImage: "list.bullet",
+                    tag: "list",
+                    action: listCaptures
+                )
+                buttonWithReason(
+                    "GET /api/captures/:id",
+                    systemImage: "doc.text.magnifyingglass",
+                    tag: "get",
+                    action: getLastCapture,
+                    disabledReason: lastCaptureID == nil ? "Create a capture first" : nil
+                )
+                buttonWithReason(
+                    "PATCH /api/captures/:id (cancelled)",
+                    systemImage: "xmark.octagon",
+                    tag: "cancel",
+                    action: cancelLastCapture,
+                    disabledReason: patchDisabledReason
+                )
+                buttonWithReason(
+                    "PATCH /api/captures/:id (completed)",
+                    systemImage: "checkmark.circle",
+                    tag: "complete",
+                    action: completeLastCapture,
+                    disabledReason: patchDisabledReason
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var uploadSmokeTestsSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            sectionHeader(
+                title: "Upload smoke tests",
+                subtitle: "Drive the four upload routes against dev",
+                accentTint: true
+            )
+            if uploadCoordinator == nil {
+                Text("UploadCoordinator not wired — uploads disabled.")
+                    .font(BrandTypography.caption)
+                    .foregroundStyle(BrandColors.textSecondary)
+            } else {
+                VStack(spacing: 6) {
+                    buttonWithReason(
+                        isRecording ? "Stop + upload audio" : "Start recording audio",
+                        systemImage: isRecording ? "stop.circle.fill" : "mic.circle.fill",
+                        tag: isRecording ? "audio.stop" : "audio.start",
+                        action: isRecording ? stopAndUploadAudio : startRecordingAudio,
+                        disabledReason: lastCaptureID == nil ? "Create a capture first" : nil,
+                        tint: BrandColors.accentPrimary
+                    )
+                    buttonWithReason(
+                        "Capture photo + upload",
+                        systemImage: "camera.fill",
+                        tag: "photo",
+                        action: capturePhotoAndUpload,
+                        disabledReason: photoDisabledReason,
+                        tint: BrandColors.accentPrimary
+                    )
+                    buttonWithReason(
+                        "Pick + upload document",
+                        systemImage: "doc.fill.badge.plus",
+                        tag: "document",
+                        action: { showingDocumentPicker = true },
+                        disabledReason: nil,
+                        tint: BrandColors.accentPrimary
+                    )
+                    buttonWithReason(
+                        "Clear failed uploads",
+                        systemImage: "trash.slash",
+                        tag: "clearfailed",
+                        action: clearFailedUploads,
+                        disabledReason: nil
+                    )
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var resetSection: some View {
+        Divider()
+        Button(role: .destructive) {
+            lines.removeAll()
+            lastCaptureID = nil
+            lastCaptureTerminalState = nil
+        } label: {
+            Label("Clear log + last capture", systemImage: "trash")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+    }
+
+    /// Reason the cancel/complete PATCH buttons are disabled. Three
+    /// states map to three distinct messages so the user knows
+    /// exactly which precondition they're missing.
+    private var patchDisabledReason: String? {
+        if lastCaptureID == nil { return "Create a capture first" }
+        if lastCaptureTerminalState != nil {
+            return "Already PATCHed to \(lastCaptureTerminalState!.rawValue) — create a fresh capture"
+        }
+        return nil
+    }
+
+    private var photoDisabledReason: String? {
+        if photoCapture == nil { return "PhotoCapture not wired" }
+        if lastCaptureID == nil { return "Create a capture first" }
+        if isRecording { return "Stop the active recording first" }
+        return nil
+    }
+
+    // MARK: - Component helpers
+
+    private func sectionHeader(
+        title: String,
+        subtitle: String,
+        accentTint: Bool = false
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(BrandTypography.titleSmall)
+                .foregroundStyle(accentTint ? BrandColors.accentPrimary : BrandColors.textPrimary)
+            Text(subtitle)
+                .font(BrandTypography.caption)
+                .foregroundStyle(BrandColors.textSecondary)
+        }
+    }
+
+    /// A primary action button paired with a per-button disabled
+    /// reason caption. When `disabledReason` is non-nil the button
+    /// is disabled AND a small caption is shown right below it so
+    /// the user sees the specific precondition that's missing.
+    @ViewBuilder
+    private func buttonWithReason(
+        _ title: String,
+        systemImage: String,
+        tag: String,
+        action: @escaping () async -> Void,
+        disabledReason: String?,
+        tint: Color? = nil
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            actionButton(
+                title,
+                systemImage: systemImage,
+                tag: tag,
+                action: action,
+                disabled: disabledReason != nil,
+                tint: tint
+            )
+            if let reason = disabledReason {
+                Text(reason)
+                    .font(BrandTypography.caption)
+                    .foregroundStyle(BrandColors.textSecondary)
+                    .padding(.leading, 8)
+            }
+        }
+    }
+
     @ViewBuilder
     private func actionButton(
         _ title: String,
         systemImage: String,
         tag: String,
         action: @escaping () async -> Void,
-        disabled: Bool = false
+        disabled: Bool = false,
+        tint: Color? = nil
     ) -> some View {
         Button {
             Task {
@@ -236,6 +316,7 @@ struct EndpointSmokeTestView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(.borderedProminent)
+        .tint(tint ?? Color.accentColor)
         .disabled(disabled || inFlight != nil)
     }
 
