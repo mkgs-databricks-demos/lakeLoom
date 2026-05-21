@@ -57,7 +57,7 @@ lakeLoom/
 ├── lakeloom-ai/
 │   ├── databricks.yml              # App bundle config
 │   ├── app.yaml                    # Databricks App runtime manifest (command, env vars)
-│   ├── package.json                # Node.js dependencies (AppKit 0.24.0, React 19, Zod, ZeroBus SDK)
+│   ├── package.json                # Node.js dependencies (AppKit 0.36.0, React 19, Zod, ZeroBus SDK)
 │   ├── server/                     # Express API (TypeScript)
 │   │   ├── server.ts              # Entry: secrets → migrations → routes → serve
 │   │   ├── lib/                   # crypto.ts, errors.ts (RFC 9457)
@@ -111,6 +111,7 @@ lakeLoom/
 * **Isaac notified** (2026-05-12) about `screenshots` and `documents` volumes via `lakeLoom/architecture/hey_isaac/2026-05-12_new-upload-volumes.md`.
 * **Isaac notified** (2026-05-13) about pairing endpoint contract via `lakeLoom/architecture/hey_isaac/2026-05-13_pairing-auth-endpoints-live.md`. Covers: Layer 1/2 auth headers, POST /confirm contract, QR payload structure, error format, open questions (device_label, pubkey encoding, filename convention).
 * **2026-05-15: QR pairing validated end-to-end on physical iPhone.** Full chain: QR scan → M2M → confirm → device-key binding → project create → home screen. iOS Module 01 merged (PR #18). Collaboration model (hi_genie/hey_isaac) proven effective for cross-domain debugging.
+* **2026-05-21: Zero-byte upload bug fixed.** Root cause: `@databricks/sdk-experimental` `files.upload()` silently dropped Buffer contents. Fix: upgraded to AppKit 0.36.0 `files()` plugin with `policy: files.policy.allowAll()` in service-principal mode. Bytes verified on volume (3,244 bytes WAV, SHA match). Xcode SPN granted WRITE_VOLUME via new Task 4 in `configure_app_spn` job.
 
 
 ## Resolved Target Variables (dev)

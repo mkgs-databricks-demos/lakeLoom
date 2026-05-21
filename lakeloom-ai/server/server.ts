@@ -1,4 +1,4 @@
-import { createApp, analytics, lakebase, server } from '@databricks/appkit';
+import { createApp, analytics, lakebase, server, files } from '@databricks/appkit';
 import { setupPairingRoutes } from './routes/pairing/pairing-routes';
 import { setupCaptureRoutes } from './routes/captures/capture-routes';
 import registerUploads from './routes/uploads/upload-routes';
@@ -31,12 +31,19 @@ function classifyUploadIngressPath(path: string): 'audio' | 'screenshot' | 'phot
 
 createApp({
   plugins: [
-    server({ autoStart: false }),
+    server(),
     analytics(),
     lakebase(),
+    files({
+      volumes: {
+        'session_audio': { policy: files.policy.allowAll() },
+        'screenshots': { policy: files.policy.allowAll() },
+        'documents': { policy: files.policy.allowAll() },
+      },
+    }),
   ],
-})
-  .then(async (appkit) => {
+
+  async onPluginsReady(appkit) {
     // ── Initialize secrets from Databricks secret scope ────────────────────
     // Non-fatal: missing secrets are logged; pairing endpoints return 503.
     await initSecrets().catch((err) => {
@@ -154,7 +161,6 @@ createApp({
       app.use(problemDetailsHandler);
     });
 
-    await appkit.server.start();
 
     // ── Graceful shutdown ─────────────────────────────────────────────────
     // The platform sends SIGTERM on redeploy/stop. We have 15s before a
@@ -199,5 +205,5 @@ createApp({
 
     process.on('SIGTERM', () => shutdown('SIGTERM'));
     process.on('SIGINT', () => shutdown('SIGINT'));
-  })
-  .catch(console.error);
+  },
+}).catch(console.error);
