@@ -261,7 +261,14 @@ public actor LiveUploadCoordinator: UploadCoordinator {
             // Surface as a permanent failure so we don't loop.
             throw LakeloomAppError.transport(reason: "file unreadable: \(error.localizedDescription)")
         }
-        let path = "/api/captures/\(upload.captureSessionID)/\(upload.kind.endpointSuffix)"
+        guard let path = upload.endpointPath() else {
+            // PendingUpload was constructed inconsistently — e.g.,
+            // a .document upload without a projectID. Permanent
+            // failure: retrying won't fix it.
+            throw LakeloomAppError.transport(
+                reason: "no endpoint path for \(upload.kind.rawValue) upload \(upload.id)"
+            )
+        }
         let contentType = MultipartFormBuilder.contentTypeHeaderValue(boundary: boundary)
         let data = try await lakeloomApp.requestRaw(
             workspaceID: upload.workspaceID,

@@ -20,7 +20,20 @@ public struct PendingUpload: Sendable, Equatable, Hashable, Codable, Identifiabl
     /// Server-side capture session this upload attaches to. The
     /// endpoint path is built as
     /// `/api/captures/<captureSessionID>/<kind.endpointSuffix>`.
+    ///
+    /// Required for `.audio` / `.screenshot` / `.photo`. For
+    /// `.document` uploads this field is still populated — we set
+    /// it to the same value as ``projectID`` so logging /
+    /// persistence stay homogeneous — but the wire path uses
+    /// `projectID` directly (documents live at the project level,
+    /// not under a capture).
     public let captureSessionID: String
+    /// Project this upload attaches to. Only meaningful for
+    /// `.document` uploads (route: `/api/projects/<projectID>/documents`)
+    /// per Genie's 2026-05-13 upload-traceability response. Nil for
+    /// `.audio` / `.screenshot` / `.photo`, which route under a
+    /// capture session.
+    public let projectID: String?
     public let kind: Kind
     public let localFileURL: URL
     public let mimeType: String
@@ -54,6 +67,7 @@ public struct PendingUpload: Sendable, Equatable, Hashable, Codable, Identifiabl
         id: String,
         workspaceID: String,
         captureSessionID: String,
+        projectID: String? = nil,
         kind: Kind,
         localFileURL: URL,
         mimeType: String,
@@ -71,6 +85,7 @@ public struct PendingUpload: Sendable, Equatable, Hashable, Codable, Identifiabl
         self.id = id
         self.workspaceID = workspaceID
         self.captureSessionID = captureSessionID
+        self.projectID = projectID
         self.kind = kind
         self.localFileURL = localFileURL
         self.mimeType = mimeType
@@ -84,6 +99,28 @@ public struct PendingUpload: Sendable, Equatable, Hashable, Codable, Identifiabl
         self.nextAttemptAt = nextAttemptAt
         self.lastError = lastError
         self.remoteUploadID = remoteUploadID
+    }
+
+    /// Server endpoint this upload should target. Documents live at
+    /// the project level; everything else hangs off a capture
+    /// session. Per Genie's 2026-05-13 upload-traceability response:
+    ///
+    /// * `.audio` / `.screenshot` / `.photo` →
+    ///   `POST /api/captures/<captureSessionID>/<kind.endpointSuffix>`
+    /// * `.document` →
+    ///   `POST /api/projects/<projectID>/documents`
+    ///
+    /// Returns nil when the kind would need a `projectID` but it's
+    /// missing — the upload coordinator surfaces this as a
+    /// permanent failure rather than firing the wrong path.
+    public func endpointPath() -> String? {
+        switch kind {
+        case .document:
+            guard let projectID, !projectID.isEmpty else { return nil }
+            return "/api/projects/\(projectID)/documents"
+        case .audio, .screenshot, .photo:
+            return "/api/captures/\(captureSessionID)/\(kind.endpointSuffix)"
+        }
     }
 
     /// Upload categories. Maps 1:1 to ``CaptureUpload/Kind`` on the

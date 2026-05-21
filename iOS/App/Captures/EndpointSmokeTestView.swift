@@ -34,6 +34,12 @@ struct EndpointSmokeTestView: View {
     @State private var isRecording: Bool = false
     @State private var uploadObserverTask: Task<Void, Never>?
 
+    /// Document-upload sub-flow: toggled when the user taps the
+    /// "Pick + upload document" button. The sheet uses
+    /// ``DocumentPicker`` which bridges to
+    /// `UIDocumentPickerViewController`.
+    @State private var showingDocumentPicker: Bool = false
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -105,6 +111,16 @@ struct EndpointSmokeTestView: View {
                                     .foregroundStyle(.secondary)
                             }
 
+                            // Documents are project-level — they don't
+                            // hang off a capture session. Always
+                            // available once UploadCoordinator is wired.
+                            actionButton(
+                                "Pick + upload document",
+                                systemImage: "doc.fill.badge.plus",
+                                tag: "document",
+                                action: { showingDocumentPicker = true }
+                            )
+
                             actionButton(
                                 "Clear failed uploads",
                                 systemImage: "trash.slash",
@@ -157,6 +173,18 @@ struct EndpointSmokeTestView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done", action: onDismiss)
                 }
+            }
+            .sheet(isPresented: $showingDocumentPicker) {
+                DocumentPicker(
+                    onPick: { url in
+                        showingDocumentPicker = false
+                        Task { await uploadDocument(at: url) }
+                    },
+                    onCancel: {
+                        showingDocumentPicker = false
+                        append(.start("DOC", "picker.cancelled", ""))
+                    }
+                )
             }
         }
     }
@@ -356,6 +384,127 @@ struct EndpointSmokeTestView: View {
         }
         // Reuse the same upload observer pattern as audio.
         observeUpload(uploadID: uploadID, tag: "PHOTO", coordinator: uploads)
+    }
+
+    // MARK: - Document upload
+
+    /// Picked-file URL is security-scoped; copy bytes into a stable
+    /// Application Support location before enqueueing so the upload
+    /// coordinator's worker (which runs later, asynchronously) can
+    /// read the file without the scoped lifetime constraint.
+    private func uploadDocument(at sourceURL: URL) async {
+        guard let uploads = uploadCoordinator else { return }
+
+        append(.start("DOC", "picker.picked", sourceURL.lastPathComponent))
+
+        // Start scoped access just long enough to copy the bytes.
+        let granted = sourceURL.startAccessingSecurityScopedResource()
+        defer {
+            if granted {
+                sourceURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        let localURL: URL
+        do {
+            localURL = try copyPickedDocumentToAppSupport(sourceURL: sourceURL)
+        } catch {
+            append(.fail("DOC", "copy: \(error.localizedDescription)"))
+            return
+        }
+
+        // Hash the copied bytes (the picked URL might be gone by the
+        // time the upload worker actually reads it, so always hash
+        // from the local copy).
+        let sha: String
+        let sizeBytes: Int64
+        do {
+            sha = try FileSHA256.hex(of: localURL)
+            let attrs = try FileManager.default.attributesOfItem(atPath: localURL.path)
+            sizeBytes = (attrs[.size] as? NSNumber)?.int64Value ?? 0
+        } catch {
+            append(.fail("DOC", "sha256: \(error.localizedDescription)"))
+            return
+        }
+
+        let mimeType = mimeType(forExtension: localURL.pathExtension)
+        let uploadID = UUID().uuidString
+        let pending = PendingUpload(
+            id: uploadID,
+            workspaceID: workspaceID,
+            // For documents we tag captureSessionID = projectID so
+            // logs and queue persistence stay homogeneous. The wire
+            // path is computed from `projectID` directly inside
+            // `PendingUpload.endpointPath()`.
+            captureSessionID: projectID,
+            projectID: projectID,
+            kind: .document,
+            localFileURL: localURL,
+            mimeType: mimeType,
+            sizeBytes: sizeBytes,
+            sha256Hex: sha,
+            clientTimestamp: Date(),
+            originalFilename: sourceURL.lastPathComponent,
+            createdAt: Date()
+        )
+
+        append(.start(
+            "DOC",
+            "upload.enqueue",
+            "id=\(uploadID.prefix(8))… mime=\(mimeType) bytes=\(sizeBytes) sha=\(sha.prefix(8))…"
+        ))
+        do {
+            try await uploads.enqueue(pending)
+        } catch let error as UploadCoordinatorError {
+            append(.fail("DOC", "enqueue: \(String(describing: error))"))
+            return
+        } catch {
+            append(.fail("DOC", "enqueue: \(error.localizedDescription)"))
+            return
+        }
+
+        observeUpload(uploadID: uploadID, tag: "DOC", coordinator: uploads)
+    }
+
+    /// Copies the picked file into `<Application Support>/Documents/`
+    /// so the file is available after the picker's security-scoped
+    /// access ends. Uses the original filename + a UUID suffix to
+    /// avoid collisions across multiple uploads of the same file.
+    private func copyPickedDocumentToAppSupport(sourceURL: URL) throws -> URL {
+        let base = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let dir = base.appendingPathComponent("Documents", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let baseName = sourceURL.deletingPathExtension().lastPathComponent
+        let ext = sourceURL.pathExtension.isEmpty ? "pdf" : sourceURL.pathExtension
+        let target = dir.appendingPathComponent(
+            "\(baseName)-\(UUID().uuidString.prefix(8)).\(ext)",
+            isDirectory: false
+        )
+        // `replaceItemAt` would be nicer for atomicity but we don't
+        // have an existing target file by construction. `copyItem` is
+        // safer than `moveItem` because the source may be a
+        // sandboxed URL we don't own.
+        if FileManager.default.fileExists(atPath: target.path) {
+            try FileManager.default.removeItem(at: target)
+        }
+        try FileManager.default.copyItem(at: sourceURL, to: target)
+        return target
+    }
+
+    /// Server allowlist: PDF + DOCX. Map iOS extensions to the right
+    /// MIME types so the multipart `Content-Type` part header is
+    /// accepted by `parseMultipart` on the server.
+    private func mimeType(forExtension ext: String) -> String {
+        switch ext.lowercased() {
+        case "pdf":  return "application/pdf"
+        case "docx": return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        default:     return "application/octet-stream"
+        }
     }
 
     // MARK: - Clear failed uploads
