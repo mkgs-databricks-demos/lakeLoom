@@ -2,21 +2,37 @@
  * Transcript event forwarding routes.
  *
  * iOS sends real-time transcript events during a session.
- * The App enriches with user_id, session metadata, and server timestamp,
- * then forwards to the bronze table (transcript_events_raw) via ZeroBus SDK.
+ * The App enriches with structured fields matching the bronze table schema
+ * (transcript_events_raw), then forwards via ZeroBus SDK.
+ *
+ * ZeroBus maps JSON field names directly to Delta table column names.
+ * The record shape MUST match the target table DDL:
+ *   record_id, ingested_at, event_id, session_id, project_id, user_id,
+ *   device_id, event_type, event_time, transcript_text, transcript_language,
+ *   source_platform, workspace_id, headers, body
+ *
+ * CRITICAL: Pass plain objects to ingestRecordOffset(), NOT JSON strings.
+ * The SDK serializes internally. Passing JSON.stringify()'d strings causes
+ * double-encoding and schema validation failures on the server side.
+ *
+ * Key conventions (from dbxW reference):
+ *   - record_id: crypto.randomUUID() — app-generated, NOT NULL PK
+ *   - ingested_at: Date.now() * 1000 — epoch MICROSECONDS (not ISO string)
+ *   - body: JSON.stringify(event) — VARIANT column (string-encoded JSON)
  *
  * Endpoint:
  *   POST /api/sessions/:session_id/events — iOS-authenticated (Layer 0+1)
  */
 
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Application } from 'express';
 import { iosAuth } from '../../middleware/ios-auth';
 import { validationError } from '../../lib/errors';
-import { ingestRecord } from '../../services/zerobus-service';
+import { zeroBusService } from '../../services/zerobus-service';
 import { isZerobusReady } from '../../services/secrets-service';
 
-// ── Interfaces ───────────────────────────────────────────────────────────────
+// ── Interfaces ───────────────────────────────────────────────────────────
 
 interface LakebaseClient {
   query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
@@ -27,7 +43,7 @@ interface AppKitContext {
   server: { extend(fn: (app: Application) => void): void };
 }
 
-// ── Event schema ─────────────────────────────────────────────────────────────
+// ── Event schema ─────────────────────────────────────────────────────────
 // Flexible: accept any JSON payload from iOS with at minimum an event_type.
 // The bronze table stores raw events; enrichment happens downstream.
 
@@ -41,7 +57,7 @@ const EventBatch = z.union([
   z.array(EventBody).min(1).max(100),
 ]);
 
-// ── Route setup ──────────────────────────────────────────────────────────────
+// ── Route setup ──────────────────────────────────────────────────────────
 
 export async function setupEventRoutes(appkit: AppKitContext): Promise<void> {
   const { lakebase } = appkit;
@@ -67,18 +83,50 @@ export async function setupEventRoutes(appkit: AppKitContext): Promise<void> {
 
         const events = Array.isArray(parsed.data) ? parsed.data : [parsed.data];
         const sessionId = req.params.session_id;
-        const { userId } = req.user!;
-        const serverTs = new Date().toISOString();
+        const { userId, workspaceId } = req.user!;
 
-        // Enrich and ingest each event
-        for (const event of events) {
-          const enriched = JSON.stringify({
-            ...event,
-            _user_id: userId,
-            _session_id: sessionId,
-            _server_received_at: serverTs,
-          });
-          await ingestRecord(enriched);
+        // Build records as PLAIN OBJECTS — the SDK serializes internally.
+        // Passing JSON.stringify()'d strings causes double-encoding and
+        // server-side schema validation failures (data never materializes).
+        const records = events.map((event) => {
+          const { event_type, text, language, ...rest } = event as Record<string, unknown>;
+
+          return {
+            // ── ZeroBus PK + timestamp (matching dbxW pattern) ───────────
+            record_id: randomUUID(),
+            ingested_at: Date.now() * 1000, // epoch microseconds (µs)
+
+            // ── App-level event identifier ───────────────────────────────
+            event_id: randomUUID(),
+            event_type: event_type as string,
+
+            // ── Enrichment from auth context ─────────────────────────────
+            session_id: sessionId,
+            user_id: userId,
+            workspace_id: workspaceId || null,
+            source_platform: 'ios',
+
+            // ── Transcript-specific columns ───────────────────────────────
+            transcript_text: (text as string) || null,
+            transcript_language: (language as string) || null,
+
+            // ── Optional columns (populated when available) ─────────────
+            event_time: (rest.event_time as string) || null,
+            project_id: (rest.project_id as string) || null,
+            device_id: (rest.device_id as string) || null,
+
+            // ── Full raw payload as VARIANT (string-encoded JSON) ─────────
+            body: JSON.stringify(event),
+          };
+        });
+
+        // Use batch ingest for multiple events, single for one.
+        // Pass the object directly — the service's ingestRecord() passes it
+        // through to stream.ingestRecordOffset() which handles serialization.
+        if (records.length === 1) {
+          await zeroBusService.ingestRecord(records[0]);
+        } else {
+          await zeroBusService.ingestBatch(records);
         }
 
         res.status(202).json({ accepted: events.length });

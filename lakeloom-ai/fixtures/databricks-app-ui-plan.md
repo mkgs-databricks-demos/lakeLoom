@@ -205,8 +205,8 @@ Display transcripts from ZeroBus events — both real-time and historical.
 - Filter by date range, session state
 
 **Data source:**
-- Bronze: `transcript_events_raw` (via SQL warehouse query)
-- Silver: `transcript_events` / `session_transcripts` (once SDP pipeline exists)
+- Bronze: `transcript_events_raw` — ✅ LIVE (validated 2026-05-21, 106+ records, sub-second ingest)
+- Silver: `transcript_events` / `session_transcripts` (SDP pipeline — next priority)
 - Live: ZeroBus SSE subscription (App already has `sse-service.ts`)
 
 **Dependencies:** Capture Session Browser + Audio Player (for time-linked playback)
@@ -288,7 +288,7 @@ The ordering optimizes for: (a) unblocking iOS Module 06, (b) delivering reviewa
 | **Phase 3** | Media Viewer & Audio Playback | Ready (depends on Phase 2) | 3–4 days |
 | **Phase 4** | Browser-Side Uploads | Ready (depends on Phase 2+3) | 1–2 days |
 | **Phase 5** | Device & Admin Panel | Ready (independent) | 1–2 days |
-| **Phase 6** | Transcript Viewer | Blocked on SDP pipeline for silver; bronze queries v1 possible | 3–4 days |
+| **Phase 6** | Transcript Viewer | ⏳ UNBLOCKED — bronze ingest validated (2026-05-21); silver SDP next | 3–4 days |
 | **Phase 7** | Genie Code Session Planning | Blocked on gold-layer tables + Agent design | 5–7 days |
 
 **Remaining estimated: ~15–21 working days for Phases 2–7.**
@@ -329,7 +329,7 @@ Reusable components serving multiple features:
 
 1. ~~**Project creation from browser vs iOS-only?**~~ → RESOLVED: Both. Browser uses on-behalf-of-user auth.
 2. **Should the browser see ALL users' projects or only the current user's?** → Suggest: current user by default, admin toggle for "all projects" view.
-3. **Transcript storage before SDP pipeline exists:** Query bronze directly for v1, switch to silver when pipeline ships.
+3. ~~**Transcript storage before SDP pipeline exists:** Query bronze directly for v1, switch to silver when pipeline ships.~~ → RESOLVED (2026-05-21): Bronze ingest working. Phase 6 v1 will query `transcript_events_raw` directly. Silver pipeline planned as enhancement.
 4. **Agent implementation:** Notebook-based (triggered via Jobs API) or in-process (App backend calls foundation model)? → Suggest: Jobs API — decouples compute, leverages existing serverless, produces auditable runs.
 5. **Non-blocking onboarding issue:** iOS `GET /api/v1/projects` fails on first call after pairing. Isaac investigating — may require `dualAuth` query-param canonicalization fix on App side.
 
