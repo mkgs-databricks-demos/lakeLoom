@@ -34,108 +34,27 @@ struct EndpointSmokeTestView: View {
     @State private var isRecording: Bool = false
     @State private var uploadObserverTask: Task<Void, Never>?
 
+    /// Document-upload sub-flow: toggled when the user taps the
+    /// "Pick + upload document" button. The sheet uses
+    /// ``DocumentPicker`` which bridges to
+    /// `UIDocumentPickerViewController`.
+    @State private var showingDocumentPicker: Bool = false
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 contextHeader
 
                 ScrollView {
-                    VStack(spacing: 8) {
-                        actionButton(
-                            "POST /api/projects/:id/captures",
-                            systemImage: "plus.circle",
-                            tag: "create",
-                            action: createCaptureSession
-                        )
-                        actionButton(
-                            "GET /api/projects/:id/captures",
-                            systemImage: "list.bullet",
-                            tag: "list",
-                            action: listCaptures
-                        )
-                        actionButton(
-                            "GET /api/captures/:id",
-                            systemImage: "doc.text.magnifyingglass",
-                            tag: "get",
-                            action: getLastCapture,
-                            disabled: lastCaptureID == nil
-                        )
-                        actionButton(
-                            "PATCH /api/captures/:id (cancelled)",
-                            systemImage: "xmark.octagon",
-                            tag: "cancel",
-                            action: cancelLastCapture,
-                            disabled: lastCaptureID == nil || lastCaptureTerminalState != nil
-                        )
-                        actionButton(
-                            "PATCH /api/captures/:id (completed)",
-                            systemImage: "checkmark.circle",
-                            tag: "complete",
-                            action: completeLastCapture,
-                            disabled: lastCaptureID == nil || lastCaptureTerminalState != nil
-                        )
-
-                        Divider()
-                            .padding(.vertical, 4)
-
-                        if uploadCoordinator == nil {
-                            Text("UploadCoordinator not wired — audio + photo upload disabled.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            actionButton(
-                                isRecording ? "Stop + upload audio" : "Start recording audio",
-                                systemImage: isRecording ? "stop.circle.fill" : "mic.circle.fill",
-                                tag: isRecording ? "audio.stop" : "audio.start",
-                                action: isRecording ? stopAndUploadAudio : startRecordingAudio,
-                                disabled: lastCaptureID == nil
-                            )
-
-                            if photoCapture != nil {
-                                actionButton(
-                                    "Capture photo + upload",
-                                    systemImage: "camera.fill",
-                                    tag: "photo",
-                                    action: capturePhotoAndUpload,
-                                    disabled: lastCaptureID == nil || isRecording
-                                )
-                            } else {
-                                Text("PhotoCapture not wired — photo capture disabled.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            actionButton(
-                                "Clear failed uploads",
-                                systemImage: "trash.slash",
-                                tag: "clearfailed",
-                                action: clearFailedUploads
-                            )
-
-                            if lastCaptureID == nil {
-                                Text("Create a capture first to enable audio + photo upload.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-
-                        Divider()
-                            .padding(.vertical, 4)
-
-                        Button(role: .destructive) {
-                            lines.removeAll()
-                            lastCaptureID = nil
-                        } label: {
-                            Label("Clear log", systemImage: "trash")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
-                        .padding(.top, 8)
+                    VStack(alignment: .leading, spacing: 18) {
+                        captureLifecycleSection
+                        uploadSmokeTestsSection
+                        resetSection
                     }
                     .padding(.horizontal)
                     .padding(.vertical, 12)
                 }
-                .frame(maxHeight: 320)
+                .frame(maxHeight: 480)
 
                 Divider()
 
@@ -158,6 +77,18 @@ struct EndpointSmokeTestView: View {
                     Button("Done", action: onDismiss)
                 }
             }
+            .sheet(isPresented: $showingDocumentPicker) {
+                DocumentPicker(
+                    onPick: { url in
+                        showingDocumentPicker = false
+                        Task { await uploadDocument(at: url) }
+                    },
+                    onCancel: {
+                        showingDocumentPicker = false
+                        append(.start("DOC", "picker.cancelled", ""))
+                    }
+                )
+            }
         }
     }
 
@@ -179,13 +110,190 @@ struct EndpointSmokeTestView: View {
         .background(Color(uiColor: .secondarySystemBackground))
     }
 
+    // MARK: - Section layouts
+
+    private var captureLifecycleSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            sectionHeader(
+                title: "Capture lifecycle",
+                subtitle: "Server-side capture_sessions CRUD"
+            )
+            VStack(spacing: 6) {
+                actionButton(
+                    "POST /api/projects/:id/captures",
+                    systemImage: "plus.circle",
+                    tag: "create",
+                    action: createCaptureSession
+                )
+                actionButton(
+                    "GET /api/projects/:id/captures",
+                    systemImage: "list.bullet",
+                    tag: "list",
+                    action: listCaptures
+                )
+                buttonWithReason(
+                    "GET /api/captures/:id",
+                    systemImage: "doc.text.magnifyingglass",
+                    tag: "get",
+                    action: getLastCapture,
+                    disabledReason: lastCaptureID == nil ? "Create a capture first" : nil
+                )
+                buttonWithReason(
+                    "PATCH /api/captures/:id (cancelled)",
+                    systemImage: "xmark.octagon",
+                    tag: "cancel",
+                    action: cancelLastCapture,
+                    disabledReason: patchDisabledReason
+                )
+                buttonWithReason(
+                    "PATCH /api/captures/:id (completed)",
+                    systemImage: "checkmark.circle",
+                    tag: "complete",
+                    action: completeLastCapture,
+                    disabledReason: patchDisabledReason
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var uploadSmokeTestsSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            sectionHeader(
+                title: "Upload smoke tests",
+                subtitle: "Drive the four upload routes against dev",
+                accentTint: true
+            )
+            if uploadCoordinator == nil {
+                Text("UploadCoordinator not wired — uploads disabled.")
+                    .font(BrandTypography.caption)
+                    .foregroundStyle(BrandColors.textSecondary)
+            } else {
+                VStack(spacing: 6) {
+                    buttonWithReason(
+                        isRecording ? "Stop + upload audio" : "Start recording audio",
+                        systemImage: isRecording ? "stop.circle.fill" : "mic.circle.fill",
+                        tag: isRecording ? "audio.stop" : "audio.start",
+                        action: isRecording ? stopAndUploadAudio : startRecordingAudio,
+                        disabledReason: lastCaptureID == nil ? "Create a capture first" : nil,
+                        tint: BrandColors.accentPrimary
+                    )
+                    buttonWithReason(
+                        "Capture photo + upload",
+                        systemImage: "camera.fill",
+                        tag: "photo",
+                        action: capturePhotoAndUpload,
+                        disabledReason: photoDisabledReason,
+                        tint: BrandColors.accentPrimary
+                    )
+                    buttonWithReason(
+                        "Pick + upload document",
+                        systemImage: "doc.fill.badge.plus",
+                        tag: "document",
+                        action: { showingDocumentPicker = true },
+                        disabledReason: nil,
+                        tint: BrandColors.accentPrimary
+                    )
+                    buttonWithReason(
+                        "Clear failed uploads",
+                        systemImage: "trash.slash",
+                        tag: "clearfailed",
+                        action: clearFailedUploads,
+                        disabledReason: nil
+                    )
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var resetSection: some View {
+        Divider()
+        Button(role: .destructive) {
+            lines.removeAll()
+            lastCaptureID = nil
+            lastCaptureTerminalState = nil
+        } label: {
+            Label("Clear log + last capture", systemImage: "trash")
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+    }
+
+    /// Reason the cancel/complete PATCH buttons are disabled. Three
+    /// states map to three distinct messages so the user knows
+    /// exactly which precondition they're missing.
+    private var patchDisabledReason: String? {
+        if lastCaptureID == nil { return "Create a capture first" }
+        if lastCaptureTerminalState != nil {
+            return "Already PATCHed to \(lastCaptureTerminalState!.rawValue) — create a fresh capture"
+        }
+        return nil
+    }
+
+    private var photoDisabledReason: String? {
+        if photoCapture == nil { return "PhotoCapture not wired" }
+        if lastCaptureID == nil { return "Create a capture first" }
+        if isRecording { return "Stop the active recording first" }
+        return nil
+    }
+
+    // MARK: - Component helpers
+
+    private func sectionHeader(
+        title: String,
+        subtitle: String,
+        accentTint: Bool = false
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(BrandTypography.titleSmall)
+                .foregroundStyle(accentTint ? BrandColors.accentPrimary : BrandColors.textPrimary)
+            Text(subtitle)
+                .font(BrandTypography.caption)
+                .foregroundStyle(BrandColors.textSecondary)
+        }
+    }
+
+    /// A primary action button paired with a per-button disabled
+    /// reason caption. When `disabledReason` is non-nil the button
+    /// is disabled AND a small caption is shown right below it so
+    /// the user sees the specific precondition that's missing.
+    @ViewBuilder
+    private func buttonWithReason(
+        _ title: String,
+        systemImage: String,
+        tag: String,
+        action: @escaping () async -> Void,
+        disabledReason: String?,
+        tint: Color? = nil
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            actionButton(
+                title,
+                systemImage: systemImage,
+                tag: tag,
+                action: action,
+                disabled: disabledReason != nil,
+                tint: tint
+            )
+            if let reason = disabledReason {
+                Text(reason)
+                    .font(BrandTypography.caption)
+                    .foregroundStyle(BrandColors.textSecondary)
+                    .padding(.leading, 8)
+            }
+        }
+    }
+
     @ViewBuilder
     private func actionButton(
         _ title: String,
         systemImage: String,
         tag: String,
         action: @escaping () async -> Void,
-        disabled: Bool = false
+        disabled: Bool = false,
+        tint: Color? = nil
     ) -> some View {
         Button {
             Task {
@@ -208,6 +316,7 @@ struct EndpointSmokeTestView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(.borderedProminent)
+        .tint(tint ?? Color.accentColor)
         .disabled(disabled || inFlight != nil)
     }
 
@@ -356,6 +465,127 @@ struct EndpointSmokeTestView: View {
         }
         // Reuse the same upload observer pattern as audio.
         observeUpload(uploadID: uploadID, tag: "PHOTO", coordinator: uploads)
+    }
+
+    // MARK: - Document upload
+
+    /// Picked-file URL is security-scoped; copy bytes into a stable
+    /// Application Support location before enqueueing so the upload
+    /// coordinator's worker (which runs later, asynchronously) can
+    /// read the file without the scoped lifetime constraint.
+    private func uploadDocument(at sourceURL: URL) async {
+        guard let uploads = uploadCoordinator else { return }
+
+        append(.start("DOC", "picker.picked", sourceURL.lastPathComponent))
+
+        // Start scoped access just long enough to copy the bytes.
+        let granted = sourceURL.startAccessingSecurityScopedResource()
+        defer {
+            if granted {
+                sourceURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        let localURL: URL
+        do {
+            localURL = try copyPickedDocumentToAppSupport(sourceURL: sourceURL)
+        } catch {
+            append(.fail("DOC", "copy: \(error.localizedDescription)"))
+            return
+        }
+
+        // Hash the copied bytes (the picked URL might be gone by the
+        // time the upload worker actually reads it, so always hash
+        // from the local copy).
+        let sha: String
+        let sizeBytes: Int64
+        do {
+            sha = try FileSHA256.hex(of: localURL)
+            let attrs = try FileManager.default.attributesOfItem(atPath: localURL.path)
+            sizeBytes = (attrs[.size] as? NSNumber)?.int64Value ?? 0
+        } catch {
+            append(.fail("DOC", "sha256: \(error.localizedDescription)"))
+            return
+        }
+
+        let mimeType = mimeType(forExtension: localURL.pathExtension)
+        let uploadID = UUID().uuidString
+        let pending = PendingUpload(
+            id: uploadID,
+            workspaceID: workspaceID,
+            // For documents we tag captureSessionID = projectID so
+            // logs and queue persistence stay homogeneous. The wire
+            // path is computed from `projectID` directly inside
+            // `PendingUpload.endpointPath()`.
+            captureSessionID: projectID,
+            projectID: projectID,
+            kind: .document,
+            localFileURL: localURL,
+            mimeType: mimeType,
+            sizeBytes: sizeBytes,
+            sha256Hex: sha,
+            clientTimestamp: Date(),
+            originalFilename: sourceURL.lastPathComponent,
+            createdAt: Date()
+        )
+
+        append(.start(
+            "DOC",
+            "upload.enqueue",
+            "id=\(uploadID.prefix(8))… mime=\(mimeType) bytes=\(sizeBytes) sha=\(sha.prefix(8))…"
+        ))
+        do {
+            try await uploads.enqueue(pending)
+        } catch let error as UploadCoordinatorError {
+            append(.fail("DOC", "enqueue: \(String(describing: error))"))
+            return
+        } catch {
+            append(.fail("DOC", "enqueue: \(error.localizedDescription)"))
+            return
+        }
+
+        observeUpload(uploadID: uploadID, tag: "DOC", coordinator: uploads)
+    }
+
+    /// Copies the picked file into `<Application Support>/Documents/`
+    /// so the file is available after the picker's security-scoped
+    /// access ends. Uses the original filename + a UUID suffix to
+    /// avoid collisions across multiple uploads of the same file.
+    private func copyPickedDocumentToAppSupport(sourceURL: URL) throws -> URL {
+        let base = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let dir = base.appendingPathComponent("Documents", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let baseName = sourceURL.deletingPathExtension().lastPathComponent
+        let ext = sourceURL.pathExtension.isEmpty ? "pdf" : sourceURL.pathExtension
+        let target = dir.appendingPathComponent(
+            "\(baseName)-\(UUID().uuidString.prefix(8)).\(ext)",
+            isDirectory: false
+        )
+        // `replaceItemAt` would be nicer for atomicity but we don't
+        // have an existing target file by construction. `copyItem` is
+        // safer than `moveItem` because the source may be a
+        // sandboxed URL we don't own.
+        if FileManager.default.fileExists(atPath: target.path) {
+            try FileManager.default.removeItem(at: target)
+        }
+        try FileManager.default.copyItem(at: sourceURL, to: target)
+        return target
+    }
+
+    /// Server allowlist: PDF + DOCX. Map iOS extensions to the right
+    /// MIME types so the multipart `Content-Type` part header is
+    /// accepted by `parseMultipart` on the server.
+    private func mimeType(forExtension ext: String) -> String {
+        switch ext.lowercased() {
+        case "pdf":  return "application/pdf"
+        case "docx": return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        default:     return "application/octet-stream"
+        }
     }
 
     // MARK: - Clear failed uploads
