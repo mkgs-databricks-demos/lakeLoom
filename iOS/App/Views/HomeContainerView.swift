@@ -99,6 +99,22 @@ struct HomeContainerView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            if let api = coordinator.captureAPI,
+               let context = coordinator.activeContext {
+                NavigationLink {
+                    SessionsListView(
+                        captureAPI: api,
+                        workspaceID: context.workspace.id,
+                        projectID: context.project.id,
+                        projectName: context.project.name
+                    )
+                } label: {
+                    Image(systemName: "list.bullet.rectangle")
+                        .accessibilityLabel("Captures")
+                }
+            }
+        }
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 #if DEBUG

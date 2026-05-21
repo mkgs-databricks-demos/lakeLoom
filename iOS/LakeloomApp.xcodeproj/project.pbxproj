@@ -178,6 +178,11 @@
 		15020A0315001500150015A3 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15010A0315001500150015A3 /* HomeView.swift */; };
 		15020A1115001500150015B1 /* ElapsedTimerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15010A1115001500150015B1 /* ElapsedTimerTests.swift */; };
 		16020A1116001600160016B1 /* HomeViewResultMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16010A1116001600160016B1 /* HomeViewResultMappingTests.swift */; };
+		17020A0117001700170017A1 /* RelativeTimeFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17010A0117001700170017A1 /* RelativeTimeFormatter.swift */; };
+		17020A0217001700170017A2 /* CaptureStateBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17010A0217001700170017A2 /* CaptureStateBadge.swift */; };
+		17020A0317001700170017A3 /* SessionsListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17010A0317001700170017A3 /* SessionsListView.swift */; };
+		17020A0417001700170017A4 /* CaptureDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17010A0417001700170017A4 /* CaptureDetailView.swift */; };
+		17020A1117001700170017B1 /* RelativeTimeFormatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17010A1117001700170017B1 /* RelativeTimeFormatterTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -371,6 +376,11 @@
 		15010A0315001500150015A3 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 		15010A1115001500150015B1 /* ElapsedTimerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ElapsedTimerTests.swift; sourceTree = "<group>"; };
 		16010A1116001600160016B1 /* HomeViewResultMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeViewResultMappingTests.swift; sourceTree = "<group>"; };
+		17010A0117001700170017A1 /* RelativeTimeFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelativeTimeFormatter.swift; sourceTree = "<group>"; };
+		17010A0217001700170017A2 /* CaptureStateBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureStateBadge.swift; sourceTree = "<group>"; };
+		17010A0317001700170017A3 /* SessionsListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsListView.swift; sourceTree = "<group>"; };
+		17010A0417001700170017A4 /* CaptureDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureDetailView.swift; sourceTree = "<group>"; };
+		17010A1117001700170017B1 /* RelativeTimeFormatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelativeTimeFormatterTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -570,6 +580,7 @@
 			children = (
 				16030A1116001600160016E1 /* Home */,
 				15030A1115001500150015D1 /* Recording */,
+				17030A1117001700170017D1 /* Sessions */,
 				13030A02130013001300130B /* Style */,
 			);
 			path = Views;
@@ -896,6 +907,7 @@
 				15030A0115001500150015C1 /* Home */,
 				0FC443C43262E9D1D57FB523 /* Onboarding */,
 				15030A0215001500150015C2 /* Recording */,
+				17030A0117001700170017C1 /* Sessions */,
 				49B25674CBFEAACC580FC175 /* Style */,
 				D0A223937E0DF993D7F14980 /* ErrorScreenView.swift */,
 				237934713C8A40239F2DFFCD /* HomeContainerView.swift */,
@@ -920,6 +932,25 @@
 				15010A0215001500150015A2 /* RecordingView.swift */,
 			);
 			path = Recording;
+			sourceTree = "<group>";
+		};
+		17030A0117001700170017C1 /* Sessions */ = {
+			isa = PBXGroup;
+			children = (
+				17010A0117001700170017A1 /* RelativeTimeFormatter.swift */,
+				17010A0217001700170017A2 /* CaptureStateBadge.swift */,
+				17010A0317001700170017A3 /* SessionsListView.swift */,
+				17010A0417001700170017A4 /* CaptureDetailView.swift */,
+			);
+			path = Sessions;
+			sourceTree = "<group>";
+		};
+		17030A1117001700170017D1 /* Sessions */ = {
+			isa = PBXGroup;
+			children = (
+				17010A1117001700170017B1 /* RelativeTimeFormatterTests.swift */,
+			);
+			path = Sessions;
 			sourceTree = "<group>";
 		};
 		E4BB99D44F748984A8F7745B /* Coordinator */ = {
@@ -1147,6 +1178,7 @@
 				12020A12120012001200120E /* BrandTypographyTests.swift in Sources */,
 				15020A1115001500150015B1 /* ElapsedTimerTests.swift in Sources */,
 				16020A1116001600160016B1 /* HomeViewResultMappingTests.swift in Sources */,
+				17020A1117001700170017B1 /* RelativeTimeFormatterTests.swift in Sources */,
 				14020A0214001400140014DE /* PendingUploadRoutingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1207,6 +1239,10 @@
 				15020A0115001500150015A1 /* ElapsedTimer.swift in Sources */,
 				15020A0315001500150015A3 /* HomeView.swift in Sources */,
 				15020A0215001500150015A2 /* RecordingView.swift in Sources */,
+				17020A0117001700170017A1 /* RelativeTimeFormatter.swift in Sources */,
+				17020A0217001700170017A2 /* CaptureStateBadge.swift in Sources */,
+				17020A0317001700170017A3 /* SessionsListView.swift in Sources */,
+				17020A0417001700170017A4 /* CaptureDetailView.swift in Sources */,
 				96E9B37C1A79DDAE84360FA8 /* HomeContainerView.swift in Sources */,
 				522C74694FC1B3C71FC40B7A /* IdentityConfirmationStepView.swift in Sources */,
 				7D74F03B661421CD063B543C /* InMemoryDefaultsStore.swift in Sources */,
