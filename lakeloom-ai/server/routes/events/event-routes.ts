@@ -7,9 +7,14 @@
  *
  * ZeroBus maps JSON field names directly to Delta table column names.
  * The record shape MUST match the target table DDL:
- *   event_id, session_id, project_id, user_id, device_id, event_type,
- *   event_time, ingested_at, transcript_text, transcript_language,
+ *   record_id, ingested_at, event_id, session_id, project_id, user_id,
+ *   device_id, event_type, event_time, transcript_text, transcript_language,
  *   source_platform, workspace_id, headers, body
+ *
+ * Key conventions (from dbxW reference):
+ *   - record_id: crypto.randomUUID() — app-generated, NOT NULL PK
+ *   - ingested_at: Date.now() * 1000 — epoch MICROSECONDS (not ISO string)
+ *   - body: full raw event as nested object → VARIANT
  *
  * Endpoint:
  *   POST /api/sessions/:session_id/events — iOS-authenticated (Layer 0+1)
@@ -75,7 +80,6 @@ export async function setupEventRoutes(appkit: AppKitContext): Promise<void> {
         const events = Array.isArray(parsed.data) ? parsed.data : [parsed.data];
         const sessionId = req.params.session_id;
         const { userId, workspaceId } = req.user!;
-        const serverTs = new Date().toISOString();
 
         // Build records with field names matching the bronze table columns exactly.
         // ZeroBus maps JSON keys → Delta column names on write.
@@ -83,12 +87,15 @@ export async function setupEventRoutes(appkit: AppKitContext): Promise<void> {
           const { event_type, text, language, ...rest } = event as Record<string, unknown>;
 
           return JSON.stringify({
-            // ── NOT NULL columns ─────────────────────────────────────────
+            // ── ZeroBus PK + timestamp (matching dbxW pattern) ───────────
+            record_id: randomUUID(),
+            ingested_at: Date.now() * 1000, // epoch microseconds (µs)
+
+            // ── App-level event identifier ───────────────────────────────
             event_id: randomUUID(),
             event_type: event_type as string,
-            ingested_at: serverTs,
 
-            // ── Nullable enrichment columns ───────────────────────────────
+            // ── Enrichment from auth context ─────────────────────────────
             session_id: sessionId,
             user_id: userId,
             workspace_id: workspaceId || null,

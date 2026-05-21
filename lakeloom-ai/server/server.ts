@@ -8,7 +8,7 @@ import { setupZerobusRoutes } from './routes/zerobus/zerobus-routes';
 import { runMigrations } from './migrations/migrate';
 import { initSecrets } from './services/secrets-service';
 import { zeroBusService } from './services/zerobus-service';
-import { setLakebaseClient, recordPoolEvent } from './services/zerobus-history-service';
+import { setLakebaseClient, recordPoolEvent, recordIngestMetrics } from './services/zerobus-history-service';
 import { problemDetailsHandler } from './lib/errors';
 
 function classifyUploadIngressPath(path: string): 'audio' | 'screenshot' | 'photo' | 'document' | null {
@@ -52,9 +52,10 @@ createApp({
       console.error('[startup] Migration failed:', err);
     }
 
-    // ── Initialize ZeroBus history service (Lakebase persistence) ──────────
+    // ── Initialize ZeroBus history service (Lakebase persistence) ────────────
     setLakebaseClient(appkit.lakebase);
     zeroBusService.onResize(recordPoolEvent);
+    zeroBusService.onMetricsSnapshot(recordIngestMetrics);
 
     // ── Upload ingress diagnostics ────────────────────────────────────────
     appkit.server.extend((app) => {
@@ -124,7 +125,7 @@ createApp({
       app.use(problemDetailsHandler);
     });
 
-    // ── Graceful shutdown ─────────────────────────────────────────────────
+    // ── Graceful shutdown ───────────────────────────────────────────────
     let shuttingDown = false;
     const shutdown = async (signal: string) => {
       if (shuttingDown) return;

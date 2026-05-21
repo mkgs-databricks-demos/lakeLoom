@@ -14,6 +14,7 @@ import { migration003 } from './003_uploads';
 import { migration004 } from './004_projects';
 import { migration005 } from './005_project_devices';
 import { migration006 } from './006_zerobus_pool_events';
+import { migration007 } from './007_zerobus_ingest_metrics';
 
 // ── Migration registry ─────────────────────────────────────────────────────
 // Add new migrations here in order. The `name` must be unique and stable.
@@ -23,7 +24,7 @@ export interface Migration {
   up: string; // SQL to apply
 }
 
-const migrations: Migration[] = [migration001, migration002, migration003, migration004, migration005, migration006];
+const migrations: Migration[] = [migration001, migration002, migration003, migration004, migration005, migration006, migration007];
 
 // ── Lakebase query interface ───────────────────────────────────────────────
 
@@ -31,7 +32,7 @@ interface LakebaseClient {
   query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
 }
 
-// ── Migration runner ───────────────────────────────────────────────────────
+// ── Migration runner ─────────────────────────────────────────────────────
 
 const ENSURE_SCHEMA = `CREATE SCHEMA IF NOT EXISTS app`;
 

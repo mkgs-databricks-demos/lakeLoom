@@ -1,7 +1,7 @@
 /**
  * ZeroBus health and diagnostics routes.
  *
- * GET /api/zerobus/health  — Lightweight health check (env, pool, auto-scale)
+ * GET /api/zerobus/health  — Lightweight health check (env, pool, auto-scale, ingest metrics)
  * GET /api/zerobus/history — Pool event history from Lakebase
  * GET /api/zerobus/stats   — Aggregate pool statistics
  *
@@ -13,29 +13,31 @@ import type { Application } from 'express';
 import { zeroBusService } from '../../services/zerobus-service';
 import { getRecentEvents, getPoolStats } from '../../services/zerobus-history-service';
 
-// ── AppKit interface ──────────────────────────────────────────────────────
+// ── AppKit interface ────────────────────────────────────────────────────────
 
 interface AppKitContext {
   server: { extend(fn: (app: Application) => void): void };
 }
 
-// ── Route registration ────────────────────────────────────────────────────
+// ── Route registration ──────────────────────────────────────────────────────
 
 export async function setupZerobusRoutes(appkit: AppKitContext): Promise<void> {
   appkit.server.extend((app) => {
     // ── GET /api/zerobus/health ───────────────────────────────────────
     //
-    // Returns environment readiness, current pool state, and auto-scale
-    // configuration. Use for operational monitoring and deploy validation.
+    // Returns environment readiness, current pool state, auto-scale
+    // configuration, and real-time ingest metrics (throughput, latency,
+    // backpressure). Use for operational monitoring and deploy validation.
     //
     // Response shape:
     //   { status, service, env_configured, target_table, pool, auto_scale,
-    //     missing_env_vars? }
+    //     ingest_metrics, missing_env_vars? }
 
     app.get('/api/zerobus/health', (_req, res) => {
       const envCheck = zeroBusService.checkEnv();
       const pool = zeroBusService.poolStatus();
       const autoScale = zeroBusService.autoScaleStatus();
+      const metrics = zeroBusService.ingestMetrics();
 
       const status = envCheck.configured
         ? pool.draining
@@ -64,6 +66,16 @@ export async function setupZerobusRoutes(appkit: AppKitContext): Promise<void> {
           cooldown_ms: autoScale.config.cooldownMs,
           peak_inflight: autoScale.peak_inflight,
           idle_checks: autoScale.idle_checks,
+        },
+        ingest_metrics: {
+          records_total: metrics.records_total,
+          batches_total: metrics.batches_total,
+          last_offset: metrics.last_offset,
+          throughput_rps: metrics.throughput_rps,
+          backpressure_events: metrics.backpressure_events,
+          errors_total: metrics.errors_total,
+          ack_latency: metrics.ack_latency,
+          stream_config: metrics.stream_config,
         },
         resize_history_count: autoScale.history.length,
         recent_resizes: autoScale.history.slice(-5),

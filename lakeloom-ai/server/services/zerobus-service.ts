@@ -20,8 +20,23 @@
  *   - DOWN: IDLE_CHECKS_BEFORE_SCALE_DOWN consecutive idle checks (0 calls + 0 in-flight)
  *   - ZERO: at 1 stream, after IDLE_BEFORE_ZERO_MS (20 min) of no activity
  *
+ * ── Flush & throughput tuning ─────────────────────────────────────────
+ *
+ *   maxInflightRequests: 200  — capacity per stream; creates backpressure
+ *                               signal for auto-scale AND triggers batch
+ *                               commits when buffer fills.
+ *   flushTimeoutMs: 1000      — sub-second guarantee; even at low volume
+ *                               (1 user), commits within 1s.
+ *
+ *   Together: whichever fires first (buffer full OR 1s timeout) triggers
+ *   a server-side commit. Handles 1 user to 500+ users uniformly.
+ *
  * Pool lifecycle events are recorded in Lakebase (app.zerobus_pool_events)
  * via the zerobus-history-service for observability and diagnostics.
+ *
+ * Ingest metrics are tracked in-memory and periodically snapshotted to
+ * Lakebase (app.zerobus_ingest_metrics) for monitoring throughput, latency,
+ * and backpressure across deploys.
  *
  * ── Environment variables (injected via app.yaml valueFrom) ───────────
  *   LAKELOOM_ZEROBUS_CLIENT_ID       — ZeroBus SPN client_id
@@ -86,6 +101,35 @@ export interface PoolStatus {
   };
 }
 
+/** Ingest metrics snapshot (exposed via health endpoint + persisted to Lakebase). */
+export interface IngestMetrics {
+  /** Total records ingested since this instance started. */
+  records_total: number;
+  /** Total ingest calls (single + batch). */
+  batches_total: number;
+  /** Most recent offset returned by the SDK. */
+  last_offset: string;
+  /** Ack latency stats (ms) from waitForOffset() calls. */
+  ack_latency: {
+    min_ms: number;
+    max_ms: number;
+    avg_ms: number;
+    p95_ms: number;
+    samples: number;
+  };
+  /** Times ingestRecordOffset() took > 50ms (backpressure indicator). */
+  backpressure_events: number;
+  /** Total ingest errors (stream failures, timeouts). */
+  errors_total: number;
+  /** Records per second (rolling 60s window). */
+  throughput_rps: number;
+  /** Stream config for reference. */
+  stream_config: {
+    max_inflight_requests: number;
+    flush_timeout_ms: number;
+  };
+}
+
 // ── Constants ────────────────────────────────────────────────────────────────
 
 /** Consecutive idle checks before scaling down (non-zero pool → pool - 1). */
@@ -107,6 +151,26 @@ const ENV_KEYS = [
   'LAKELOOM_ZEROBUS_CLIENT_SECRET',
   'LAKELOOM_TARGET_TABLE_NAME',
 ] as const;
+
+/** Threshold (ms) above which ingestRecordOffset is considered backpressure. */
+const BACKPRESSURE_THRESHOLD_MS = 50;
+
+/** Rolling window size for throughput calculation. */
+const THROUGHPUT_WINDOW_MS = 60_000;
+
+/** Max ack latency samples retained for percentile calculation. */
+const MAX_LATENCY_SAMPLES = 1000;
+
+// ── Stream tuning ────────────────────────────────────────────────────────────
+// These values work together for sub-second write latency at any scale:
+//   - maxInflightRequests (200): capacity per stream. When full, creates
+//     backpressure → longer HTTP handler hold → inflight rises → scale-up.
+//     Also triggers batch commit when buffer fills (high throughput path).
+//   - flushTimeoutMs (1000): guarantees commit within 1s even at low volume
+//     when buffer never fills (low throughput path).
+
+const STREAM_MAX_INFLIGHT = 200;
+const STREAM_FLUSH_TIMEOUT_MS = 1_000;
 
 // ── Default auto-scale config ────────────────────────────────────────────────
 
@@ -152,6 +216,17 @@ class ZeroBusService {
   // ── Event callback (for Lakebase persistence) ──────────────────────
   private onResizeCallback: ((event: ResizeEvent) => void) | null = null;
 
+  // ── Ingest metrics ─────────────────────────────────────────────────
+  private recordsTotal = 0;
+  private batchesTotal = 0;
+  private lastOffset = BigInt(0);
+  private ackLatencySamples: number[] = [];
+  private backpressureEvents = 0;
+  private errorsTotal = 0;
+  private throughputWindow: number[] = []; // timestamps of recent ingests
+  private metricsSnapshotTimer: ReturnType<typeof setInterval> | null = null;
+  private onMetricsCallback: ((metrics: IngestMetrics) => void) | null = null;
+
   // ── Public API ─────────────────────────────────────────────────────
 
   /**
@@ -160,6 +235,14 @@ class ZeroBusService {
    */
   onResize(callback: (event: ResizeEvent) => void): void {
     this.onResizeCallback = callback;
+  }
+
+  /**
+   * Register a callback invoked periodically with ingest metrics snapshot.
+   * Used by zerobus-history-service to persist metrics to Lakebase.
+   */
+  onMetricsSnapshot(callback: (metrics: IngestMetrics) => void): void {
+    this.onMetricsCallback = callback;
   }
 
   /**
@@ -185,16 +268,34 @@ class ZeroBusService {
     if (this.inflight > this.peakInflight) this.peakInflight = this.inflight;
     this.callsSinceLastCheck++;
     this.lastActivityAt = new Date();
+    this.batchesTotal++;
 
     try {
       const stream = this.nextStream();
+
+      // Track ingest latency for backpressure detection
+      const ingestStart = performance.now();
       const offset = await stream.ingestRecordOffset(record);
+      const ingestMs = performance.now() - ingestStart;
+
+      if (ingestMs > BACKPRESSURE_THRESHOLD_MS) {
+        this.backpressureEvents++;
+      }
+
+      this.lastOffset = offset;
+      this.recordsTotal++;
+      this.throughputWindow.push(Date.now());
 
       if (waitForAck) {
+        const ackStart = performance.now();
         await stream.waitForOffset(offset);
+        this.recordAckLatency(performance.now() - ackStart);
       }
 
       return offset;
+    } catch (err) {
+      this.errorsTotal++;
+      throw err;
     } finally {
       this.inflight--;
     }
@@ -218,21 +319,39 @@ class ZeroBusService {
     if (this.inflight > this.peakInflight) this.peakInflight = this.inflight;
     this.callsSinceLastCheck++;
     this.lastActivityAt = new Date();
+    this.batchesTotal++;
 
     try {
       let lastOffset = BigInt(0);
       for (const record of records) {
         const stream = this.nextStream();
+
+        const ingestStart = performance.now();
         lastOffset = await stream.ingestRecordOffset(record);
+        const ingestMs = performance.now() - ingestStart;
+
+        if (ingestMs > BACKPRESSURE_THRESHOLD_MS) {
+          this.backpressureEvents++;
+        }
+
+        this.recordsTotal++;
+        this.throughputWindow.push(Date.now());
       }
+
+      this.lastOffset = lastOffset;
 
       // Wait for durability confirmation on the last record
       const stream = this.streams[
         (this.streamIndex - 1 + this.streams.length) % this.streams.length
       ];
+      const ackStart = performance.now();
       await stream.waitForOffset(lastOffset);
+      this.recordAckLatency(performance.now() - ackStart);
 
       return records.length;
+    } catch (err) {
+      this.errorsTotal++;
+      throw err;
     } finally {
       this.inflight--;
     }
@@ -287,6 +406,26 @@ class ZeroBusService {
       peak_inflight: this.peakInflight,
       idle_checks: this.idleChecks,
       history: [...this.resizeHistory],
+    };
+  }
+
+  /** Returns current ingest metrics snapshot. */
+  ingestMetrics(): IngestMetrics {
+    this.pruneThoughputWindow();
+    const latencyStats = this.computeLatencyStats();
+
+    return {
+      records_total: this.recordsTotal,
+      batches_total: this.batchesTotal,
+      last_offset: this.lastOffset.toString(),
+      ack_latency: latencyStats,
+      backpressure_events: this.backpressureEvents,
+      errors_total: this.errorsTotal,
+      throughput_rps: this.computeThroughput(),
+      stream_config: {
+        max_inflight_requests: STREAM_MAX_INFLIGHT,
+        flush_timeout_ms: STREAM_FLUSH_TIMEOUT_MS,
+      },
     };
   }
 
@@ -359,6 +498,9 @@ class ZeroBusService {
 
     // Enable auto-scale after wake
     this.enableAutoScale();
+
+    // Start periodic metrics snapshot (every 30s while pool is alive)
+    this.startMetricsSnapshot();
   }
 
   /** Open one gRPC stream with standard options. */
@@ -368,11 +510,11 @@ class ZeroBusService {
       this.clientId,
       this.clientSecret,
       {
-        maxInflightRequests: 10_000,
+        maxInflightRequests: STREAM_MAX_INFLIGHT,
         recovery: true,
         recoveryTimeoutMs: 15_000,
         recoveryRetries: 4,
-        flushTimeoutMs: 300_000,
+        flushTimeoutMs: STREAM_FLUSH_TIMEOUT_MS,
         recordType: RecordType.Json,
       },
     );
@@ -383,6 +525,76 @@ class ZeroBusService {
     const stream = this.streams[this.streamIndex];
     this.streamIndex = (this.streamIndex + 1) % this.streams.length;
     return stream;
+  }
+
+  // ── Ingest metrics helpers ─────────────────────────────────────────
+
+  /** Record an ack latency sample. */
+  private recordAckLatency(ms: number): void {
+    this.ackLatencySamples.push(ms);
+    if (this.ackLatencySamples.length > MAX_LATENCY_SAMPLES) {
+      // Keep the most recent half when we exceed the limit
+      this.ackLatencySamples = this.ackLatencySamples.slice(-MAX_LATENCY_SAMPLES / 2);
+    }
+  }
+
+  /** Compute latency percentile stats. */
+  private computeLatencyStats(): IngestMetrics['ack_latency'] {
+    const samples = this.ackLatencySamples;
+    if (samples.length === 0) {
+      return { min_ms: 0, max_ms: 0, avg_ms: 0, p95_ms: 0, samples: 0 };
+    }
+
+    const sorted = [...samples].sort((a, b) => a - b);
+    const sum = sorted.reduce((acc, v) => acc + v, 0);
+    const p95Index = Math.floor(sorted.length * 0.95);
+
+    return {
+      min_ms: Math.round(sorted[0]),
+      max_ms: Math.round(sorted[sorted.length - 1]),
+      avg_ms: Math.round(sum / sorted.length),
+      p95_ms: Math.round(sorted[p95Index]),
+      samples: sorted.length,
+    };
+  }
+
+  /** Prune old entries from the throughput window. */
+  private pruneThoughputWindow(): void {
+    const cutoff = Date.now() - THROUGHPUT_WINDOW_MS;
+    while (this.throughputWindow.length > 0 && this.throughputWindow[0] < cutoff) {
+      this.throughputWindow.shift();
+    }
+  }
+
+  /** Compute current records/sec from the rolling window. */
+  private computeThroughput(): number {
+    this.pruneThoughputWindow();
+    if (this.throughputWindow.length === 0) return 0;
+    return Math.round((this.throughputWindow.length / THROUGHPUT_WINDOW_MS) * 1000 * 10) / 10;
+  }
+
+  /** Start periodic metrics snapshot emission. */
+  private startMetricsSnapshot(): void {
+    if (this.metricsSnapshotTimer) return;
+
+    // Emit a metrics snapshot every 30 seconds while the pool is alive
+    this.metricsSnapshotTimer = setInterval(() => {
+      if (this.onMetricsCallback && this.recordsTotal > 0) {
+        try {
+          this.onMetricsCallback(this.ingestMetrics());
+        } catch (err) {
+          console.warn('[zerobus] Metrics snapshot callback error:', err);
+        }
+      }
+    }, 30_000);
+  }
+
+  /** Stop periodic metrics snapshot. */
+  private stopMetricsSnapshot(): void {
+    if (this.metricsSnapshotTimer) {
+      clearInterval(this.metricsSnapshotTimer);
+      this.metricsSnapshotTimer = null;
+    }
   }
 
   // ── Dynamic resize ─────────────────────────────────────────────────
@@ -436,9 +648,10 @@ class ZeroBusService {
       await Promise.allSettled(excess.map((s) => s.close()));
       console.log(`[zerobus] Closed ${excess.length} stream(s)`);
 
-      // If we've scaled to zero, disable auto-scale timer (no streams to check)
+      // If we've scaled to zero, disable auto-scale timer and metrics snapshot
       if (newSize === 0) {
         this.disableAutoScale();
+        this.stopMetricsSnapshot();
       }
     }
 
@@ -624,6 +837,14 @@ class ZeroBusService {
   async close(): Promise<void> {
     this.draining = true;
     this.disableAutoScale();
+    this.stopMetricsSnapshot();
+
+    // Emit final metrics snapshot before shutdown
+    if (this.onMetricsCallback && this.recordsTotal > 0) {
+      try {
+        this.onMetricsCallback(this.ingestMetrics());
+      } catch { /* non-fatal */ }
+    }
 
     if (this.streams.length === 0) {
       console.log('[zerobus] Pool already cold — nothing to close.');
