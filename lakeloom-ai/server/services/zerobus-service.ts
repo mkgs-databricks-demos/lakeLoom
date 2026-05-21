@@ -37,7 +37,7 @@
  */
 
 import { ZerobusSdk, RecordType } from '@databricks/zerobus-ingest-sdk';
-import { getZerobusSPNCredentials, getZerobusConfig } from './secrets-service';
+import { getZerobusSPNCredentials, getZerobusConfig, getSecrets } from './secrets-service';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -332,7 +332,10 @@ class ZeroBusService {
     this.targetTable = config.tableName;
     this.clientId = creds.clientId;
     this.clientSecret = creds.clientSecret;
-    this.workspaceUrl = process.env.DATABRICKS_HOST ?? '';
+
+    // Use LAKELOOM_WORKSPACE_URL (public workspace URL from secret scope) for token exchange.
+    // DATABRICKS_HOST is platform-internal and may not be routable for UC token exchange.
+    this.workspaceUrl = getSecrets().workspaceUrl || process.env.DATABRICKS_HOST || '';
 
     console.log(`[zerobus] Waking pool: 0 → 1 stream (table: ${this.targetTable})`);
 
