@@ -62,7 +62,7 @@ lakeLoom/
 │   │   ├── server.ts              # Entry: secrets → migrations → routes → serve
 │   │   ├── lib/                   # crypto.ts, errors.ts (RFC 9457)
 │   │   ├── middleware/            # ios-auth.ts, browser-auth.ts + dualAuth()
-│   │   ├── migrations/            # 001–005 (paired_sessions → project_device_assignments)
+│   │   ├── migrations/            # 001–007 (paired_sessions → zerobus_ingest_metrics)
 │   │   ├── services/              # secrets, sse, zerobus stream pool
 │   │   └── routes/                # pairing, captures, uploads, events, projects
 │   ├── client/                     # React frontend (Vite + Tailwind v4)
@@ -112,6 +112,7 @@ lakeLoom/
 * **Isaac notified** (2026-05-13) about pairing endpoint contract via `lakeLoom/architecture/hey_isaac/2026-05-13_pairing-auth-endpoints-live.md`. Covers: Layer 1/2 auth headers, POST /confirm contract, QR payload structure, error format, open questions (device_label, pubkey encoding, filename convention).
 * **2026-05-15: QR pairing validated end-to-end on physical iPhone.** Full chain: QR scan → M2M → confirm → device-key binding → project create → home screen. iOS Module 01 merged (PR #18). Collaboration model (hi_genie/hey_isaac) proven effective for cross-domain debugging.
 * **2026-05-21: Zero-byte upload bug fixed.** Root cause: `@databricks/sdk-experimental` `files.upload()` silently dropped Buffer contents. Fix: upgraded to AppKit 0.36.0 `files()` plugin with `policy: files.policy.allowAll()` in service-principal mode. Bytes verified on volume (3,244 bytes WAV, SHA match). Xcode SPN granted WRITE_VOLUME via new Task 4 in `configure_app_spn` job.
+* **2026-05-21: ZeroBus transcript ingest root cause fixed.** Silent record drops caused by double-encoding: `event-routes.ts` stringified records before passing to SDK (which serializes internally). Fix: pass plain objects, only VARIANT columns get `JSON.stringify()`. Type signatures `string` → `unknown`. Sub-second flush config (200 max inflight, 1000ms timeout). Validated: 100-event load test at 178 events/sec, auto-scale to 3 streams, all records materialized in <8s. CI/CD teardown cell added. Isaac notified — endpoint ready for iOS speech-to-text integration.
 
 
 ## Resolved Target Variables (dev)
@@ -353,7 +354,9 @@ The SDK's `Endpoint` object does NOT have a `hostname` attribute. Use the REST A
 * ~~Await Isaac's confirmation: (1) HEIC vs JPEG/PNG from iOS, (2) base64url vs standard base64 for `device_pubkey`.~~ **DONE 2026-05-14 — iOS sends JPEG only (no HEIC), base64url no-padding confirmed.**
 * ~~End-to-end QR pairing on physical iPhone.~~ **DONE 2026-05-15 — Module 01 validated, PR #18 merged.**
 * **~~Next: Browser UI Phase 2~~ — IN PROGRESS (2026-05-16).** Device assignment, project card indicators, user identity pill all shipped. Remaining: session list, session detail view, session label editing. See `fixtures/databricks-app-ui-plan.md`.
+* ~~**Next: ZeroBus transcript ingest validation.**~~ **DONE 2026-05-21 — root cause fixed, 100-event load test passed, CI/CD teardown cell, Isaac notified.**
 * **Next: iOS Module 02** — CaptureEngine. Will exercise audio + screenshot + photo upload endpoints.
+* **Next: Silver/Gold pipeline** — Spark Declarative Pipeline for transcript_events_raw → enriched → aggregated views.
 * **Non-blocking follow-up:** Isaac investigating `GET /api/v1/projects` list failure during onboarding (likely iOS `LiveProjectAPIClient` not routing through full header injector).
 
 ## App Bundle (lakeloom-ai) — Implementation Status
@@ -381,6 +384,17 @@ All server components implemented: crypto lib, migration runner, `paired_session
 * **Pairing confirm response:** `device_id` → `paired_session_id`
 * **Timestamp canonical form locked:** `METHOD\nPATH\nUNIX_SECONDS\nBODY_SHA256_HEX` (in `ios-auth.ts` comment)
 * **Dependencies added:** `busboy ^1.6.0`, `uuid ^11.1.0`, `@types/busboy ^1.5.4`
+
+### ZeroBus Transcript Ingest: COMPLETE (2026-05-21)
+* **Root cause:** `event-routes.ts` called `JSON.stringify()` on records before passing to `ingestRecordOffset()`. SDK serializes internally → double-encoding → schema validation failure → silent drop (202 still returned, offset incremented, data never materializes).
+* **Fix:** Pass plain objects to `ingestRecord()`/`ingestBatch()`. Only `body` VARIANT column gets `JSON.stringify()`. Type signatures changed `string` → `unknown`.
+* **Stream config:** `maxInflightRequests: 200` (backpressure + auto-scale signal), `flushTimeoutMs: 1000` (sub-second guarantee at any volume).
+* **Metrics instrumentation:** `IngestMetrics` interface with records_total, batches_total, last_offset, ack_latency (min/max/avg/p95), backpressure_events, errors_total, throughput_rps. Exposed via health endpoint + Lakebase snapshots (`app.zerobus_ingest_metrics`, migration 007).
+* **Validation notebook:** `src/tests/validate-zerobus-ingest.ipynb` — 15 cells: auth, health, E2E ingest (iOS pair + ECDSA sign), batch (5 events), load test (100 events), bronze query, pool history, stats, summary, teardown.
+* **Performance:** 53–178 events/sec throughput, 67ms min / 188ms avg / 203ms p95 ack latency, auto-scale 1→3 streams in 228–358ms, flush to Delta <8s.
+* **CI/CD teardown:** Deletes all test records by `session_id` (current run) + `body:load_test::boolean IS TRUE` (orphans from prior runs). Bronze table stays clean for production.
+* **Post-deploy validation:** `zerobus_validation` task added to `post_deploy_validation.job.yml` (depends on `api_endpoint_tests`).
+* **Isaac notified:** `hey_isaac/2026-05-21_zerobus-ingest-live-start-sending.md` — full endpoint reference (URL, auth, body schema, VARIANT preservation, Swift example).
 
 ### Photos Endpoint & Per-Endpoint MIME Filtering: COMPLETE (2026-05-14)
 * **New endpoint:** `POST /api/captures/:capture_session_id/photos` — camera photos (whiteboards, physical artifacts)
