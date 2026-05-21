@@ -249,11 +249,11 @@ class ZeroBusService {
    * Ingest a JSON record into the bronze table.
    * Lazily initializes the pool (0→1) on first call.
    *
-   * @param record - JSON string to ingest
+   * @param record - Plain object matching the target table schema (SDK serializes internally)
    * @param waitForAck - If true, waits for server acknowledgment
    * @returns The offset (for optional downstream tracking)
    */
-  async ingestRecord(record: string, waitForAck = false): Promise<bigint> {
+  async ingestRecord(record: unknown, waitForAck = false): Promise<bigint> {
     if (this.draining) {
       throw new Error('[zerobus] Service is shutting down — not accepting new requests.');
     }
@@ -306,7 +306,7 @@ class ZeroBusService {
    * Each record goes to the next stream via round-robin.
    * Waits for the last offset to confirm durability.
    */
-  async ingestBatch(records: string[]): Promise<number> {
+  async ingestBatch(records: unknown[]): Promise<number> {
     if (records.length === 0) return 0;
 
     if (this.draining) {

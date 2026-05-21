@@ -11,10 +11,14 @@
  *   device_id, event_type, event_time, transcript_text, transcript_language,
  *   source_platform, workspace_id, headers, body
  *
+ * CRITICAL: Pass plain objects to ingestRecordOffset(), NOT JSON strings.
+ * The SDK serializes internally. Passing JSON.stringify()'d strings causes
+ * double-encoding and schema validation failures on the server side.
+ *
  * Key conventions (from dbxW reference):
  *   - record_id: crypto.randomUUID() — app-generated, NOT NULL PK
  *   - ingested_at: Date.now() * 1000 — epoch MICROSECONDS (not ISO string)
- *   - body: full raw event as nested object → VARIANT
+ *   - body: JSON.stringify(event) — VARIANT column (string-encoded JSON)
  *
  * Endpoint:
  *   POST /api/sessions/:session_id/events — iOS-authenticated (Layer 0+1)
@@ -81,12 +85,13 @@ export async function setupEventRoutes(appkit: AppKitContext): Promise<void> {
         const sessionId = req.params.session_id;
         const { userId, workspaceId } = req.user!;
 
-        // Build records with field names matching the bronze table columns exactly.
-        // ZeroBus maps JSON keys → Delta column names on write.
+        // Build records as PLAIN OBJECTS — the SDK serializes internally.
+        // Passing JSON.stringify()'d strings causes double-encoding and
+        // server-side schema validation failures (data never materializes).
         const records = events.map((event) => {
           const { event_type, text, language, ...rest } = event as Record<string, unknown>;
 
-          return JSON.stringify({
+          return {
             // ── ZeroBus PK + timestamp (matching dbxW pattern) ───────────
             record_id: randomUUID(),
             ingested_at: Date.now() * 1000, // epoch microseconds (µs)
@@ -110,12 +115,14 @@ export async function setupEventRoutes(appkit: AppKitContext): Promise<void> {
             project_id: (rest.project_id as string) || null,
             device_id: (rest.device_id as string) || null,
 
-            // ── Full raw payload as VARIANT for flexible bronze retention ──
-            body: event,
-          });
+            // ── Full raw payload as VARIANT (string-encoded JSON) ─────────
+            body: JSON.stringify(event),
+          };
         });
 
-        // Use batch ingest for multiple events, single for one
+        // Use batch ingest for multiple events, single for one.
+        // Pass the object directly — the service's ingestRecord() passes it
+        // through to stream.ingestRecordOffset() which handles serialization.
         if (records.length === 1) {
           await zeroBusService.ingestRecord(records[0]);
         } else {
