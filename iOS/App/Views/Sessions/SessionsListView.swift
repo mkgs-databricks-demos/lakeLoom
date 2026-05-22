@@ -41,8 +41,8 @@ struct SessionsListView: View {
         .navigationTitle("Captures")
         .navigationBarTitleDisplayMode(.large)
         .background(BrandColors.surfaceSecondary)
-        .task { await load() }
-        .refreshable { await load() }
+        .task { await initialLoad() }
+        .refreshable { await refresh() }
     }
 
     // MARK: - States
@@ -92,7 +92,7 @@ struct SessionsListView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, Spacing.xl)
             Button {
-                Task { await load() }
+                Task { await initialLoad() }
             } label: {
                 Label("Try again", systemImage: "arrow.clockwise")
                     .font(BrandTypography.bodyEmphasis)
@@ -125,8 +125,24 @@ struct SessionsListView: View {
 
     // MARK: - Loading
 
-    private func load() async {
+    /// First entry (`.task`) — show the loading view while we fetch.
+    private func initialLoad() async {
         loadState = .loading
+        await performFetch(preserveOnFailure: false)
+    }
+
+    /// Pull-to-refresh — keep the current list on screen behind the
+    /// native refresh spinner. If the fetch fails AND we already have
+    /// data, swallow the error so the user doesn't see the list flip
+    /// to an error screen mid-pull (`Try again` would just succeed on
+    /// the next attempt anyway). When we have no data yet (empty /
+    /// error), let the error surface so the user has a recovery
+    /// affordance.
+    private func refresh() async {
+        await performFetch(preserveOnFailure: true)
+    }
+
+    private func performFetch(preserveOnFailure: Bool) async {
         do {
             let sessions = try await captureAPI.listProjectCaptureSessions(
                 workspaceID: workspaceID,
@@ -137,8 +153,10 @@ struct SessionsListView: View {
             )
             loadState = sessions.isEmpty ? .empty : .loaded(sessions)
         } catch let error as CaptureAPIError {
+            if preserveOnFailure, case .loaded = loadState { return }
             loadState = .error(reason(for: error))
         } catch {
+            if preserveOnFailure, case .loaded = loadState { return }
             loadState = .error(error.localizedDescription)
         }
     }
