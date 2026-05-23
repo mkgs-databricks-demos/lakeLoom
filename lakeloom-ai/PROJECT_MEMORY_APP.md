@@ -62,7 +62,7 @@ lakeLoom/
 │   │   ├── server.ts              # Entry: secrets → migrations → routes → serve
 │   │   ├── lib/                   # crypto.ts, errors.ts (RFC 9457)
 │   │   ├── middleware/            # ios-auth.ts, browser-auth.ts + dualAuth()
-│   │   ├── migrations/            # 001–005 (paired_sessions → project_device_assignments)
+│   │   ├── migrations/            # 001–010 (paired_sessions → username + client_type)
 │   │   ├── services/              # secrets, sse, zerobus stream pool
 │   │   └── routes/                # pairing, captures, uploads, events, projects
 │   ├── client/                     # React frontend (Vite + Tailwind v4)
@@ -72,6 +72,7 @@ lakeLoom/
 │   ├── patches/zerobus-ingest-sdk/ # SDK patch (index.js, index.d.ts)
 │   ├── scripts/                    # patch-zerobus-sdk.mjs
 │   ├── tests/smoke.spec.ts         # Playwright smoke test
+│   ├── src/tests/lib/              # Shared test utilities (PairingTestClient)
 │   ├── resources/                  # App resource definitions
 │   │   ├── lakeloom_ai.app.yml
 │   │   ├── configure_app_spn.job.yml
@@ -113,6 +114,7 @@ lakeLoom/
 * **Isaac notified** (2026-05-13) about pairing endpoint contract via `lakeLoom/architecture/hey_isaac/2026-05-13_pairing-auth-endpoints-live.md`. Covers: Layer 1/2 auth headers, POST /confirm contract, QR payload structure, error format, open questions (device_label, pubkey encoding, filename convention).
 * **2026-05-15: QR pairing validated end-to-end on physical iPhone.** Full chain: QR scan → M2M → confirm → device-key binding → project create → home screen. iOS Module 01 merged (PR #18). Collaboration model (hi_genie/hey_isaac) proven effective for cross-domain debugging.
 * **2026-05-20: First successful upload (audio).** Both blocking bugs fixed (iosAuth invocation + SDK 0.17 signatures). Upload confirmed in `lb_uploads_history`. Isaac notified via `hey_isaac/2026-05-20_audio-uploads-working.md`.
+* **2026-05-23: Migrations 009/010 deployed.** `client_type` on uploads (server-determined), `username` on paired_sessions (from `x-forwarded-email` at QR gen). Shared `PairingTestClient` module replaces duplicated test boilerplate. Lakehouse Sync schema mismatch fixed via Delta `ALTER TABLE ADD COLUMN`.
 
 
 ## Resolved Target Variables (dev)
@@ -531,6 +533,24 @@ Per spec (locked 2026-05-13):
 Test suite expanded to 14 tests. Test 10 performs full E2E pairing:
 QR → ECDSA keygen → signed confirm → authenticated GET with bound device key.
 CI/CD gate asserts all 14 pass.
+
+### Lakehouse Sync (wal2delta) Schema Evolution
+
+**Problem:** Lakebase Lakehouse Sync (wal2delta) stalls silently when `ALTER TABLE ADD COLUMN` adds columns to the Postgres source that don't exist in the target Delta table. No errors are surfaced in app OTel logs, audit logs, system tables, or the pipelines API.
+
+**Diagnosis:** Check table history — if last `wal2delta.append` is older than the migration timestamp but the app is writing to Lakebase successfully, the sync is stalled on schema mismatch.
+
+**Fix:** `ALTER TABLE <delta_table> ADD COLUMN <col> <type>` on the target Delta table to match the Lakebase schema. This unblocks wal2delta without requiring disable/re-enable in the UI.
+
+**API status (2026-05-23):** No public API exists for Lakehouse Sync table management:
+* `w.database.list_synced_database_tables()` → "NOT_IMPLEMENTED"
+* REST paths `/lakehouse-sync`, `/sync-tables` → 404
+* wal2delta does NOT appear as a user-visible pipeline in `/api/2.0/pipelines`
+* Databricks CLI `postgres` commands → "only supported in web terminal"
+
+**Column additions applied (2026-05-23):**
+* `lb_paired_sessions_history` + `username STRING`
+* `lb_uploads_history` + `client_type STRING`
 
 ### IP Access List
 
