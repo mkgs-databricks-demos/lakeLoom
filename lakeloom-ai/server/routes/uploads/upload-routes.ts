@@ -292,6 +292,7 @@ interface ParsedUpload {
   clientTs?: string;
   clientFilename?: string;
   clientSha256?: string;
+  deviceId?: string;
 }
 
 function getBufferedRequestBody(req: Request): Buffer | null {
@@ -314,6 +315,7 @@ function parseMultipart(req: Request): Promise<ParsedUpload> {
     let clientTs: string | undefined;
     let clientFilename: string | undefined;
     let clientSha256: string | undefined;
+    let deviceId: string | undefined;
     let fileReceived = false;
 
     busboy.on('file', (_fieldname, stream, info) => {
@@ -329,6 +331,7 @@ function parseMultipart(req: Request): Promise<ParsedUpload> {
       if (fieldname === 'client_ts') clientTs = value;
       if (fieldname === 'client_filename') clientFilename = value;
       if (fieldname === 'sha256_hex') clientSha256 = value;
+      if (fieldname === 'device_id') deviceId = value;
     });
 
     busboy.on('error', (parseErr) => {
@@ -340,7 +343,7 @@ function parseMultipart(req: Request): Promise<ParsedUpload> {
         reject(buildUploadAppError(400, 'Missing upload file', 'A non-empty file field is required.', { error_code: 'UPLOAD_FILE_REQUIRED' }));
         return;
       }
-      resolve({ fileBuffer: Buffer.concat(chunks), fileMimeType, clientTs, clientFilename, clientSha256 });
+      resolve({ fileBuffer: Buffer.concat(chunks), fileMimeType, clientTs, clientFilename, clientSha256, deviceId });
     });
 
     if (bufferedBody) {
@@ -508,11 +511,11 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
         await lakebase.query(
           `INSERT INTO app.uploads
              (id, kind, project_id, capture_session_id, paired_session_id, user_id,
-              volume_path, mime_type, size_bytes, sha256_hex, original_filename, client_ts)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz)`,
+              volume_path, mime_type, size_bytes, sha256_hex, original_filename, client_ts, device_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13::uuid)`,
           [uploadId, opts.kind, projectId, captureSessionId, pairedSessionId, userId,
            volumeFilePath, parsed.fileMimeType, parsed.fileBuffer.length, sha256Hash,
-           parsed.clientFilename ?? null, normalizedTimestamp.isoTimestamp],
+           parsed.clientFilename ?? null, normalizedTimestamp.isoTimestamp, parsed.deviceId ?? null],
         );
         logUploadEvent('[upload] metadata.insert_succeeded', diagnostics, { insert_target: 'app.uploads', insert_volume_path: volumeFilePath });
       } catch (insertErr) {

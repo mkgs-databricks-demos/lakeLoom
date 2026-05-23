@@ -15,6 +15,7 @@ import { migration004 } from './004_projects';
 import { migration005 } from './005_project_devices';
 import { migration006 } from './006_zerobus_pool_events';
 import { migration007 } from './007_zerobus_ingest_metrics';
+import { migration008 } from './008_device_id';
 
 // ── Migration registry ─────────────────────────────────────────────────────
 // Add new migrations here in order. The `name` must be unique and stable.
@@ -24,7 +25,7 @@ export interface Migration {
   up: string; // SQL to apply
 }
 
-const migrations: Migration[] = [migration001, migration002, migration003, migration004, migration005, migration006, migration007];
+const migrations: Migration[] = [migration001, migration002, migration003, migration004, migration005, migration006, migration007, migration008];
 
 // ── Lakebase query interface ───────────────────────────────────────────────
 

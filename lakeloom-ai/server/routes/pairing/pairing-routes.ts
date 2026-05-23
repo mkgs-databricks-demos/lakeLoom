@@ -39,6 +39,9 @@ interface AppKitContext {
 const ConfirmBody = z.object({
   device_pubkey: z.string().min(1, 'device_pubkey is required'),
   device_label: z.string().min(1, 'device_label is required').max(100),
+  // device_id: stable keychain-persisted UUID v4 identifying the physical device.
+  // Optional until all iOS builds include it (PR 8a-2).
+  device_id: z.string().uuid().optional(),
 });
 
 // ── Route setup ──────────────────────────────────────────────────────────────
@@ -137,7 +140,7 @@ export async function setupPairingRoutes(appkit: AppKitContext): Promise<void> {
             throw validationError(parsed.error.issues.map((i) => i.message).join('; '));
           }
 
-          const { device_pubkey, device_label } = parsed.data;
+          const { device_pubkey, device_label, device_id } = parsed.data;
           const pubkeyBuffer = Buffer.from(device_pubkey, 'base64url');
 
           // Get the session (already validated by middleware)
@@ -164,12 +167,12 @@ export async function setupPairingRoutes(appkit: AppKitContext): Promise<void> {
             }
           }
 
-          // Bind the device key
+          // Bind the device key + device_id
           await lakebase.query(
             `UPDATE app.paired_sessions
-             SET device_pubkey = $1, device_label = $2, first_seen_at = now(), last_seen_at = now()
-             WHERE id = $3`,
-            [pubkeyBuffer, device_label, sessionId],
+             SET device_pubkey = $1, device_label = $2, device_id = $3::uuid, first_seen_at = now(), last_seen_at = now()
+             WHERE id = $4`,
+            [pubkeyBuffer, device_label, device_id ?? null, sessionId],
           );
 
           // Push SSE event to browser
