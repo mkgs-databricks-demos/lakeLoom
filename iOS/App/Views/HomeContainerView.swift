@@ -87,6 +87,7 @@ struct HomeContainerView: View {
                     uploadCoordinator: coordinator.uploadCoordinator,
                     photoCapture: coordinator.photoCapture,
                     transcriptEvents: coordinator.transcriptEvents,
+                    deviceIdentity: coordinator.deviceIdentity,
                     workspaceID: context.workspace.id,
                     projectID: context.project.id,
                     pairedSessionID: context.workspace.authMethod.pairedSessionID,

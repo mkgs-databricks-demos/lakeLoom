@@ -69,6 +69,12 @@ public final class AppCoordinator {
     /// (in PR 8b+) by the speech-to-text streamer to emit segments
     /// from the live recording.
     public let transcriptEvents: (any TranscriptEventsClient)?
+    /// Stable per-device identity (keychain-persisted UUID). Used to
+    /// populate `device_id` on every ZeroBus transcript event. See
+    /// ``DeviceIdentityStore``. Optional with a sensible default in
+    /// production wiring so existing tests don't need to construct
+    /// one.
+    public let deviceIdentity: (any DeviceIdentityStore)?
     let logger: AppLogger
     let nowProvider: @Sendable () -> Date
 
@@ -88,6 +94,7 @@ public final class AppCoordinator {
         photoCapture: (any PhotoCapture)? = nil,
         captureService: (any CaptureService)? = nil,
         transcriptEvents: (any TranscriptEventsClient)? = nil,
+        deviceIdentity: (any DeviceIdentityStore)? = nil,
         logger: AppLogger = AppLogger(category: .coordinator),
         nowProvider: @Sendable @escaping () -> Date = Date.init
     ) {
@@ -100,6 +107,7 @@ public final class AppCoordinator {
         self.photoCapture = photoCapture
         self.captureService = captureService
         self.transcriptEvents = transcriptEvents
+        self.deviceIdentity = deviceIdentity
         self.logger = logger
         self.nowProvider = nowProvider
     }

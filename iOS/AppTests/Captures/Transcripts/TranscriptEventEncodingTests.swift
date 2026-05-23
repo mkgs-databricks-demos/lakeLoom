@@ -47,6 +47,43 @@ struct TranscriptEventEncodingTests {
         #expect(TranscriptEvent.EventType.clientStatus.rawValue == "client_status")
     }
 
+    // MARK: - PR 8a amendment fields (Genie 2026-05-23 contract update)
+
+    @Test("project_id, device_id, device_name, event_time encode as snake_case")
+    func amendmentFieldsSnakeCase() throws {
+        let event = TranscriptEvent(
+            eventType: .finalTranscript,
+            text: "hi",
+            projectID: "proj-uuid",
+            deviceID: "dev-uuid",
+            deviceName: "iPhone 17 Pro Max",
+            eventTime: "2026-05-23T16:49:25.891Z"
+        )
+        let json = try encode(event)
+
+        #expect(json["project_id"] as? String == "proj-uuid")
+        #expect(json["device_id"] as? String == "dev-uuid")
+        #expect(json["device_name"] as? String == "iPhone 17 Pro Max")
+        #expect(json["event_time"] as? String == "2026-05-23T16:49:25.891Z")
+        #expect(json["projectID"] == nil)
+        #expect(json["deviceID"] == nil)
+        #expect(json["deviceName"] == nil)
+        #expect(json["eventTime"] == nil)
+    }
+
+    @Test("Amendment fields omitted when nil — backward compatible with the v1 payload")
+    func amendmentFieldsOmittedWhenNil() throws {
+        let event = TranscriptEvent(
+            eventType: .finalTranscript,
+            text: "no extras"
+        )
+        let json = try encode(event)
+        #expect(json["project_id"] == nil)
+        #expect(json["device_id"] == nil)
+        #expect(json["device_name"] == nil)
+        #expect(json["event_time"] == nil)
+    }
+
     // MARK: - Optional handling
 
     @Test("nil fields are omitted from the encoded body")

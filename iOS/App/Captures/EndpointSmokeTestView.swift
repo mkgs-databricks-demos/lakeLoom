@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 #if DEBUG
 /// Debug-only screen for poking the capture endpoints against the
@@ -14,6 +15,7 @@ struct EndpointSmokeTestView: View {
     let uploadCoordinator: (any UploadCoordinator)?
     let photoCapture: (any PhotoCapture)?
     let transcriptEvents: (any TranscriptEventsClient)?
+    let deviceIdentity: (any DeviceIdentityStore)?
     let workspaceID: String
     let projectID: String
     let pairedSessionID: String
@@ -502,15 +504,31 @@ struct EndpointSmokeTestView: View {
     /// in PR 8b.
     private func sendHardcodedTranscript() async {
         guard let transcriptEvents else { return }
+        let now = Date()
+        let eventTimeFormatter = ISO8601DateFormatter()
+        eventTimeFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        let deviceID: String?
+        if let deviceIdentity {
+            deviceID = try? await deviceIdentity.deviceID()
+        } else {
+            deviceID = nil
+        }
+        let deviceName = await MainActor.run { UIDevice.current.name }
+
         let event = TranscriptEvent(
             eventType: .finalTranscript,
-            text: "Smoke-test transcript event at \(ISO8601DateFormatter().string(from: Date()))",
+            text: "Smoke-test transcript event at \(eventTimeFormatter.string(from: now))",
             confidence: 0.95,
             language: "en-US",
             segmentIndex: 0,
             durationMs: 1500,
             source: "smoke_test",
-            model: "ios_smoke_test"
+            model: "ios_smoke_test",
+            projectID: projectID,
+            deviceID: deviceID,
+            deviceName: deviceName,
+            eventTime: eventTimeFormatter.string(from: now)
         )
         append(.start("XCRIPT", "events.send", "paired=\(pairedSessionID.prefix(8))…"))
         do {
@@ -519,7 +537,7 @@ struct EndpointSmokeTestView: View {
                 pairedSessionID: pairedSessionID,
                 event: event
             )
-            append(.ok("XCRIPT", "events.ok", "accepted=\(accepted)"))
+            append(.ok("XCRIPT", "events.ok", "accepted=\(accepted) device=\(deviceID?.prefix(8) ?? "?")"))
         } catch let error as TranscriptEventsError {
             append(.fail("XCRIPT", "send: \(String(describing: error))"))
         } catch {

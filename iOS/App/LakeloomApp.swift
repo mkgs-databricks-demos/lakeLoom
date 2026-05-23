@@ -40,6 +40,7 @@ struct LakeloomApp: App {
         )
         let captureAPI = LiveCaptureAPIClient(lakeloomApp: lakeloomApp)
         let transcriptEvents = LiveTranscriptEventsClient(lakeloomApp: lakeloomApp)
+        let deviceIdentity = LiveDeviceIdentityStore()
 
         // Upload pipeline. Worker loop is started from the App's
         // `.task` modifier below so the queue rehydration happens on
@@ -92,7 +93,8 @@ struct LakeloomApp: App {
                 uploadCoordinator: uploadCoordinator,
                 photoCapture: photoCapture,
                 captureService: captureService,
-                transcriptEvents: transcriptEvents
+                transcriptEvents: transcriptEvents,
+                deviceIdentity: deviceIdentity
             )
         )
     }

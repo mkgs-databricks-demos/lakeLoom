@@ -186,8 +186,10 @@
 		18020A0118001800180018A1 /* TranscriptEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18010A0118001800180018A1 /* TranscriptEvent.swift */; };
 		18020A0218001800180018A2 /* TranscriptEventsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18010A0218001800180018A2 /* TranscriptEventsClient.swift */; };
 		18020A0318001800180018A3 /* TranscriptEventsError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18010A0318001800180018A3 /* TranscriptEventsError.swift */; };
+		18020A0418001800180018A4 /* DeviceIdentityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18010A0418001800180018A4 /* DeviceIdentityStore.swift */; };
 		18020A1118001800180018B1 /* TranscriptEventEncodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18010A1118001800180018B1 /* TranscriptEventEncodingTests.swift */; };
 		18020A1218001800180018B2 /* LiveTranscriptEventsClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18010A1218001800180018B2 /* LiveTranscriptEventsClientTests.swift */; };
+		18020A1318001800180018B3 /* DeviceIdentityStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18010A1318001800180018B3 /* DeviceIdentityStoreTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -389,8 +391,10 @@
 		18010A0118001800180018A1 /* TranscriptEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptEvent.swift; sourceTree = "<group>"; };
 		18010A0218001800180018A2 /* TranscriptEventsClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptEventsClient.swift; sourceTree = "<group>"; };
 		18010A0318001800180018A3 /* TranscriptEventsError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptEventsError.swift; sourceTree = "<group>"; };
+		18010A0418001800180018A4 /* DeviceIdentityStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentityStore.swift; sourceTree = "<group>"; };
 		18010A1118001800180018B1 /* TranscriptEventEncodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptEventEncodingTests.swift; sourceTree = "<group>"; };
 		18010A1218001800180018B2 /* LiveTranscriptEventsClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTranscriptEventsClientTests.swift; sourceTree = "<group>"; };
+		18010A1318001800180018B3 /* DeviceIdentityStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentityStoreTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -666,6 +670,7 @@
 		18030A0118001800180018C1 /* Transcripts */ = {
 			isa = PBXGroup;
 			children = (
+				18010A0418001800180018A4 /* DeviceIdentityStore.swift */,
 				18010A0118001800180018A1 /* TranscriptEvent.swift */,
 				18010A0218001800180018A2 /* TranscriptEventsClient.swift */,
 				18010A0318001800180018A3 /* TranscriptEventsError.swift */,
@@ -864,6 +869,7 @@
 		18030A1118001800180018D1 /* Transcripts */ = {
 			isa = PBXGroup;
 			children = (
+				18010A1318001800180018B3 /* DeviceIdentityStoreTests.swift */,
 				18010A1118001800180018B1 /* TranscriptEventEncodingTests.swift */,
 				18010A1218001800180018B2 /* LiveTranscriptEventsClientTests.swift */,
 			);
@@ -1212,6 +1218,7 @@
 				17020A1117001700170017B1 /* RelativeTimeFormatterTests.swift in Sources */,
 				18020A1118001800180018B1 /* TranscriptEventEncodingTests.swift in Sources */,
 				18020A1218001800180018B2 /* LiveTranscriptEventsClientTests.swift in Sources */,
+				18020A1318001800180018B3 /* DeviceIdentityStoreTests.swift in Sources */,
 				14020A0214001400140014DE /* PendingUploadRoutingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1258,6 +1265,7 @@
 				18020A0118001800180018A1 /* TranscriptEvent.swift in Sources */,
 				18020A0218001800180018A2 /* TranscriptEventsClient.swift in Sources */,
 				18020A0318001800180018A3 /* TranscriptEventsError.swift in Sources */,
+				18020A0418001800180018A4 /* DeviceIdentityStore.swift in Sources */,
 				DA3DE0271D8CF642B2DBCD87 /* ConsentStepView.swift in Sources */,
 				39648CCBC7B49D1D1AA8224F /* ConsentVersion.swift in Sources */,
 				A2335FCCF1E61286BBF82B3D /* CoreDataStack+InMemory.swift in Sources */,
