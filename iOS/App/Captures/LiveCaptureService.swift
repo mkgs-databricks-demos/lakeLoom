@@ -26,14 +26,17 @@ public actor LiveCaptureService: CaptureService {
     /// drive the identity-aware paths keep compiling.
     private let deviceIdentity: (any DeviceIdentityStore)?
     /// Optional on-device speech transcriber. When set together with
-    /// `transcriptEvents`, the finalize path kicks off a post-stop
-    /// transcription Task that streams `final_transcript` events to
+    /// `transcriptStreamer`, the finalize path kicks off a post-stop
+    /// transcription Task that drains `final_transcript` events into
     /// ZeroBus while the audio file uploads in parallel. Both nil →
     /// no transcription, audio still uploads (back-compat with tests
     /// + the path where SpeechAnalyzer permission is denied).
     private let speechTranscriber: (any SpeechTranscriber)?
-    /// Optional ZeroBus events client. Same nil-tolerance as above.
-    private let transcriptEvents: (any TranscriptEventsClient)?
+    /// Optional batching/retry pipe to ``TranscriptEventsClient``.
+    /// Replaces the per-segment direct `sendEvent` calls from PR 8b
+    /// with batched POSTs + retry classification. Same nil-tolerance
+    /// as `speechTranscriber`.
+    private let transcriptStreamer: (any TranscriptStreamer)?
     /// Workspace + paired-session resolver — the transcript events
     /// endpoint is `/api/sessions/<paired_session_id>/events`, so we
     /// need to know the active paired session at emit time without
@@ -65,7 +68,7 @@ public actor LiveCaptureService: CaptureService {
         contextStore: CaptureContextStore? = nil,
         deviceIdentity: (any DeviceIdentityStore)? = nil,
         speechTranscriber: (any SpeechTranscriber)? = nil,
-        transcriptEvents: (any TranscriptEventsClient)? = nil,
+        transcriptStreamer: (any TranscriptStreamer)? = nil,
         pairedSessionIDProvider: (@Sendable () async -> String?)? = nil,
         logger: AppLogger = AppLogger(category: .capture)
     ) {
@@ -75,7 +78,7 @@ public actor LiveCaptureService: CaptureService {
         self.contextStore = contextStore
         self.deviceIdentity = deviceIdentity
         self.speechTranscriber = speechTranscriber
-        self.transcriptEvents = transcriptEvents
+        self.transcriptStreamer = transcriptStreamer
         self.pairedSessionIDProvider = pairedSessionIDProvider
         self.logger = logger
         self.nowProvider = Date.init
@@ -93,7 +96,7 @@ public actor LiveCaptureService: CaptureService {
         contextStore: CaptureContextStore? = nil,
         deviceIdentity: (any DeviceIdentityStore)? = nil,
         speechTranscriber: (any SpeechTranscriber)? = nil,
-        transcriptEvents: (any TranscriptEventsClient)? = nil,
+        transcriptStreamer: (any TranscriptStreamer)? = nil,
         pairedSessionIDProvider: (@Sendable () async -> String?)? = nil,
         logger: AppLogger = AppLogger(category: .capture),
         nowProvider: @Sendable @escaping () -> Date,
@@ -106,7 +109,7 @@ public actor LiveCaptureService: CaptureService {
         self.contextStore = contextStore
         self.deviceIdentity = deviceIdentity
         self.speechTranscriber = speechTranscriber
-        self.transcriptEvents = transcriptEvents
+        self.transcriptStreamer = transcriptStreamer
         self.pairedSessionIDProvider = pairedSessionIDProvider
         self.logger = logger
         self.nowProvider = nowProvider
@@ -445,10 +448,12 @@ public actor LiveCaptureService: CaptureService {
     // MARK: - Private
 
     /// Fires a detached Task that transcribes the just-recorded
-    /// `.m4a` and posts each segment as a `final_transcript`
-    /// ZeroBus event. Returns immediately; the Task is decoupled
-    /// from the capture lifecycle so transcription latency doesn't
-    /// affect upload finalization.
+    /// `.m4a` and drains the resulting segment stream into the
+    /// ``TranscriptStreamer``. The streamer handles batching, retry
+    /// classification, and best-effort delivery — the capture
+    /// service only owns the lifecycle (start, wait for end). Task
+    /// is decoupled from the capture so transcription latency
+    /// doesn't affect upload finalization.
     private func transcribeAudioInBackground(
         fileURL: URL,
         workspaceID: String,
@@ -458,13 +463,11 @@ public actor LiveCaptureService: CaptureService {
     ) {
         guard
             let speechTranscriber,
-            let transcriptEvents,
+            let transcriptStreamer,
             let pairedSessionIDProvider
         else { return }
 
         let logger = self.logger
-        let isoFormatter = ISO8601DateFormatter()
-        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
         Task { [logger] in
             guard let pairedSessionID = await pairedSessionIDProvider(),
@@ -487,44 +490,17 @@ public actor LiveCaptureService: CaptureService {
                 return
             }
 
-            do {
-                for try await segment in stream {
-                    let eventTimeDate = startedAt.addingTimeInterval(segment.startTimeSeconds)
-                    let event = TranscriptEvent(
-                        eventType: .finalTranscript,
-                        text: segment.text,
-                        confidence: segment.confidence,
-                        language: "en-US",
-                        segmentIndex: segment.segmentIndex,
-                        durationMs: segment.durationMs,
-                        source: "on_device",
-                        model: "sf_speech_recognizer",
-                        projectID: projectID,
-                        deviceID: deviceID,
-                        eventTime: isoFormatter.string(from: eventTimeDate)
-                    )
-                    do {
-                        _ = try await transcriptEvents.sendEvent(
-                            workspaceID: workspaceID,
-                            pairedSessionID: pairedSessionID,
-                            event: event
-                        )
-                    } catch {
-                        await logger.warning(
-                            "speech.transcribe.event_send_failed",
-                            metadata: [
-                                "segment_index": .int(Int64(segment.segmentIndex)),
-                                "reason": .string(String(describing: error))
-                            ]
-                        )
-                    }
-                }
-            } catch {
-                await logger.warning(
-                    "speech.transcribe.mid_stream_failed",
-                    metadata: ["reason": .string(String(describing: error))]
-                )
-            }
+            await transcriptStreamer.stream(
+                workspaceID: workspaceID,
+                pairedSessionID: pairedSessionID,
+                projectID: projectID,
+                deviceID: deviceID,
+                recordingStartedAt: startedAt,
+                segments: stream,
+                source: "on_device",
+                model: "sf_speech_recognizer",
+                language: "en-US"
+            )
         }
     }
 
