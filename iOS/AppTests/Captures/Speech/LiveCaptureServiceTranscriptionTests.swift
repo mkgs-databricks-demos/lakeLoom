@@ -52,6 +52,13 @@ struct LiveCaptureServiceTranscriptionTests {
         let uploads = FakeUploadCoordinator()
         let transcriber = FakeSpeechTranscriber()
         let transcriptEvents = RecordingTranscriptEventsClient()
+        let streamer = LiveTranscriptStreamer(
+            events: transcriptEvents,
+            maxBatchSize: 100,
+            retryBackoffSeconds: [0],
+            logger: AppLogger(category: .capture),
+            sleep: { _ in }
+        )
         let pairedSessionID = Self.pairedSessionID
         let provider: @Sendable () async -> String? = { pairedSessionID }
         let deviceStore = InMemoryDeviceIdentityStore(preloaded: Self.deviceID)
@@ -61,7 +68,7 @@ struct LiveCaptureServiceTranscriptionTests {
             uploadCoordinator: uploads,
             deviceIdentity: deviceStore,
             speechTranscriber: transcriber,
-            transcriptEvents: transcriptEvents,
+            transcriptStreamer: streamer,
             pairedSessionIDProvider: provider,
             nowProvider: { Self.fixedNow },
             uploadIDProvider: { Self.uploadID },
@@ -183,13 +190,20 @@ struct LiveCaptureServiceTranscriptionTests {
         let uploads = FakeUploadCoordinator()
         let transcriber = FakeSpeechTranscriber()
         let transcriptEvents = RecordingTranscriptEventsClient()
+        let streamer = LiveTranscriptStreamer(
+            events: transcriptEvents,
+            maxBatchSize: 100,
+            retryBackoffSeconds: [0],
+            logger: AppLogger(category: .capture),
+            sleep: { _ in }
+        )
         let provider: @Sendable () async -> String? = { nil }
         let service = LiveCaptureService(
             captureAPI: api,
             recorder: recorder,
             uploadCoordinator: uploads,
             speechTranscriber: transcriber,
-            transcriptEvents: transcriptEvents,
+            transcriptStreamer: streamer,
             pairedSessionIDProvider: provider,
             nowProvider: { Self.fixedNow },
             uploadIDProvider: { Self.uploadID },

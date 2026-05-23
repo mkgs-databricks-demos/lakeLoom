@@ -43,6 +43,7 @@ struct LakeloomApp: App {
         let captureAPI = LiveCaptureAPIClient(lakeloomApp: lakeloomApp)
         let transcriptEvents = LiveTranscriptEventsClient(lakeloomApp: lakeloomApp)
         let speechTranscriber = LiveSpeechTranscriber()
+        let transcriptStreamer = LiveTranscriptStreamer(events: transcriptEvents)
 
         // Upload pipeline. Worker loop is started from the App's
         // `.task` modifier below so the queue rehydration happens on
@@ -88,7 +89,7 @@ struct LakeloomApp: App {
                 contextStore: contextStore,
                 deviceIdentity: deviceIdentity,
                 speechTranscriber: speechTranscriber,
-                transcriptEvents: transcriptEvents,
+                transcriptStreamer: transcriptStreamer,
                 pairedSessionIDProvider: pairedSessionIDProvider
             )
         } else {
