@@ -37,6 +37,17 @@ public actor LiveCaptureService: CaptureService {
     /// with batched POSTs + retry classification. Same nil-tolerance
     /// as `speechTranscriber`.
     private let transcriptStreamer: (any TranscriptStreamer)?
+    /// Optional live (during-recording) speech recognizer. When
+    /// wired, takes priority over the file-based `speechTranscriber`
+    /// — segments start landing in ZeroBus while audio is still
+    /// being recorded, instead of seconds after stop. Both nil →
+    /// no transcription; only `speechTranscriber` set →
+    /// post-stop file-based path; both set → live takes precedence.
+    private let streamingRecognizer: (any StreamingSpeechRecognizer)?
+    /// The current capture's streaming recognizer task. Held so
+    /// stopCapture can await it during finalize, AND so a failure
+    /// path can cancel cleanly.
+    private var liveTranscribeTask: Task<Void, Never>?
     /// Workspace + paired-session resolver — the transcript events
     /// endpoint is `/api/sessions/<paired_session_id>/events`, so we
     /// need to know the active paired session at emit time without
@@ -69,6 +80,7 @@ public actor LiveCaptureService: CaptureService {
         deviceIdentity: (any DeviceIdentityStore)? = nil,
         speechTranscriber: (any SpeechTranscriber)? = nil,
         transcriptStreamer: (any TranscriptStreamer)? = nil,
+        streamingRecognizer: (any StreamingSpeechRecognizer)? = nil,
         pairedSessionIDProvider: (@Sendable () async -> String?)? = nil,
         logger: AppLogger = AppLogger(category: .capture)
     ) {
@@ -79,6 +91,7 @@ public actor LiveCaptureService: CaptureService {
         self.deviceIdentity = deviceIdentity
         self.speechTranscriber = speechTranscriber
         self.transcriptStreamer = transcriptStreamer
+        self.streamingRecognizer = streamingRecognizer
         self.pairedSessionIDProvider = pairedSessionIDProvider
         self.logger = logger
         self.nowProvider = Date.init
@@ -97,6 +110,7 @@ public actor LiveCaptureService: CaptureService {
         deviceIdentity: (any DeviceIdentityStore)? = nil,
         speechTranscriber: (any SpeechTranscriber)? = nil,
         transcriptStreamer: (any TranscriptStreamer)? = nil,
+        streamingRecognizer: (any StreamingSpeechRecognizer)? = nil,
         pairedSessionIDProvider: (@Sendable () async -> String?)? = nil,
         logger: AppLogger = AppLogger(category: .capture),
         nowProvider: @Sendable @escaping () -> Date,
@@ -110,6 +124,7 @@ public actor LiveCaptureService: CaptureService {
         self.deviceIdentity = deviceIdentity
         self.speechTranscriber = speechTranscriber
         self.transcriptStreamer = transcriptStreamer
+        self.streamingRecognizer = streamingRecognizer
         self.pairedSessionIDProvider = pairedSessionIDProvider
         self.logger = logger
         self.nowProvider = nowProvider
@@ -328,11 +343,29 @@ public actor LiveCaptureService: CaptureService {
                 "capture_session_id": .uuidPrefix(session.id)
             ]
         )
+
+        // Kick off live transcription (PR 8d) if a streaming
+        // recognizer is wired. Best-effort — failures log but don't
+        // tear down the recording. Falls back to the file-based
+        // path in transcribeAudioInBackground if no streaming
+        // recognizer is set.
+        startLiveTranscriptionInBackground(
+            workspaceID: workspaceID,
+            projectID: projectID,
+            startedAt: context.startedAt
+        )
     }
 
     public func stopCapture() async throws {
         guard case .recording(let context) = current else {
             throw CaptureServiceError.notRecording
+        }
+
+        // Stop the live recognizer first so its stream finishes
+        // cleanly before we await its drain Task. Idempotent if no
+        // recognizer was wired.
+        if let streamingRecognizer {
+            await streamingRecognizer.stop()
         }
 
         let recording: AudioRecording
@@ -390,22 +423,25 @@ public actor LiveCaptureService: CaptureService {
             throw CaptureServiceError.enqueueFailed(reason: error.localizedDescription)
         }
 
-        // Kick off best-effort on-device transcription in parallel
-        // with the upload. Failures here log but don't fail the
-        // capture — the .m4a is still on its way to UC volume and
-        // the server-side Whisper pass is the authoritative
-        // transcript per Genie's AI pipeline note. Transcription
-        // requires speechTranscriber + transcriptEvents + a
-        // pairedSessionIDProvider to be wired; if any is missing
-        // (test paths, permission denied earlier in this session)
-        // we silently skip.
-        transcribeAudioInBackground(
-            fileURL: recording.fileURL,
-            workspaceID: context.workspaceID,
-            projectID: context.projectID,
-            deviceID: audioDeviceID,
-            startedAt: recording.startedAt
-        )
+        // Best-effort post-recording transcription. PR 8d's live
+        // recognizer (if wired) has already been streaming segments
+        // during the recording, so we only fall back to the
+        // file-based path when the streaming recognizer is absent.
+        // Even with streaming wired we still want to await its
+        // drain so the transcript pipeline's final emissions land
+        // before stopCapture returns.
+        if let liveTranscribeTask {
+            await liveTranscribeTask.value
+            self.liveTranscribeTask = nil
+        } else {
+            transcribeAudioInBackground(
+                fileURL: recording.fileURL,
+                workspaceID: context.workspaceID,
+                projectID: context.projectID,
+                deviceID: audioDeviceID,
+                startedAt: recording.startedAt
+            )
+        }
 
         // Subscribe to the upload coordinator's state stream
         // synchronously inside the actor BEFORE returning. That
@@ -423,6 +459,11 @@ public actor LiveCaptureService: CaptureService {
     public func cancelCapture() async throws {
         switch current {
         case .recording(let context):
+            if let streamingRecognizer {
+                await streamingRecognizer.stop()
+            }
+            liveTranscribeTask?.cancel()
+            liveTranscribeTask = nil
             await recorder.cancel()
             await patchServerCancelled(context: context)
             transition(to: .cancelled(context))
@@ -446,6 +487,66 @@ public actor LiveCaptureService: CaptureService {
     }
 
     // MARK: - Private
+
+    /// Fires a Task that drains the live streaming recognizer's
+    /// segment stream into the ``TranscriptStreamer`` for the
+    /// duration of the recording. The Task handle is stored on
+    /// `liveTranscribeTask` so `stopCapture` can await it before
+    /// returning — ensuring the streamer flushes its final batch
+    /// before the upload finalizes.
+    ///
+    /// Skipped when any of streamingRecognizer / transcriptStreamer
+    /// / pairedSessionIDProvider is nil (older tests, no paired
+    /// session, etc.). In those cases the file-based fallback fires
+    /// from `stopCapture` instead.
+    private func startLiveTranscriptionInBackground(
+        workspaceID: String,
+        projectID: String,
+        startedAt: Date
+    ) {
+        guard
+            let streamingRecognizer,
+            let transcriptStreamer,
+            let pairedSessionIDProvider
+        else { return }
+
+        let logger = self.logger
+        liveTranscribeTask = Task { [logger] in
+            guard let pairedSessionID = await pairedSessionIDProvider(),
+                  !pairedSessionID.isEmpty else {
+                await logger.warning(
+                    "speech.streaming.skipped",
+                    metadata: ["reason": .string("no paired session id")]
+                )
+                return
+            }
+
+            let deviceID = await self.resolvedDeviceID()
+
+            let stream: AsyncThrowingStream<TranscriptSegment, Error>
+            do {
+                stream = try await streamingRecognizer.transcripts()
+            } catch {
+                await logger.warning(
+                    "speech.streaming.start_failed",
+                    metadata: ["reason": .string(String(describing: error))]
+                )
+                return
+            }
+
+            await transcriptStreamer.stream(
+                workspaceID: workspaceID,
+                pairedSessionID: pairedSessionID,
+                projectID: projectID,
+                deviceID: deviceID,
+                recordingStartedAt: startedAt,
+                segments: stream,
+                source: "on_device_live",
+                model: "sf_speech_streaming",
+                language: "en-US"
+            )
+        }
+    }
 
     /// Fires a detached Task that transcribes the just-recorded
     /// `.m4a` and drains the resulting segment stream into the

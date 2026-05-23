@@ -198,6 +198,10 @@
 		19020A1219001900190019B2 /* LiveCaptureServiceTranscriptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19010A1219001900190019B2 /* LiveCaptureServiceTranscriptionTests.swift */; };
 		19020A0519001900190019A5 /* TranscriptStreamer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19010A0519001900190019A5 /* TranscriptStreamer.swift */; };
 		19020A1319001900190019B3 /* LiveTranscriptStreamerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19010A1319001900190019B3 /* LiveTranscriptStreamerTests.swift */; };
+		19020A0619001900190019A6 /* StreamingSpeechRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19010A0619001900190019A6 /* StreamingSpeechRecognizer.swift */; };
+		19020A0719001900190019A7 /* LiveStreamingSpeechRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19010A0719001900190019A7 /* LiveStreamingSpeechRecognizer.swift */; };
+		19020A1419001900190019B4 /* FakeStreamingSpeechRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19010A1419001900190019B4 /* FakeStreamingSpeechRecognizer.swift */; };
+		19020A1519001900190019B5 /* LiveCaptureServiceStreamingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19010A1519001900190019B5 /* LiveCaptureServiceStreamingTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -411,6 +415,10 @@
 		19010A1219001900190019B2 /* LiveCaptureServiceTranscriptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveCaptureServiceTranscriptionTests.swift; sourceTree = "<group>"; };
 		19010A0519001900190019A5 /* TranscriptStreamer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptStreamer.swift; sourceTree = "<group>"; };
 		19010A1319001900190019B3 /* LiveTranscriptStreamerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTranscriptStreamerTests.swift; sourceTree = "<group>"; };
+		19010A0619001900190019A6 /* StreamingSpeechRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamingSpeechRecognizer.swift; sourceTree = "<group>"; };
+		19010A0719001900190019A7 /* LiveStreamingSpeechRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveStreamingSpeechRecognizer.swift; sourceTree = "<group>"; };
+		19010A1419001900190019B4 /* FakeStreamingSpeechRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeStreamingSpeechRecognizer.swift; sourceTree = "<group>"; };
+		19010A1519001900190019B5 /* LiveCaptureServiceStreamingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveCaptureServiceStreamingTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -698,7 +706,9 @@
 		19030A0119001900190019C1 /* Speech */ = {
 			isa = PBXGroup;
 			children = (
+				19010A0719001900190019A7 /* LiveStreamingSpeechRecognizer.swift */,
 				19010A0419001900190019A4 /* LiveSpeechTranscriber.swift */,
+				19010A0619001900190019A6 /* StreamingSpeechRecognizer.swift */,
 				19010A0319001900190019A3 /* SpeechTranscriber.swift */,
 				19010A0219001900190019A2 /* SpeechTranscriberError.swift */,
 				19010A0519001900190019A5 /* TranscriptStreamer.swift */,
@@ -710,7 +720,9 @@
 		19030A1119001900190019D1 /* Speech */ = {
 			isa = PBXGroup;
 			children = (
+				19010A1419001900190019B4 /* FakeStreamingSpeechRecognizer.swift */,
 				19010A1119001900190019B1 /* FakeSpeechTranscriber.swift */,
+				19010A1519001900190019B5 /* LiveCaptureServiceStreamingTests.swift */,
 				19010A1219001900190019B2 /* LiveCaptureServiceTranscriptionTests.swift */,
 				19010A1319001900190019B3 /* LiveTranscriptStreamerTests.swift */,
 			);
@@ -1262,6 +1274,8 @@
 				19020A1119001900190019B1 /* FakeSpeechTranscriber.swift in Sources */,
 				19020A1219001900190019B2 /* LiveCaptureServiceTranscriptionTests.swift in Sources */,
 				19020A1319001900190019B3 /* LiveTranscriptStreamerTests.swift in Sources */,
+				19020A1419001900190019B4 /* FakeStreamingSpeechRecognizer.swift in Sources */,
+				19020A1519001900190019B5 /* LiveCaptureServiceStreamingTests.swift in Sources */,
 				14020A0214001400140014DE /* PendingUploadRoutingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1314,6 +1328,8 @@
 				19020A0319001900190019A3 /* SpeechTranscriber.swift in Sources */,
 				19020A0419001900190019A4 /* LiveSpeechTranscriber.swift in Sources */,
 				19020A0519001900190019A5 /* TranscriptStreamer.swift in Sources */,
+				19020A0619001900190019A6 /* StreamingSpeechRecognizer.swift in Sources */,
+				19020A0719001900190019A7 /* LiveStreamingSpeechRecognizer.swift in Sources */,
 				DA3DE0271D8CF642B2DBCD87 /* ConsentStepView.swift in Sources */,
 				39648CCBC7B49D1D1AA8224F /* ConsentVersion.swift in Sources */,
 				A2335FCCF1E61286BBF82B3D /* CoreDataStack+InMemory.swift in Sources */,

@@ -44,6 +44,7 @@ struct LakeloomApp: App {
         let transcriptEvents = LiveTranscriptEventsClient(lakeloomApp: lakeloomApp)
         let speechTranscriber = LiveSpeechTranscriber()
         let transcriptStreamer = LiveTranscriptStreamer(events: transcriptEvents)
+        let streamingRecognizer = LiveStreamingSpeechRecognizer()
 
         // Upload pipeline. Worker loop is started from the App's
         // `.task` modifier below so the queue rehydration happens on
@@ -90,6 +91,7 @@ struct LakeloomApp: App {
                 deviceIdentity: deviceIdentity,
                 speechTranscriber: speechTranscriber,
                 transcriptStreamer: transcriptStreamer,
+                streamingRecognizer: streamingRecognizer,
                 pairedSessionIDProvider: pairedSessionIDProvider
             )
         } else {
