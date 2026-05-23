@@ -41,7 +41,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { iosAuth } from '../../middleware/ios-auth';
 import { AppError, ErrorTypes } from '../../lib/errors';
 
-// ── Interfaces ───────────────────────────────────────────────────────────────
+// ── Interfaces ───────────────────────────────────────────────────────────────────
 
 interface LakebaseClient {
   query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
@@ -66,7 +66,7 @@ interface AppKitContext {
   server: { extend(fn: (app: Application) => void): void };
 }
 
-// ── MIME allowlist ────────────────────────────────────────────────────────────
+// ── MIME allowlist ────────────────────────────────────────────────────────────────
 
 const MIME_TO_EXT: Record<string, string> = {
   'audio/wav': 'wav',
@@ -78,7 +78,12 @@ const MIME_TO_EXT: Record<string, string> = {
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
 };
 
-// ── Volume path helpers ──────────────────────────────────────────────────────
+// ── Client type constants ────────────────────────────────────────────────────────
+
+/** Upload source discriminator — server-determined from auth context */
+export type ClientType = 'ios' | 'web';
+
+// ── Volume path helpers ──────────────────────────────────────────────────────────
 
 function requireNonEmptyString(value: unknown, context: string): string {
   if (typeof value !== 'string') {
@@ -177,7 +182,7 @@ function getVolumeBasePath(volumeEnvVar: string): string {
   return trimmed;
 }
 
-// ── Error helpers ────────────────────────────────────────────────────────────
+// ── Error helpers ────────────────────────────────────────────────────────────────
 
 function buildUploadAppError(
   status: number,
@@ -208,13 +213,14 @@ function normalizeError(error: unknown): Record<string, unknown> {
   return { error_message: String(error) };
 }
 
-// ── Diagnostics / logging ────────────────────────────────────────────────────
+// ── Diagnostics / logging ────────────────────────────────────────────────────────
 
 type UploadKind = 'audio' | 'screenshot' | 'photo' | 'document';
 
 type UploadDiagnostics = {
   uploadId: string;
   kind: UploadKind;
+  clientType: ClientType;
   projectId: string;
   captureSessionId: string | null;
   pairedSessionId: string;
@@ -234,6 +240,7 @@ function buildUploadContext(diagnostics: Partial<UploadDiagnostics>, extra?: Rec
   return {
     upload_id: diagnostics.uploadId ?? null,
     upload_kind: diagnostics.kind ?? null,
+    client_type: diagnostics.clientType ?? null,
     project_id: diagnostics.projectId ?? null,
     capture_session_id: diagnostics.captureSessionId ?? null,
     paired_session_id: diagnostics.pairedSessionId ?? null,
@@ -265,7 +272,7 @@ function toUploadAppError(error: unknown, req: Request, diagnostics: Partial<Upl
     buildUploadContext(diagnostics, { error_code: 'UPLOAD_REQUEST_FAILED', request_path: req.path, request_method: req.method, error_message: getErrorMessage(error) }));
 }
 
-// ── Timestamp normalization ──────────────────────────────────────────────────
+// ── Timestamp normalization ──────────────────────────────────────────────────────
 
 function normalizeClientTimestamp(rawClientTs?: string): { isoTimestamp: string; source: 'client' | 'server'; fallbackReason?: string } {
   if (!rawClientTs || rawClientTs.trim().length === 0) {
@@ -284,7 +291,7 @@ function normalizeClientTimestamp(rawClientTs?: string): { isoTimestamp: string;
   return { isoTimestamp: parsed.toISOString(), source: 'client' };
 }
 
-// ── Multipart parsing ────────────────────────────────────────────────────────
+// ── Multipart parsing ────────────────────────────────────────────────────────────
 
 interface ParsedUpload {
   fileBuffer: Buffer;
@@ -292,6 +299,7 @@ interface ParsedUpload {
   clientTs?: string;
   clientFilename?: string;
   clientSha256?: string;
+  deviceId?: string;
 }
 
 function getBufferedRequestBody(req: Request): Buffer | null {
@@ -314,6 +322,7 @@ function parseMultipart(req: Request): Promise<ParsedUpload> {
     let clientTs: string | undefined;
     let clientFilename: string | undefined;
     let clientSha256: string | undefined;
+    let deviceId: string | undefined;
     let fileReceived = false;
 
     busboy.on('file', (_fieldname, stream, info) => {
@@ -329,6 +338,7 @@ function parseMultipart(req: Request): Promise<ParsedUpload> {
       if (fieldname === 'client_ts') clientTs = value;
       if (fieldname === 'client_filename') clientFilename = value;
       if (fieldname === 'sha256_hex') clientSha256 = value;
+      if (fieldname === 'device_id') deviceId = value;
     });
 
     busboy.on('error', (parseErr) => {
@@ -340,7 +350,7 @@ function parseMultipart(req: Request): Promise<ParsedUpload> {
         reject(buildUploadAppError(400, 'Missing upload file', 'A non-empty file field is required.', { error_code: 'UPLOAD_FILE_REQUIRED' }));
         return;
       }
-      resolve({ fileBuffer: Buffer.concat(chunks), fileMimeType, clientTs, clientFilename, clientSha256 });
+      resolve({ fileBuffer: Buffer.concat(chunks), fileMimeType, clientTs, clientFilename, clientSha256, deviceId });
     });
 
     if (bufferedBody) {
@@ -351,7 +361,7 @@ function parseMultipart(req: Request): Promise<ParsedUpload> {
   });
 }
 
-// ── Route context lookups ────────────────────────────────────────────────────
+// ── Route context lookups ────────────────────────────────────────────────────────
 
 async function resolveCaptureContext(req: Request, lakebase: LakebaseClient): Promise<{ projectId: string; captureSessionId: string }> {
   const captureSessionId = requireSingleRouteParam(req.params.capture_session_id, 'capture_session_id');
@@ -376,10 +386,11 @@ async function resolveProjectContext(req: Request, lakebase: LakebaseClient): Pr
   return { projectId, captureSessionId: null };
 }
 
-// ── Upload handler factory ───────────────────────────────────────────────────
+// ── Upload handler factory ───────────────────────────────────────────────────────
 
 interface UploadHandlerOpts {
   kind: UploadKind;
+  clientType: ClientType;
   volumeKey: string;
   volumeEnvVar: string;
   allowedMimes?: string[];
@@ -390,14 +401,14 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     let volumeFilePath: string | undefined;
     let relativePath: string | undefined;
-    let diagnostics: Partial<UploadDiagnostics> = { kind: opts.kind };
+    let diagnostics: Partial<UploadDiagnostics> = { kind: opts.kind, clientType: opts.clientType };
 
     try {
-      // ── Step 1: Auth already resolved by iosAuth middleware ───────────────
+      // ── Step 1: Auth already resolved by iosAuth middleware ─────────────
       const userId = req.user!.userId;
       const pairedSessionId = req.user!.sessionId;
 
-      // ── Step 2: Resolve context (project + capture) ──────────────────────
+      // ── Step 2: Resolve context (project + capture) ──────────────────
       const { projectId, captureSessionId } = await opts.resolveContext(req, lakebase);
       diagnostics = { ...diagnostics, projectId, captureSessionId, pairedSessionId, userId };
 
@@ -407,15 +418,15 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
         content_type: req.headers['content-type'] ?? null,
       });
 
-      // ── Step 3: Parse multipart body ─────────────────────────────────────
+      // ── Step 3: Parse multipart body ─────────────────────────────
       const parsed = await parseMultipart(req);
 
-      // ── Step 4: Generate UUIDv7 ──────────────────────────────────────────
+      // ── Step 4: Generate UUIDv7 ──────────────────────────────────
       const uploadId = uuidv7();
       const normalizedTimestamp = normalizeClientTimestamp(parsed.clientTs);
 
       diagnostics = {
-        uploadId, kind: opts.kind, projectId, captureSessionId, pairedSessionId, userId,
+        uploadId, kind: opts.kind, clientType: opts.clientType, projectId, captureSessionId, pairedSessionId, userId,
         fileMimeType: parsed.fileMimeType, clientFilename: parsed.clientFilename,
         providedClientTs: parsed.clientTs, normalizedClientTs: normalizedTimestamp.isoTimestamp,
         timestampSource: normalizedTimestamp.source, timestampFallbackReason: normalizedTimestamp.fallbackReason,
@@ -424,7 +435,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
 
       logUploadEvent('[upload] request.received', diagnostics, { request_path: req.path, request_method: req.method });
 
-      // ── Step 5: Validate MIME + derive extension ─────────────────────────
+      // ── Step 5: Validate MIME + derive extension ─────────────────────
       if (opts.allowedMimes && !opts.allowedMimes.includes(parsed.fileMimeType)) {
         throw buildUploadAppError(415, 'Unsupported Media Type',
           `MIME type '${parsed.fileMimeType}' is not accepted by this endpoint. Allowed: ${opts.allowedMimes.join(', ')}.`,
@@ -441,7 +452,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
       const sha256Hash = createHash('sha256').update(parsed.fileBuffer).digest('hex');
       diagnostics.sha256Hex = sha256Hash;
 
-      // ── Step 6: Build paths and upload via AppKit files plugin ────────────
+      // ── Step 6: Build paths and upload via AppKit files plugin ──────────
       const volumeBasePath = getVolumeBasePath(opts.volumeEnvVar);
       const paths = buildUploadPaths({ volumeBasePath, projectId, captureSessionId, uploadId, extension: ext });
       relativePath = paths.relativePath;
@@ -484,7 +495,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
         file_name: paths.fileName,
       });
 
-      // ── Step 7: SHA-256 verification ─────────────────────────────────────
+      // ── Step 7: SHA-256 verification ─────────────────────────────
       if (parsed.clientSha256 && parsed.clientSha256 !== sha256Hash) {
         try {
           await appkitFiles(opts.volumeKey).delete(relativePath);
@@ -497,7 +508,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
           buildUploadContext(diagnostics, { error_code: 'UPLOAD_SHA256_MISMATCH', client_sha256: parsed.clientSha256, computed_sha256: sha256Hash }));
       }
 
-      // ── Step 8: INSERT INTO app.uploads ──────────────────────────────────
+      // ── Step 8: INSERT INTO app.uploads ──────────────────────────
       logUploadEvent('[upload] metadata.insert_attempt', diagnostics, {
         insert_target: 'app.uploads', insert_kind: opts.kind,
         insert_volume_path: volumeFilePath, insert_size_bytes: parsed.fileBuffer.length,
@@ -508,11 +519,11 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
         await lakebase.query(
           `INSERT INTO app.uploads
              (id, kind, project_id, capture_session_id, paired_session_id, user_id,
-              volume_path, mime_type, size_bytes, sha256_hex, original_filename, client_ts)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz)`,
+              volume_path, mime_type, size_bytes, sha256_hex, original_filename, client_ts, device_id, client_type)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13::uuid, $14)`,
           [uploadId, opts.kind, projectId, captureSessionId, pairedSessionId, userId,
            volumeFilePath, parsed.fileMimeType, parsed.fileBuffer.length, sha256Hash,
-           parsed.clientFilename ?? null, normalizedTimestamp.isoTimestamp],
+           parsed.clientFilename ?? null, normalizedTimestamp.isoTimestamp, parsed.deviceId ?? null, opts.clientType],
         );
         logUploadEvent('[upload] metadata.insert_succeeded', diagnostics, { insert_target: 'app.uploads', insert_volume_path: volumeFilePath });
       } catch (insertErr) {
@@ -528,9 +539,9 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
           buildUploadContext(diagnostics, { error_code: 'UPLOAD_METADATA_INSERT_FAILED', error_message: getErrorMessage(insertErr) }));
       }
 
-      // ── Step 9: 201 response ──────────────────────────────────────────────
+      // ── Step 9: 201 response ──────────────────────────────────────
       res.status(201).json({
-        id: uploadId, kind: opts.kind, project_id: projectId, capture_session_id: captureSessionId,
+        id: uploadId, kind: opts.kind, client_type: opts.clientType, project_id: projectId, capture_session_id: captureSessionId,
         volume_path: volumeFilePath, mime_type: parsed.fileMimeType, size_bytes: parsed.fileBuffer.length,
         sha256_hex: sha256Hash, client_ts: normalizedTimestamp.isoTimestamp,
         client_ts_source: normalizedTimestamp.source, uploaded_at: new Date().toISOString(),
@@ -543,7 +554,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
   };
 }
 
-// ── Public registration entry point ──────────────────────────────────────────
+// ── Public registration entry point ────────────────────────────────────────────
 
 export default function registerUploads(ctx: AppKitContext): void {
   // AppKit files plugin — accessed via dynamic key because PluginMap name typing
@@ -556,7 +567,7 @@ export default function registerUploads(ctx: AppKitContext): void {
       '/api/captures/:capture_session_id/audio',
       iosAuth({ lakebase }),
       createUploadHandler(
-        { kind: 'audio', volumeKey: 'session_audio', volumeEnvVar: 'LAKELOOM_AUDIO_VOLUME_PATH', allowedMimes: ['audio/wav', 'audio/m4a', 'audio/mp4'], resolveContext: resolveCaptureContext },
+        { kind: 'audio', clientType: 'ios', volumeKey: 'session_audio', volumeEnvVar: 'LAKELOOM_AUDIO_VOLUME_PATH', allowedMimes: ['audio/wav', 'audio/m4a', 'audio/mp4'], resolveContext: resolveCaptureContext },
         lakebase, appkitFiles,
       ),
     );
@@ -565,7 +576,7 @@ export default function registerUploads(ctx: AppKitContext): void {
       '/api/captures/:capture_session_id/screenshots',
       iosAuth({ lakebase }),
       createUploadHandler(
-        { kind: 'screenshot', volumeKey: 'screenshots', volumeEnvVar: 'LAKELOOM_SCREENSHOT_VOLUME_PATH', allowedMimes: ['image/png', 'image/jpeg'], resolveContext: resolveCaptureContext },
+        { kind: 'screenshot', clientType: 'ios', volumeKey: 'screenshots', volumeEnvVar: 'LAKELOOM_SCREENSHOT_VOLUME_PATH', allowedMimes: ['image/png', 'image/jpeg'], resolveContext: resolveCaptureContext },
         lakebase, appkitFiles,
       ),
     );
@@ -574,7 +585,7 @@ export default function registerUploads(ctx: AppKitContext): void {
       '/api/captures/:capture_session_id/photos',
       iosAuth({ lakebase }),
       createUploadHandler(
-        { kind: 'photo', volumeKey: 'screenshots', volumeEnvVar: 'LAKELOOM_PHOTO_VOLUME_PATH', allowedMimes: ['image/png', 'image/jpeg'], resolveContext: resolveCaptureContext },
+        { kind: 'photo', clientType: 'ios', volumeKey: 'screenshots', volumeEnvVar: 'LAKELOOM_PHOTO_VOLUME_PATH', allowedMimes: ['image/png', 'image/jpeg'], resolveContext: resolveCaptureContext },
         lakebase, appkitFiles,
       ),
     );
@@ -583,7 +594,7 @@ export default function registerUploads(ctx: AppKitContext): void {
       '/api/projects/:project_id/documents',
       iosAuth({ lakebase }),
       createUploadHandler(
-        { kind: 'document', volumeKey: 'documents', volumeEnvVar: 'LAKELOOM_DOCUMENT_VOLUME_PATH', allowedMimes: ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'], resolveContext: resolveProjectContext },
+        { kind: 'document', clientType: 'ios', volumeKey: 'documents', volumeEnvVar: 'LAKELOOM_DOCUMENT_VOLUME_PATH', allowedMimes: ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'], resolveContext: resolveProjectContext },
         lakebase, appkitFiles,
       ),
     );

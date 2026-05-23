@@ -39,6 +39,9 @@ interface AppKitContext {
 const CreateCaptureBody = z.object({
   label: z.string().max(200).optional(),
   client_ts: z.string().datetime().optional(),
+  // device_id: stable keychain-persisted UUID v4 identifying the physical device.
+  // Optional until all iOS builds include it (PR 8a-2).
+  device_id: z.string().uuid().optional(),
 });
 
 const PatchCaptureBody = z.object({
@@ -63,7 +66,7 @@ export async function setupCaptureRoutes(appkit: AppKitContext): Promise<void> {
           throw validationError(parsed.error.issues.map((i) => i.message).join('; '));
         }
 
-        const { label, client_ts } = parsed.data;
+        const { label, client_ts, device_id } = parsed.data;
         const projectId = req.params.project_id;
         const userId = req.user!.userId;
         const pairedSessionId = req.user!.sessionId;
@@ -80,10 +83,10 @@ export async function setupCaptureRoutes(appkit: AppKitContext): Promise<void> {
 
         const { rows } = await lakebase.query(
           `INSERT INTO app.capture_sessions
-             (project_id, created_by_user_id, created_by_paired_session_id, device_label, label, started_at)
-           VALUES ($1, $2, $3, $4, $5, $6)
+             (project_id, created_by_user_id, created_by_paired_session_id, device_label, label, started_at, device_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7::uuid)
            RETURNING id, project_id, state, label, started_at`,
-          [projectId, userId, pairedSessionId, deviceLabel, label ?? null, startedAt],
+          [projectId, userId, pairedSessionId, deviceLabel, label ?? null, startedAt, device_id ?? null],
         );
 
         const capture = rows[0];

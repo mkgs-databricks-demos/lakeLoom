@@ -1,5 +1,7 @@
 # Session Index
 
+* [2026-05-23] Shared PairingTestClient, Migrations 009/010, Lakehouse Sync Schema Fix — `2026-05-23_shared-pairing-client-and-schema-sync.md`
+* [2026-05-23] Device Identity Contract Implementation — `2026-05-23_device-identity-contract.md`
 * [2026-05-21] ZeroBus Ingest Root Cause Fix & Full Validation — `2026-05-21_zerobus-ingest-root-cause-and-validation.md`
 * [2026-05-21] ZeroBus Scale-to-Zero Stream Pool Implementation — `2026-05-21_zerobus-scale-to-zero-implementation.md`
 * [2026-05-21] AppKit Files Plugin: Zero-Byte Upload Fix — `2026-05-21_appkit-files-plugin-zero-byte-fix.md`
@@ -9,6 +11,8 @@
 
 | Date | Summary | File |
 |------|---------|------|
+| 2026-05-23 | Shared PairingTestClient module, migrations 009 (client_type) + 010 (username), Lakehouse Sync Delta schema fix | [shared-pairing-client-and-schema-sync](./2026-05-23_shared-pairing-client-and-schema-sync.md) |
+| 2026-05-23 | Full device_id contract: migration 008, route handlers, test notebooks, column mapping fix, E2E validated | [device-identity-contract](./2026-05-23_device-identity-contract.md) |
 | 2026-05-21 | Root cause: object vs string passing to ZeroBus SDK; fix validated with 100-event load test, auto-scale to 3 streams, CI/CD teardown | [zerobus-ingest-root-cause-and-validation](./2026-05-21_zerobus-ingest-root-cause-and-validation.md) |
 | 2026-05-21 | Scale-to-zero ZeroBus pool rewrite: class-based singleton, auto-scaling, Lakebase persistence, health endpoints, validation notebook | [zerobus-scale-to-zero-implementation](./2026-05-21_zerobus-scale-to-zero-implementation.md) |
 | 2026-05-21 | Replaced broken SDK upload with AppKit 0.36.0 files() plugin; SP mode + allowAll policy; bytes verified on volume | [appkit-files-plugin-zero-byte-fix](./2026-05-21_appkit-files-plugin-zero-byte-fix.md) |

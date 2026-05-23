@@ -23,7 +23,7 @@ import { getSecrets, getMissingKeys, isPairingReady, getXcodeSPNCredentials } fr
 import { addConnection, pushEvent } from '../../services/sse-service';
 import { iosAuth } from '../../middleware/ios-auth';
 
-// ── Interfaces ───────────────────────────────────────────────────────────────
+// ── Interfaces ───────────────────────────────────────────────────────────────────
 
 interface LakebaseClient {
   query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
@@ -34,14 +34,17 @@ interface AppKitContext {
   server: { extend(fn: (app: Application) => void): void };
 }
 
-// ── Validation schemas ───────────────────────────────────────────────────────
+// ── Validation schemas ─────────────────────────────────────────────────────────
 
 const ConfirmBody = z.object({
   device_pubkey: z.string().min(1, 'device_pubkey is required'),
   device_label: z.string().min(1, 'device_label is required').max(100),
+  // device_id: stable keychain-persisted UUID v4 identifying the physical device.
+  // Optional until all iOS builds include it (PR 8a-2).
+  device_id: z.string().uuid().optional(),
 });
 
-// ── Route setup ──────────────────────────────────────────────────────────────
+// ── Route setup ────────────────────────────────────────────────────────────────
 
 export async function setupPairingRoutes(appkit: AppKitContext): Promise<void> {
   const { lakebase } = appkit;
@@ -64,6 +67,9 @@ export async function setupPairingRoutes(appkit: AppKitContext): Promise<void> {
           throw validationError('User identity not available. Ensure you are authenticated.');
         }
 
+        // Resolve human-readable username (email) for attribution
+        const username = userEmail ?? (req.headers['x-forwarded-preferred-username'] as string | undefined) ?? null;
+
         // Delete any previous unconfirmed pairing for this user
         await lakebase.query(
           `DELETE FROM app.paired_sessions
@@ -75,11 +81,11 @@ export async function setupPairingRoutes(appkit: AppKitContext): Promise<void> {
         const { token, hash } = generateSessionToken();
         const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
 
-        // Insert new pairing session
+        // Insert new pairing session with username for attribution
         await lakebase.query(
-          `INSERT INTO app.paired_sessions (token_hash, user_id, workspace_id, expires_at)
-           VALUES ($1, $2, $3, $4)`,
-          [hash, userId, getSecrets().workspaceUrl ?? '', expiresAt.toISOString()],
+          `INSERT INTO app.paired_sessions (token_hash, user_id, username, workspace_id, expires_at)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [hash, userId, username, getSecrets().workspaceUrl ?? '', expiresAt.toISOString()],
         );
 
         // Build QR payload
@@ -137,7 +143,7 @@ export async function setupPairingRoutes(appkit: AppKitContext): Promise<void> {
             throw validationError(parsed.error.issues.map((i) => i.message).join('; '));
           }
 
-          const { device_pubkey, device_label } = parsed.data;
+          const { device_pubkey, device_label, device_id } = parsed.data;
           const pubkeyBuffer = Buffer.from(device_pubkey, 'base64url');
 
           // Get the session (already validated by middleware)
@@ -164,12 +170,12 @@ export async function setupPairingRoutes(appkit: AppKitContext): Promise<void> {
             }
           }
 
-          // Bind the device key
+          // Bind the device key + device_id
           await lakebase.query(
             `UPDATE app.paired_sessions
-             SET device_pubkey = $1, device_label = $2, first_seen_at = now(), last_seen_at = now()
-             WHERE id = $3`,
-            [pubkeyBuffer, device_label, sessionId],
+             SET device_pubkey = $1, device_label = $2, device_id = $3::uuid, first_seen_at = now(), last_seen_at = now()
+             WHERE id = $4`,
+            [pubkeyBuffer, device_label, device_id ?? null, sessionId],
           );
 
           // Push SSE event to browser
