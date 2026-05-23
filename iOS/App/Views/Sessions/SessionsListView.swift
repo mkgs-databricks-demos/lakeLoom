@@ -125,10 +125,19 @@ struct SessionsListView: View {
 
     // MARK: - Loading
 
-    /// First entry (`.task`) — show the loading view while we fetch.
+    /// `.task` entry — fires on first appearance AND every
+    /// re-appearance (e.g. pop-back from a pushed CaptureDetailView).
+    /// First time through we want the loading spinner; on pop-back
+    /// we want to silently refresh and preserve the loaded list if
+    /// the refresh fails (so transient airplane-mode failures don't
+    /// wipe the user's view). Both cases collapse to: "only flip to
+    /// .loading if we don't already have data, and preserve on
+    /// failure when we do."
     private func initialLoad() async {
-        loadState = .loading
-        await performFetch(preserveOnFailure: false)
+        let hadData: Bool
+        if case .loaded = loadState { hadData = true } else { hadData = false }
+        if !hadData { loadState = .loading }
+        await performFetch(preserveOnFailure: hadData)
     }
 
     /// Pull-to-refresh — keep the current list on screen behind the

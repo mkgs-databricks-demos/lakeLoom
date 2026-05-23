@@ -191,10 +191,16 @@ struct CaptureDetailView: View {
 
     // MARK: - Loading
 
-    /// First entry (`.task`) — show the spinner while we fetch.
+    /// `.task` entry — fires on first appearance AND every
+    /// re-appearance (e.g. pop-back from a pushed destination). On
+    /// first appearance we want the spinner; if we already have
+    /// loaded data, refresh silently and preserve it on failure so
+    /// transient airplane-mode failures don't wipe the user's view.
     private func initialLoad() async {
-        loadState = .loading
-        await performFetch(preserveOnFailure: false)
+        let hadData: Bool
+        if case .loaded = loadState { hadData = true } else { hadData = false }
+        if !hadData { loadState = .loading }
+        await performFetch(preserveOnFailure: hadData)
     }
 
     /// Pull-to-refresh — keep the loaded detail visible behind the
