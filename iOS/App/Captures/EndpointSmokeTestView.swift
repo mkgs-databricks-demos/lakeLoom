@@ -13,8 +13,10 @@ struct EndpointSmokeTestView: View {
     let captureAPI: any CaptureAPIClient
     let uploadCoordinator: (any UploadCoordinator)?
     let photoCapture: (any PhotoCapture)?
+    let transcriptEvents: (any TranscriptEventsClient)?
     let workspaceID: String
     let projectID: String
+    let pairedSessionID: String
     let onDismiss: () -> Void
 
     @State private var lines: [LogLine] = []
@@ -49,6 +51,7 @@ struct EndpointSmokeTestView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         captureLifecycleSection
                         uploadSmokeTestsSection
+                        transcriptEventsSection
                         resetSection
                     }
                     .padding(.horizontal)
@@ -202,6 +205,29 @@ struct EndpointSmokeTestView: View {
                         disabledReason: nil
                     )
                 }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var transcriptEventsSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            sectionHeader(
+                title: "Transcript ingest",
+                subtitle: "ZeroBus events — POST /api/sessions/:paired/events"
+            )
+            if transcriptEvents == nil {
+                Text("TranscriptEventsClient not wired.")
+                    .font(BrandTypography.caption)
+                    .foregroundStyle(BrandColors.textSecondary)
+            } else {
+                buttonWithReason(
+                    "Send hardcoded final_transcript",
+                    systemImage: "waveform.badge.mic",
+                    tag: "transcript",
+                    action: sendHardcodedTranscript,
+                    disabledReason: nil
+                )
             }
         }
     }
@@ -465,6 +491,40 @@ struct EndpointSmokeTestView: View {
         }
         // Reuse the same upload observer pattern as audio.
         observeUpload(uploadID: uploadID, tag: "PHOTO", coordinator: uploads)
+    }
+
+    // MARK: - Transcript event
+
+    /// Sends a single hardcoded `final_transcript` event to the
+    /// paired session's ZeroBus endpoint. Useful for verifying that
+    /// the wire format, signing, and Delta materialization all work
+    /// end-to-end before the live SpeechAnalyzer integration lands
+    /// in PR 8b.
+    private func sendHardcodedTranscript() async {
+        guard let transcriptEvents else { return }
+        let event = TranscriptEvent(
+            eventType: .finalTranscript,
+            text: "Smoke-test transcript event at \(ISO8601DateFormatter().string(from: Date()))",
+            confidence: 0.95,
+            language: "en-US",
+            segmentIndex: 0,
+            durationMs: 1500,
+            source: "smoke_test",
+            model: "ios_smoke_test"
+        )
+        append(.start("XCRIPT", "events.send", "paired=\(pairedSessionID.prefix(8))…"))
+        do {
+            let accepted = try await transcriptEvents.sendEvent(
+                workspaceID: workspaceID,
+                pairedSessionID: pairedSessionID,
+                event: event
+            )
+            append(.ok("XCRIPT", "events.ok", "accepted=\(accepted)"))
+        } catch let error as TranscriptEventsError {
+            append(.fail("XCRIPT", "send: \(String(describing: error))"))
+        } catch {
+            append(.fail("XCRIPT", "send: \(error.localizedDescription)"))
+        }
     }
 
     // MARK: - Document upload

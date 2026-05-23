@@ -63,6 +63,12 @@ public final class AppCoordinator {
     /// doesn't drive `captureService` directly today (that's PR 7's
     /// job); the property is exposed so the real UI can bind to it.
     public let captureService: (any CaptureService)?
+    /// Optional ZeroBus transcript events client. Production wiring
+    /// constructs a `LiveTranscriptEventsClient`; tests omit it.
+    /// Used by the smoke-test sheet for endpoint verification and
+    /// (in PR 8b+) by the speech-to-text streamer to emit segments
+    /// from the live recording.
+    public let transcriptEvents: (any TranscriptEventsClient)?
     let logger: AppLogger
     let nowProvider: @Sendable () -> Date
 
@@ -81,6 +87,7 @@ public final class AppCoordinator {
         uploadCoordinator: (any UploadCoordinator)? = nil,
         photoCapture: (any PhotoCapture)? = nil,
         captureService: (any CaptureService)? = nil,
+        transcriptEvents: (any TranscriptEventsClient)? = nil,
         logger: AppLogger = AppLogger(category: .coordinator),
         nowProvider: @Sendable @escaping () -> Date = Date.init
     ) {
@@ -92,6 +99,7 @@ public final class AppCoordinator {
         self.uploadCoordinator = uploadCoordinator
         self.photoCapture = photoCapture
         self.captureService = captureService
+        self.transcriptEvents = transcriptEvents
         self.logger = logger
         self.nowProvider = nowProvider
     }
