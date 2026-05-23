@@ -183,6 +183,13 @@
 		17020A0317001700170017A3 /* SessionsListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17010A0317001700170017A3 /* SessionsListView.swift */; };
 		17020A0417001700170017A4 /* CaptureDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17010A0417001700170017A4 /* CaptureDetailView.swift */; };
 		17020A1117001700170017B1 /* RelativeTimeFormatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17010A1117001700170017B1 /* RelativeTimeFormatterTests.swift */; };
+		18020A0118001800180018A1 /* TranscriptEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18010A0118001800180018A1 /* TranscriptEvent.swift */; };
+		18020A0218001800180018A2 /* TranscriptEventsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18010A0218001800180018A2 /* TranscriptEventsClient.swift */; };
+		18020A0318001800180018A3 /* TranscriptEventsError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18010A0318001800180018A3 /* TranscriptEventsError.swift */; };
+		18020A0418001800180018A4 /* DeviceIdentityStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18010A0418001800180018A4 /* DeviceIdentityStore.swift */; };
+		18020A1118001800180018B1 /* TranscriptEventEncodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18010A1118001800180018B1 /* TranscriptEventEncodingTests.swift */; };
+		18020A1218001800180018B2 /* LiveTranscriptEventsClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18010A1218001800180018B2 /* LiveTranscriptEventsClientTests.swift */; };
+		18020A1318001800180018B3 /* DeviceIdentityStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18010A1318001800180018B3 /* DeviceIdentityStoreTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -381,6 +388,13 @@
 		17010A0317001700170017A3 /* SessionsListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsListView.swift; sourceTree = "<group>"; };
 		17010A0417001700170017A4 /* CaptureDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureDetailView.swift; sourceTree = "<group>"; };
 		17010A1117001700170017B1 /* RelativeTimeFormatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelativeTimeFormatterTests.swift; sourceTree = "<group>"; };
+		18010A0118001800180018A1 /* TranscriptEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptEvent.swift; sourceTree = "<group>"; };
+		18010A0218001800180018A2 /* TranscriptEventsClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptEventsClient.swift; sourceTree = "<group>"; };
+		18010A0318001800180018A3 /* TranscriptEventsError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptEventsError.swift; sourceTree = "<group>"; };
+		18010A0418001800180018A4 /* DeviceIdentityStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentityStore.swift; sourceTree = "<group>"; };
+		18010A1118001800180018B1 /* TranscriptEventEncodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptEventEncodingTests.swift; sourceTree = "<group>"; };
+		18010A1218001800180018B2 /* LiveTranscriptEventsClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTranscriptEventsClientTests.swift; sourceTree = "<group>"; };
+		18010A1318001800180018B3 /* DeviceIdentityStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentityStoreTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -638,6 +652,7 @@
 			children = (
 				A0030A01A001A001A001A001 /* Audio */,
 				E0030A01E001E001E001E001 /* Camera */,
+				18030A0118001800180018C1 /* Transcripts */,
 				B0030A01B001B001B001B001 /* Upload */,
 				5F242B88AF0A6339ED026919 /* CaptureAPIClient.swift */,
 				A6B53730F7F710DA0FE81E5D /* CaptureAPIError.swift */,
@@ -650,6 +665,17 @@
 				C0010A03C003C003C003C003 /* LiveCaptureService.swift */,
 			);
 			path = Captures;
+			sourceTree = "<group>";
+		};
+		18030A0118001800180018C1 /* Transcripts */ = {
+			isa = PBXGroup;
+			children = (
+				18010A0418001800180018A4 /* DeviceIdentityStore.swift */,
+				18010A0118001800180018A1 /* TranscriptEvent.swift */,
+				18010A0218001800180018A2 /* TranscriptEventsClient.swift */,
+				18010A0318001800180018A3 /* TranscriptEventsError.swift */,
+			);
+			path = Transcripts;
 			sourceTree = "<group>";
 		};
 		E0030A01E001E001E001E001 /* Camera */ = {
@@ -828,6 +854,7 @@
 			children = (
 				A0030A02A002A002A002A002 /* Audio */,
 				E0030A02E002E002E002E002 /* Camera */,
+				18030A1118001800180018D1 /* Transcripts */,
 				B0030A02B002B002B002B002 /* Upload */,
 				C0030A01C001C001C001C001 /* Helpers */,
 				EF3EBEA3151F4C5C286DE55A /* CaptureAPIClientTests.swift */,
@@ -837,6 +864,16 @@
 				C0010A14C014C014C014C014 /* LiveCaptureServiceTests.swift */,
 			);
 			path = Captures;
+			sourceTree = "<group>";
+		};
+		18030A1118001800180018D1 /* Transcripts */ = {
+			isa = PBXGroup;
+			children = (
+				18010A1318001800180018B3 /* DeviceIdentityStoreTests.swift */,
+				18010A1118001800180018B1 /* TranscriptEventEncodingTests.swift */,
+				18010A1218001800180018B2 /* LiveTranscriptEventsClientTests.swift */,
+			);
+			path = Transcripts;
 			sourceTree = "<group>";
 		};
 		E0030A02E002E002E002E002 /* Camera */ = {
@@ -1179,6 +1216,9 @@
 				15020A1115001500150015B1 /* ElapsedTimerTests.swift in Sources */,
 				16020A1116001600160016B1 /* HomeViewResultMappingTests.swift in Sources */,
 				17020A1117001700170017B1 /* RelativeTimeFormatterTests.swift in Sources */,
+				18020A1118001800180018B1 /* TranscriptEventEncodingTests.swift in Sources */,
+				18020A1218001800180018B2 /* LiveTranscriptEventsClientTests.swift in Sources */,
+				18020A1318001800180018B3 /* DeviceIdentityStoreTests.swift in Sources */,
 				14020A0214001400140014DE /* PendingUploadRoutingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1222,6 +1262,10 @@
 				B0020A01B001B001B001B001 /* PendingUpload.swift in Sources */,
 				B0020A02B002B002B002B002 /* UploadCoordinator.swift in Sources */,
 				B0020A04B004B004B004B004 /* UploadQueueStore.swift in Sources */,
+				18020A0118001800180018A1 /* TranscriptEvent.swift in Sources */,
+				18020A0218001800180018A2 /* TranscriptEventsClient.swift in Sources */,
+				18020A0318001800180018A3 /* TranscriptEventsError.swift in Sources */,
+				18020A0418001800180018A4 /* DeviceIdentityStore.swift in Sources */,
 				DA3DE0271D8CF642B2DBCD87 /* ConsentStepView.swift in Sources */,
 				39648CCBC7B49D1D1AA8224F /* ConsentVersion.swift in Sources */,
 				A2335FCCF1E61286BBF82B3D /* CoreDataStack+InMemory.swift in Sources */,
