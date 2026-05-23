@@ -8,7 +8,7 @@
  * ZeroBus maps JSON field names directly to Delta table column names.
  * The record shape MUST match the target table DDL:
  *   record_id, ingested_at, event_id, session_id, project_id, user_id,
- *   device_id, device_name, event_type, event_time, transcript_text,
+ *   device_id, device_label, event_type, event_time, transcript_text,
  *   transcript_language, source_platform, workspace_id, headers, body
  *
  * CRITICAL: Pass plain objects to ingestRecordOffset(), NOT JSON strings.
@@ -127,13 +127,15 @@ export async function setupEventRoutes(appkit: AppKitContext): Promise<void> {
 
             // -- iOS-enriched columns (populated when iOS sends them) -----
             // These fields are sent by iOS starting with PR #49.
-            // project_id: active project UUID from coordinator state
-            // device_id:  stable keychain-persisted UUID (physical device)
-            // device_name: human-readable device label
-            // event_time:  client-side STT segment timestamp (epoch us)
+            // project_id:   active project UUID from coordinator state
+            // device_id:    stable keychain-persisted UUID (physical device)
+            // device_label: human-readable device name (consistent with
+            //               paired_sessions.device_label and
+            //               capture_sessions.device_label)
+            // event_time:   client-side STT segment timestamp (epoch us)
             project_id: (rest.project_id as string) || null,
             device_id: (rest.device_id as string) || null,
-            device_name: (rest.device_name as string) || null,
+            device_label: (rest.device_label as string) || null,
             event_time: isoToEpochMicros(rest.event_time),
 
             // -- Request metadata (for diagnostics and observability) -----
