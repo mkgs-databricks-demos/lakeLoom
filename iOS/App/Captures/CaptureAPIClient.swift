@@ -16,11 +16,19 @@ public protocol CaptureAPIClient: Sendable {
     /// `POST /api/projects/:project_id/captures` — opens a new
     /// active capture session in `projectID`. Returns the freshly
     /// minted `CaptureSession` (id, state=.active, started_at).
+    ///
+    /// `deviceID` is the stable per-device UUID from
+    /// ``DeviceIdentityStore``; included on the JSON body when
+    /// non-nil. Genie's Zod schema (per
+    /// `hey_isaac/2026-05-23_device-id-contract-correction.md`)
+    /// treats it as optional during rollout, so nil produces a
+    /// payload that still validates.
     func createCaptureSession(
         workspaceID: String,
         projectID: String,
         label: String?,
-        clientTimestamp: Date?
+        clientTimestamp: Date?,
+        deviceID: String?
     ) async throws -> CaptureSession
 
     /// `PATCH /api/captures/:capture_session_id` — transitions an
@@ -88,15 +96,18 @@ public actor LiveCaptureAPIClient: CaptureAPIClient {
         workspaceID: String,
         projectID: String,
         label: String?,
-        clientTimestamp: Date?
+        clientTimestamp: Date?,
+        deviceID: String?
     ) async throws -> CaptureSession {
         struct Body: Encodable {
             let label: String?
             let client_ts: String?
+            let device_id: String?
         }
         let body = Body(
             label: label,
-            client_ts: clientTimestamp.map { Self.iso8601String(from: $0) }
+            client_ts: clientTimestamp.map { Self.iso8601String(from: $0) },
+            device_id: deviceID
         )
         let bodyData: Data
         do {

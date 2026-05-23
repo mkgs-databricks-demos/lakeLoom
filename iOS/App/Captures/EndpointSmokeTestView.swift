@@ -13,8 +13,11 @@ struct EndpointSmokeTestView: View {
     let captureAPI: any CaptureAPIClient
     let uploadCoordinator: (any UploadCoordinator)?
     let photoCapture: (any PhotoCapture)?
+    let transcriptEvents: (any TranscriptEventsClient)?
+    let deviceIdentity: (any DeviceIdentityStore)?
     let workspaceID: String
     let projectID: String
+    let pairedSessionID: String
     let onDismiss: () -> Void
 
     @State private var lines: [LogLine] = []
@@ -49,6 +52,7 @@ struct EndpointSmokeTestView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         captureLifecycleSection
                         uploadSmokeTestsSection
+                        transcriptEventsSection
                         resetSection
                     }
                     .padding(.horizontal)
@@ -207,6 +211,29 @@ struct EndpointSmokeTestView: View {
     }
 
     @ViewBuilder
+    private var transcriptEventsSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            sectionHeader(
+                title: "Transcript ingest",
+                subtitle: "ZeroBus events — POST /api/sessions/:paired/events"
+            )
+            if transcriptEvents == nil {
+                Text("TranscriptEventsClient not wired.")
+                    .font(BrandTypography.caption)
+                    .foregroundStyle(BrandColors.textSecondary)
+            } else {
+                buttonWithReason(
+                    "Send hardcoded final_transcript",
+                    systemImage: "waveform.badge.mic",
+                    tag: "transcript",
+                    action: sendHardcodedTranscript,
+                    disabledReason: nil
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
     private var resetSection: some View {
         Divider()
         Button(role: .destructive) {
@@ -330,7 +357,8 @@ struct EndpointSmokeTestView: View {
                 workspaceID: workspaceID,
                 projectID: projectID,
                 label: label,
-                clientTimestamp: Date()
+                clientTimestamp: Date(),
+                deviceID: await resolvedDeviceID()
             )
             lastCaptureID = session.id
             // Fresh capture session resets the cancel/complete mutex
@@ -451,6 +479,7 @@ struct EndpointSmokeTestView: View {
             sha256Hex: sha,
             clientTimestamp: photo.capturedAt,
             originalFilename: photo.fileURL.lastPathComponent,
+            deviceID: await resolvedDeviceID(),
             createdAt: Date()
         )
         append(.start("PHOTO", "upload.enqueue", "id=\(uploadID.prefix(8))… sha=\(sha.prefix(8))…"))
@@ -465,6 +494,54 @@ struct EndpointSmokeTestView: View {
         }
         // Reuse the same upload observer pattern as audio.
         observeUpload(uploadID: uploadID, tag: "PHOTO", coordinator: uploads)
+    }
+
+    // MARK: - Transcript event
+
+    /// Sends a single hardcoded `final_transcript` event to the
+    /// paired session's ZeroBus endpoint. Useful for verifying that
+    /// the wire format, signing, and Delta materialization all work
+    /// end-to-end before the live SpeechAnalyzer integration lands
+    /// in PR 8b.
+    private func sendHardcodedTranscript() async {
+        guard let transcriptEvents else { return }
+        let now = Date()
+        let eventTimeFormatter = ISO8601DateFormatter()
+        eventTimeFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        let deviceID: String?
+        if let deviceIdentity {
+            deviceID = try? await deviceIdentity.deviceID()
+        } else {
+            deviceID = nil
+        }
+
+        let event = TranscriptEvent(
+            eventType: .finalTranscript,
+            text: "Smoke-test transcript event at \(eventTimeFormatter.string(from: now))",
+            confidence: 0.95,
+            language: "en-US",
+            segmentIndex: 0,
+            durationMs: 1500,
+            source: "smoke_test",
+            model: "ios_smoke_test",
+            projectID: projectID,
+            deviceID: deviceID,
+            eventTime: eventTimeFormatter.string(from: now)
+        )
+        append(.start("XCRIPT", "events.send", "paired=\(pairedSessionID.prefix(8))…"))
+        do {
+            let accepted = try await transcriptEvents.sendEvent(
+                workspaceID: workspaceID,
+                pairedSessionID: pairedSessionID,
+                event: event
+            )
+            append(.ok("XCRIPT", "events.ok", "accepted=\(accepted) device=\(deviceID?.prefix(8) ?? "?")"))
+        } catch let error as TranscriptEventsError {
+            append(.fail("XCRIPT", "send: \(String(describing: error))"))
+        } catch {
+            append(.fail("XCRIPT", "send: \(error.localizedDescription)"))
+        }
     }
 
     // MARK: - Document upload
@@ -526,6 +603,7 @@ struct EndpointSmokeTestView: View {
             sha256Hex: sha,
             clientTimestamp: Date(),
             originalFilename: sourceURL.lastPathComponent,
+            deviceID: await resolvedDeviceID(),
             createdAt: Date()
         )
 
@@ -675,6 +753,7 @@ struct EndpointSmokeTestView: View {
             sha256Hex: sha,
             clientTimestamp: recording.startedAt,
             originalFilename: recording.fileURL.lastPathComponent,
+            deviceID: await resolvedDeviceID(),
             createdAt: Date()
         )
         append(.start("AUDIO", "upload.enqueue", "id=\(uploadID.prefix(8))… sha=\(sha.prefix(8))…"))
@@ -724,6 +803,17 @@ struct EndpointSmokeTestView: View {
                 if case .failed(_, true) = change.state { return }
             }
         }
+    }
+
+    // MARK: - Device identity
+
+    /// Resolve the stable device UUID from the injected store. Used
+    /// to populate ``PendingUpload/deviceID`` and the smoke-test
+    /// transcript event. Best-effort — nil pass-through means the
+    /// upload still goes (the field is optional during rollout).
+    private func resolvedDeviceID() async -> String? {
+        guard let deviceIdentity else { return nil }
+        return try? await deviceIdentity.deviceID()
     }
 
     // MARK: - Log helpers

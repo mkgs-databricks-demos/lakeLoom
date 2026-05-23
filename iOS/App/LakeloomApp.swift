@@ -28,10 +28,12 @@ struct LakeloomApp: App {
             m2mTokenClient: m2mTokenClient,
             requestSigner: requestSigner
         )
+        let deviceIdentity = LiveDeviceIdentityStore()
         let auth = AuthService(
             lakeloomApp: lakeloomApp,
             deviceKeyStore: deviceKeyStore,
-            keychain: LiveKeychainStore()
+            keychain: LiveKeychainStore(),
+            deviceIdentity: deviceIdentity
         )
         let endpointResolver = LiveAppEndpointResolver()
         let projects = ProjectService(
@@ -39,6 +41,7 @@ struct LakeloomApp: App {
             endpointResolver: endpointResolver
         )
         let captureAPI = LiveCaptureAPIClient(lakeloomApp: lakeloomApp)
+        let transcriptEvents = LiveTranscriptEventsClient(lakeloomApp: lakeloomApp)
 
         // Upload pipeline. Worker loop is started from the App's
         // `.task` modifier below so the queue rehydration happens on
@@ -72,7 +75,8 @@ struct LakeloomApp: App {
                 captureAPI: captureAPI,
                 recorder: LiveAudioRecorder(),
                 uploadCoordinator: uploadCoordinator,
-                contextStore: contextStore
+                contextStore: contextStore,
+                deviceIdentity: deviceIdentity
             )
         } else {
             // Without an upload coordinator the capture flow has
@@ -90,7 +94,9 @@ struct LakeloomApp: App {
                 captureAPI: captureAPI,
                 uploadCoordinator: uploadCoordinator,
                 photoCapture: photoCapture,
-                captureService: captureService
+                captureService: captureService,
+                transcriptEvents: transcriptEvents,
+                deviceIdentity: deviceIdentity
             )
         )
     }
