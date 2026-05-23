@@ -38,8 +38,8 @@ struct CaptureDetailView: View {
         .navigationTitle("Capture")
         .navigationBarTitleDisplayMode(.inline)
         .background(BrandColors.surfaceSecondary)
-        .task { await load() }
-        .refreshable { await load() }
+        .task { await initialLoad() }
+        .refreshable { await refresh() }
     }
 
     // MARK: - States
@@ -66,7 +66,7 @@ struct CaptureDetailView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, Spacing.xl)
             Button {
-                Task { await load() }
+                Task { await initialLoad() }
             } label: {
                 Label("Try again", systemImage: "arrow.clockwise")
                     .font(BrandTypography.bodyEmphasis)
@@ -191,8 +191,26 @@ struct CaptureDetailView: View {
 
     // MARK: - Loading
 
-    private func load() async {
-        loadState = .loading
+    /// `.task` entry — fires on first appearance AND every
+    /// re-appearance (e.g. pop-back from a pushed destination). On
+    /// first appearance we want the spinner; if we already have
+    /// loaded data, refresh silently and preserve it on failure so
+    /// transient airplane-mode failures don't wipe the user's view.
+    private func initialLoad() async {
+        let hadData: Bool
+        if case .loaded = loadState { hadData = true } else { hadData = false }
+        if !hadData { loadState = .loading }
+        await performFetch(preserveOnFailure: hadData)
+    }
+
+    /// Pull-to-refresh — keep the loaded detail visible behind the
+    /// native refresh spinner. On failure, only flip to `.error` when
+    /// we have nothing on screen to begin with.
+    private func refresh() async {
+        await performFetch(preserveOnFailure: true)
+    }
+
+    private func performFetch(preserveOnFailure: Bool) async {
         do {
             let session = try await captureAPI.getCaptureSession(
                 workspaceID: workspaceID,
@@ -201,8 +219,10 @@ struct CaptureDetailView: View {
             )
             loadState = .loaded(session)
         } catch let error as CaptureAPIError {
+            if preserveOnFailure, case .loaded = loadState { return }
             loadState = .error(reason(for: error))
         } catch {
+            if preserveOnFailure, case .loaded = loadState { return }
             loadState = .error(error.localizedDescription)
         }
     }
