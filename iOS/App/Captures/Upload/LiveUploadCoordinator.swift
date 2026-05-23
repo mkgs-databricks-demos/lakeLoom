@@ -253,7 +253,8 @@ public actor LiveUploadCoordinator: UploadCoordinator {
                 mimeType: upload.mimeType,
                 clientTimestamp: upload.clientTimestamp,
                 clientFilename: upload.originalFilename,
-                sha256Hex: upload.sha256Hex
+                sha256Hex: upload.sha256Hex,
+                deviceID: upload.deviceID
             )
         } catch {
             // File disappeared from under us between enqueue and

@@ -53,7 +53,8 @@ struct AuthServiceTests {
     private static func makeService(
         confirmResponseJSON: String? = nil,
         confirmStatusCode: Int = 200,
-        now: Date = Date(timeIntervalSince1970: 1_700_000_000)
+        now: Date = Date(timeIntervalSince1970: 1_700_000_000),
+        deviceIdentity: InMemoryDeviceIdentityStore? = nil
     ) async -> (
         AuthService,
         FakeLakeloomAppClient,
@@ -72,6 +73,7 @@ struct AuthServiceTests {
             lakeloomApp: lakeloom,
             deviceKeyStore: deviceKeys,
             keychain: keychain,
+            deviceIdentity: deviceIdentity,
             nowProvider: { now }
         )
         return (service, lakeloom, deviceKeys, keychain)
@@ -128,6 +130,57 @@ struct AuthServiceTests {
         #expect(calls.count == 1)
         #expect(calls.first?.path == "/api/pairing/confirm")
         #expect(calls.first?.method == .post)
+    }
+
+    @Test("signInViaPairing forwards device_id from the injected store on confirm")
+    func signInForwardsDeviceID() async throws {
+        let confirmBody = """
+        {
+          "paired_session_id": "paired-uuid-2",
+          "paired_at": "2026-05-23T10:00:00Z",
+          "expires_at": "2026-05-30T20:00:00Z"
+        }
+        """
+        let identity = InMemoryDeviceIdentityStore(preloaded: "11111111-2222-3333-4444-555555555555")
+        let (service, lakeloom, _, _) = await Self.makeService(
+            confirmResponseJSON: confirmBody,
+            deviceIdentity: identity
+        )
+        let qr = Self.encodedQR(json: Self.samplePayloadJSON())
+
+        _ = try await service.signInViaPairing(qrText: qr, deviceLabel: "Test iPhone")
+
+        let calls = await lakeloom.requestCalls
+        let bodyData = try #require(calls.first?.body)
+        let body = String(data: bodyData, encoding: .utf8) ?? ""
+        #expect(body.contains("\"device_id\":\"11111111-2222-3333-4444-555555555555\""))
+        // Other fields still present
+        #expect(body.contains("\"device_pubkey\""))
+        #expect(body.contains("\"device_label\":\"Test iPhone\""))
+    }
+
+    @Test("signInViaPairing omits device_id when no store is injected")
+    func signInOmitsDeviceIDWhenStoreNil() async throws {
+        let confirmBody = """
+        {
+          "paired_session_id": "paired-uuid-3",
+          "paired_at": "2026-05-23T10:00:00Z",
+          "expires_at": "2026-05-30T20:00:00Z"
+        }
+        """
+        let (service, lakeloom, _, _) = await Self.makeService(
+            confirmResponseJSON: confirmBody
+        )
+        let qr = Self.encodedQR(json: Self.samplePayloadJSON())
+
+        _ = try await service.signInViaPairing(qrText: qr, deviceLabel: "Test iPhone")
+
+        let calls = await lakeloom.requestCalls
+        let bodyData = try #require(calls.first?.body)
+        let body = String(data: bodyData, encoding: .utf8) ?? ""
+        // When device_id is nil, JSONEncoder default omits the field
+        // (struct uses `let device_id: String?`).
+        #expect(!body.contains("\"device_id\""))
     }
 
     // MARK: Error paths

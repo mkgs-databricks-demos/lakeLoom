@@ -357,7 +357,8 @@ struct EndpointSmokeTestView: View {
                 workspaceID: workspaceID,
                 projectID: projectID,
                 label: label,
-                clientTimestamp: Date()
+                clientTimestamp: Date(),
+                deviceID: await resolvedDeviceID()
             )
             lastCaptureID = session.id
             // Fresh capture session resets the cancel/complete mutex
@@ -478,6 +479,7 @@ struct EndpointSmokeTestView: View {
             sha256Hex: sha,
             clientTimestamp: photo.capturedAt,
             originalFilename: photo.fileURL.lastPathComponent,
+            deviceID: await resolvedDeviceID(),
             createdAt: Date()
         )
         append(.start("PHOTO", "upload.enqueue", "id=\(uploadID.prefix(8))… sha=\(sha.prefix(8))…"))
@@ -601,6 +603,7 @@ struct EndpointSmokeTestView: View {
             sha256Hex: sha,
             clientTimestamp: Date(),
             originalFilename: sourceURL.lastPathComponent,
+            deviceID: await resolvedDeviceID(),
             createdAt: Date()
         )
 
@@ -750,6 +753,7 @@ struct EndpointSmokeTestView: View {
             sha256Hex: sha,
             clientTimestamp: recording.startedAt,
             originalFilename: recording.fileURL.lastPathComponent,
+            deviceID: await resolvedDeviceID(),
             createdAt: Date()
         )
         append(.start("AUDIO", "upload.enqueue", "id=\(uploadID.prefix(8))… sha=\(sha.prefix(8))…"))
@@ -799,6 +803,17 @@ struct EndpointSmokeTestView: View {
                 if case .failed(_, true) = change.state { return }
             }
         }
+    }
+
+    // MARK: - Device identity
+
+    /// Resolve the stable device UUID from the injected store. Used
+    /// to populate ``PendingUpload/deviceID`` and the smoke-test
+    /// transcript event. Best-effort — nil pass-through means the
+    /// upload still goes (the field is optional during rollout).
+    private func resolvedDeviceID() async -> String? {
+        guard let deviceIdentity else { return nil }
+        return try? await deviceIdentity.deviceID()
     }
 
     // MARK: - Log helpers
