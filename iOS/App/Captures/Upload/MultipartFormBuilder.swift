@@ -1,13 +1,17 @@
 import Foundation
 
 /// Builds `multipart/form-data` bodies matching the wire-format
-/// contract in Genie's `2026-05-13_upload-traceability-response.md`:
+/// contract in Genie's `2026-05-13_upload-traceability-response.md`
+/// (plus the 2026-05-23 `device_id` amendment):
 ///
 /// - `file`            — required, raw bytes
 /// - `client_ts`       — unix seconds string (recommended)
 /// - `client_filename` — original filename (optional)
 /// - `sha256_hex`      — lowercase hex digest, verified server-side
 ///                       (optional but cheap to provide)
+/// - `device_id`       — stable per-device UUID (optional during
+///                       rollout per Genie's Zod schema; will become
+///                       required once all clients populate it)
 ///
 /// Server-side parses the body with `busboy`. Field order doesn't
 /// matter; the builder emits the metadata fields first so the file
@@ -40,6 +44,9 @@ enum MultipartFormBuilder {
     ///               distinguish the *value* from the *Content-
     ///               Disposition header*).
     ///   - sha256Hex: optional `sha256_hex` field.
+    ///   - deviceID: optional `device_id` field — stable per-device
+    ///               UUID. Sent as a sibling form field per Genie's
+    ///               2026-05-23 multipart shape answer.
     static func build(
         boundary: String,
         fileURL: URL,
@@ -48,7 +55,8 @@ enum MultipartFormBuilder {
         mimeType: String,
         clientTimestamp: Date?,
         clientFilename: String?,
-        sha256Hex: String?
+        sha256Hex: String?,
+        deviceID: String? = nil
     ) throws -> Data {
         let fileData = try Data(contentsOf: fileURL)
         return build(
@@ -59,7 +67,8 @@ enum MultipartFormBuilder {
             mimeType: mimeType,
             clientTimestamp: clientTimestamp,
             clientFilename: clientFilename,
-            sha256Hex: sha256Hex
+            sha256Hex: sha256Hex,
+            deviceID: deviceID
         )
     }
 
@@ -73,7 +82,8 @@ enum MultipartFormBuilder {
         mimeType: String,
         clientTimestamp: Date?,
         clientFilename: String?,
-        sha256Hex: String?
+        sha256Hex: String?,
+        deviceID: String? = nil
     ) -> Data {
         var body = Data()
 
@@ -93,6 +103,12 @@ enum MultipartFormBuilder {
             body.append(boundaryLine(boundary))
             body.append(fieldDisposition("sha256_hex"))
             body.append(string(sha256Hex))
+            body.append(crlf)
+        }
+        if let deviceID {
+            body.append(boundaryLine(boundary))
+            body.append(fieldDisposition("device_id"))
+            body.append(string(deviceID))
             body.append(crlf)
         }
 

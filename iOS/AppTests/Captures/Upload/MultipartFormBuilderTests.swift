@@ -68,6 +68,40 @@ struct MultipartFormBuilderTests {
         #expect(ascii.contains("Content-Disposition: form-data; name=\"sha256_hex\"\r\n\r\ndeadbeef\r\n"))
     }
 
+    @Test("emits device_id as a sibling form field when provided")
+    func deviceIDPresent() {
+        let boundary = "lakeloom.boundary.fixture"
+        let body = MultipartFormBuilder.build(
+            boundary: boundary,
+            fileBytes: Data([0xFF]),
+            filename: "audio.m4a",
+            mimeType: "audio/mp4",
+            clientTimestamp: nil,
+            clientFilename: nil,
+            sha256Hex: nil,
+            deviceID: "11111111-2222-3333-4444-555555555555"
+        )
+        let ascii = String(data: body, encoding: .isoLatin1) ?? ""
+        #expect(ascii.contains("Content-Disposition: form-data; name=\"device_id\"\r\n\r\n11111111-2222-3333-4444-555555555555\r\n"))
+    }
+
+    @Test("omits device_id from the body when nil (back-compat with v1)")
+    func deviceIDOmitted() {
+        let boundary = "lakeloom.boundary.fixture"
+        let body = MultipartFormBuilder.build(
+            boundary: boundary,
+            fileBytes: Data([0xFF]),
+            filename: "audio.m4a",
+            mimeType: "audio/mp4",
+            clientTimestamp: nil,
+            clientFilename: nil,
+            sha256Hex: nil,
+            deviceID: nil
+        )
+        let ascii = String(data: body, encoding: .isoLatin1) ?? ""
+        #expect(!ascii.contains("device_id"))
+    }
+
     @Test("file bytes are preserved verbatim in the body")
     func fileBytesPreserved() {
         let bytes = Data((0..<256).map { UInt8($0) })

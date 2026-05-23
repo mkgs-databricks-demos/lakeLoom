@@ -20,6 +20,11 @@ public actor LiveCaptureService: CaptureService {
     private let captureAPI: any CaptureAPIClient
     private let recorder: any AudioRecorder
     private let uploadCoordinator: any UploadCoordinator
+    /// Resolved per-device UUID, threaded into the create-capture body
+    /// AND attached to each `PendingUpload` so multipart uploads carry
+    /// it as a sibling form field. Optional so older tests that don't
+    /// drive the identity-aware paths keep compiling.
+    private let deviceIdentity: (any DeviceIdentityStore)?
     private let logger: AppLogger
     private let nowProvider: @Sendable () -> Date
     private let uploadIDProvider: @Sendable () -> String
@@ -43,12 +48,14 @@ public actor LiveCaptureService: CaptureService {
         recorder: any AudioRecorder,
         uploadCoordinator: any UploadCoordinator,
         contextStore: CaptureContextStore? = nil,
+        deviceIdentity: (any DeviceIdentityStore)? = nil,
         logger: AppLogger = AppLogger(category: .capture)
     ) {
         self.captureAPI = captureAPI
         self.recorder = recorder
         self.uploadCoordinator = uploadCoordinator
         self.contextStore = contextStore
+        self.deviceIdentity = deviceIdentity
         self.logger = logger
         self.nowProvider = Date.init
         self.uploadIDProvider = { UUID().uuidString }
@@ -63,6 +70,7 @@ public actor LiveCaptureService: CaptureService {
         recorder: any AudioRecorder,
         uploadCoordinator: any UploadCoordinator,
         contextStore: CaptureContextStore? = nil,
+        deviceIdentity: (any DeviceIdentityStore)? = nil,
         logger: AppLogger = AppLogger(category: .capture),
         nowProvider: @Sendable @escaping () -> Date,
         uploadIDProvider: @Sendable @escaping () -> String,
@@ -72,6 +80,7 @@ public actor LiveCaptureService: CaptureService {
         self.recorder = recorder
         self.uploadCoordinator = uploadCoordinator
         self.contextStore = contextStore
+        self.deviceIdentity = deviceIdentity
         self.logger = logger
         self.nowProvider = nowProvider
         self.uploadIDProvider = uploadIDProvider
@@ -210,13 +219,20 @@ public actor LiveCaptureService: CaptureService {
             ]
         )
 
+        // Resolve device identity once. Used on the create body AND
+        // attached to the audio PendingUpload at finalize. Failure
+        // here is non-fatal (Genie's schema accepts nil) — we just
+        // proceed without the field.
+        let deviceID: String? = await resolvedDeviceID()
+
         let session: CaptureSession
         do {
             session = try await captureAPI.createCaptureSession(
                 workspaceID: workspaceID,
                 projectID: projectID,
                 label: label,
-                clientTimestamp: nowProvider()
+                clientTimestamp: nowProvider(),
+                deviceID: deviceID
             )
         } catch let error as CaptureAPIError {
             // Surface the network-unavailable case specifically so
@@ -316,6 +332,7 @@ public actor LiveCaptureService: CaptureService {
             throw CaptureServiceError.hashingFailed(reason: error.localizedDescription)
         }
 
+        let audioDeviceID = await resolvedDeviceID()
         let pending = PendingUpload(
             id: uploadIDProvider(),
             workspaceID: context.workspaceID,
@@ -327,6 +344,7 @@ public actor LiveCaptureService: CaptureService {
             sha256Hex: sha,
             clientTimestamp: recording.startedAt,
             originalFilename: recording.fileURL.lastPathComponent,
+            deviceID: audioDeviceID,
             createdAt: nowProvider()
         )
 
@@ -381,6 +399,24 @@ public actor LiveCaptureService: CaptureService {
     }
 
     // MARK: - Private
+
+    /// Best-effort resolve of the stable device UUID. Failure logs
+    /// but does not throw — the create-body and PendingUpload simply
+    /// carry nil, which Genie's optional-during-rollout schema
+    /// accepts. Returns nil only when the dep was omitted from init
+    /// (older tests) or the keychain read fails.
+    private func resolvedDeviceID() async -> String? {
+        guard let deviceIdentity else { return nil }
+        do {
+            return try await deviceIdentity.deviceID()
+        } catch {
+            await logger.warning(
+                "capture.device_id.resolve_failed",
+                metadata: ["reason": .string(error.localizedDescription)]
+            )
+            return nil
+        }
+    }
 
     private func ensureCanStart() throws {
         switch current {

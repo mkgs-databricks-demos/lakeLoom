@@ -50,6 +50,15 @@ public struct PendingUpload: Sendable, Equatable, Hashable, Codable, Identifiabl
     /// `audio-20260515T120000Z.m4a`). Stored server-side as
     /// `app.uploads.original_filename` for support-bundle debugging.
     public let originalFilename: String?
+    /// Stable per-device UUID captured at enqueue time and forwarded
+    /// as the `device_id` sibling form field on every multipart
+    /// upload (per Genie's 2026-05-23 contract correction). Captured
+    /// at enqueue so the persisted queue file survives cold-launch
+    /// resumes without needing to re-resolve identity. Optional —
+    /// older queue entries on disk that pre-date this field decode
+    /// as nil and upload without it (Genie's Zod schema treats it as
+    /// optional during rollout).
+    public let deviceID: String?
     public let createdAt: Date
 
     public var state: State
@@ -75,6 +84,7 @@ public struct PendingUpload: Sendable, Equatable, Hashable, Codable, Identifiabl
         sha256Hex: String,
         clientTimestamp: Date,
         originalFilename: String?,
+        deviceID: String? = nil,
         createdAt: Date,
         state: State = .queued,
         attempts: Int = 0,
@@ -93,6 +103,7 @@ public struct PendingUpload: Sendable, Equatable, Hashable, Codable, Identifiabl
         self.sha256Hex = sha256Hex
         self.clientTimestamp = clientTimestamp
         self.originalFilename = originalFilename
+        self.deviceID = deviceID
         self.createdAt = createdAt
         self.state = state
         self.attempts = attempts

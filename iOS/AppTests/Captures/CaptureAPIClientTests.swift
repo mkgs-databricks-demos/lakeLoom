@@ -32,7 +32,8 @@ struct LiveCaptureAPIClientCreateUpdateTests {
             workspaceID: Self.workspaceID,
             projectID: Self.projectID,
             label: "Kickoff call",
-            clientTimestamp: nil
+            clientTimestamp: nil,
+            deviceID: nil
         )
 
         #expect(session.id == Self.captureID)
@@ -53,6 +54,48 @@ struct LiveCaptureAPIClientCreateUpdateTests {
         #expect(!body.contains("\"client_ts\""))
     }
 
+    @Test("createCaptureSession includes device_id in the body when provided")
+    func createIncludesDeviceID() async throws {
+        let fake = FakeLakeloomAppClient()
+        let responseBody = """
+        {"id":"y","project_id":"\(Self.projectID)","state":"active","label":null,"started_at":"\(Self.createdAt)"}
+        """
+        await fake.enqueueResponse(.success(Data(responseBody.utf8)))
+
+        let client = LiveCaptureAPIClient(lakeloomApp: fake)
+        _ = try await client.createCaptureSession(
+            workspaceID: Self.workspaceID,
+            projectID: Self.projectID,
+            label: nil,
+            clientTimestamp: nil,
+            deviceID: "11111111-2222-3333-4444-555555555555"
+        )
+
+        let body = String(data: (await fake.requestCalls).first!.body!, encoding: .utf8)!
+        #expect(body.contains("\"device_id\":\"11111111-2222-3333-4444-555555555555\""))
+    }
+
+    @Test("createCaptureSession omits device_id from the body when nil")
+    func createOmitsDeviceIDWhenNil() async throws {
+        let fake = FakeLakeloomAppClient()
+        let responseBody = """
+        {"id":"z","project_id":"\(Self.projectID)","state":"active","label":null,"started_at":"\(Self.createdAt)"}
+        """
+        await fake.enqueueResponse(.success(Data(responseBody.utf8)))
+
+        let client = LiveCaptureAPIClient(lakeloomApp: fake)
+        _ = try await client.createCaptureSession(
+            workspaceID: Self.workspaceID,
+            projectID: Self.projectID,
+            label: nil,
+            clientTimestamp: nil,
+            deviceID: nil
+        )
+
+        let body = String(data: (await fake.requestCalls).first!.body!, encoding: .utf8)!
+        #expect(!body.contains("\"device_id\""))
+    }
+
     @Test("createCaptureSession omits label + sends client_ts when provided")
     func createWithClientTs() async throws {
         let fake = FakeLakeloomAppClient()
@@ -67,7 +110,8 @@ struct LiveCaptureAPIClientCreateUpdateTests {
             workspaceID: Self.workspaceID,
             projectID: Self.projectID,
             label: nil,
-            clientTimestamp: timestamp
+            clientTimestamp: timestamp,
+            deviceID: nil
         )
 
         let body = String(data: (await fake.requestCalls).first!.body!, encoding: .utf8)!
@@ -85,7 +129,8 @@ struct LiveCaptureAPIClientCreateUpdateTests {
                 workspaceID: Self.workspaceID,
                 projectID: Self.projectID,
                 label: String(repeating: "x", count: 300),
-                clientTimestamp: nil
+                clientTimestamp: nil,
+                deviceID: nil
             )
             Issue.record("expected validationFailed")
         } catch let error as CaptureAPIError {

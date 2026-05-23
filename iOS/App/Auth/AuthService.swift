@@ -16,6 +16,12 @@ public actor AuthService: AuthServicing {
     private let lakeloomApp: any LakeloomAppClient
     private let deviceKeyStore: any DeviceKeyStoring
     private let keychain: KeychainStore
+    /// Stable per-device UUID; included as `device_id` on the
+    /// `/api/pairing/confirm` payload. Nil tolerated for tests that
+    /// don't exercise the pairing flow — the resulting POST simply
+    /// omits the field (Genie's Zod schema treats it as optional
+    /// during rollout).
+    private let deviceIdentity: (any DeviceIdentityStore)?
     private let nowProvider: @Sendable () -> Date
     private let logger: AppLogger
 
@@ -45,12 +51,14 @@ public actor AuthService: AuthServicing {
         lakeloomApp: any LakeloomAppClient,
         deviceKeyStore: any DeviceKeyStoring,
         keychain: KeychainStore,
+        deviceIdentity: (any DeviceIdentityStore)? = nil,
         logger: AppLogger = AppLogger(category: .auth),
         nowProvider: @Sendable @escaping () -> Date = Date.init
     ) {
         self.lakeloomApp = lakeloomApp
         self.deviceKeyStore = deviceKeyStore
         self.keychain = keychain
+        self.deviceIdentity = deviceIdentity
         self.logger = logger
         self.nowProvider = nowProvider
     }
@@ -256,9 +264,22 @@ public actor AuthService: AuthServicing {
         )
 
         // 4. POST /api/pairing/confirm.
+        // `device_id` is the keychain-persisted stable UUID — included
+        // here so the server can populate the same column we're about
+        // to start sending on captures + uploads + events. Optional in
+        // the Zod schema during rollout (per Genie's
+        // hey_isaac/2026-05-23_device-id-contract-correction.md), so a
+        // nil store still confirms cleanly.
+        let deviceID: String?
+        if let deviceIdentity {
+            deviceID = try? await deviceIdentity.deviceID()
+        } else {
+            deviceID = nil
+        }
         struct ConfirmRequest: Encodable {
             let device_pubkey: String
             let device_label: String
+            let device_id: String?
         }
         struct ConfirmResponse: Decodable {
             let paired_session_id: String
@@ -270,7 +291,8 @@ public actor AuthService: AuthServicing {
             let encoder = JSONEncoder()
             bodyData = try encoder.encode(ConfirmRequest(
                 device_pubkey: devicePubKeyDER.base64URLEncodedString(),
-                device_label: deviceLabel
+                device_label: deviceLabel,
+                device_id: deviceID
             ))
         } catch {
             recordSignInOutcome(error: nil)
