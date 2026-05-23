@@ -47,28 +47,32 @@ struct TranscriptEventEncodingTests {
         #expect(TranscriptEvent.EventType.clientStatus.rawValue == "client_status")
     }
 
-    // MARK: - PR 8a amendment fields (Genie 2026-05-23 contract update)
+    // MARK: - PR 8a amendment fields (Genie 2026-05-23 contract,
+    // post device_label correction — events carry device_id only,
+    // never device_label/device_name)
 
-    @Test("project_id, device_id, device_name, event_time encode as snake_case")
+    @Test("project_id, device_id, event_time encode as snake_case")
     func amendmentFieldsSnakeCase() throws {
         let event = TranscriptEvent(
             eventType: .finalTranscript,
             text: "hi",
             projectID: "proj-uuid",
             deviceID: "dev-uuid",
-            deviceName: "iPhone 17 Pro Max",
             eventTime: "2026-05-23T16:49:25.891Z"
         )
         let json = try encode(event)
 
         #expect(json["project_id"] as? String == "proj-uuid")
         #expect(json["device_id"] as? String == "dev-uuid")
-        #expect(json["device_name"] as? String == "iPhone 17 Pro Max")
         #expect(json["event_time"] as? String == "2026-05-23T16:49:25.891Z")
         #expect(json["projectID"] == nil)
         #expect(json["deviceID"] == nil)
-        #expect(json["deviceName"] == nil)
         #expect(json["eventTime"] == nil)
+        // device_name/device_label removed from the events contract
+        // (2026-05-23 correction). Display name lives only on
+        // paired_sessions; downstream queries JOIN on device_id.
+        #expect(json["device_name"] == nil)
+        #expect(json["device_label"] == nil)
     }
 
     @Test("Amendment fields omitted when nil — backward compatible with the v1 payload")
@@ -80,7 +84,6 @@ struct TranscriptEventEncodingTests {
         let json = try encode(event)
         #expect(json["project_id"] == nil)
         #expect(json["device_id"] == nil)
-        #expect(json["device_name"] == nil)
         #expect(json["event_time"] == nil)
     }
 

@@ -59,12 +59,11 @@ public struct TranscriptEvent: Sendable, Equatable, Hashable, Codable {
     /// Stable per-device UUID — keychain-persisted, survives re-pair
     /// and sign-out. Lets the analytics layer aggregate by physical
     /// device across pairing sessions. See ``DeviceIdentityStore``.
+    /// Per Genie's 2026-05-23 contract correction, `device_label` is
+    /// NOT sent on events — only `device_id`. Downstream queries
+    /// join `transcript_events_raw.device_id` against
+    /// `paired_sessions.device_label` if a display name is needed.
     public let deviceID: String?
-
-    /// Human-readable device label — same string sent during
-    /// `/api/pairing/confirm`'s `device_label` field (typically
-    /// `UIDevice.current.name`).
-    public let deviceName: String?
 
     /// Client-side timestamp of when the speech-to-text segment was
     /// produced on-device. ISO 8601 with timezone (typically UTC with
@@ -85,7 +84,6 @@ public struct TranscriptEvent: Sendable, Equatable, Hashable, Codable {
         model: String? = nil,
         projectID: String? = nil,
         deviceID: String? = nil,
-        deviceName: String? = nil,
         eventTime: String? = nil
     ) {
         self.eventType = eventType
@@ -98,7 +96,6 @@ public struct TranscriptEvent: Sendable, Equatable, Hashable, Codable {
         self.model = model
         self.projectID = projectID
         self.deviceID = deviceID
-        self.deviceName = deviceName
         self.eventTime = eventTime
     }
 
@@ -123,7 +120,6 @@ public struct TranscriptEvent: Sendable, Equatable, Hashable, Codable {
         case model
         case projectID = "project_id"
         case deviceID = "device_id"
-        case deviceName = "device_name"
         case eventTime = "event_time"
     }
 }

@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 #if DEBUG
 /// Debug-only screen for poking the capture endpoints against the
@@ -514,7 +513,6 @@ struct EndpointSmokeTestView: View {
         } else {
             deviceID = nil
         }
-        let deviceName = await MainActor.run { UIDevice.current.name }
 
         let event = TranscriptEvent(
             eventType: .finalTranscript,
@@ -527,7 +525,6 @@ struct EndpointSmokeTestView: View {
             model: "ios_smoke_test",
             projectID: projectID,
             deviceID: deviceID,
-            deviceName: deviceName,
             eventTime: eventTimeFormatter.string(from: now)
         )
         append(.start("XCRIPT", "events.send", "paired=\(pairedSessionID.prefix(8))…"))
