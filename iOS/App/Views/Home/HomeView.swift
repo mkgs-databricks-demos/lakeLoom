@@ -17,6 +17,11 @@ struct HomeView: View {
 
     let onRecord: () -> Void
     let onClearResult: () -> Void
+    /// Closure for the "primary action" button shown inside the
+    /// result banner (e.g., "Open Settings" for permission-denied,
+    /// "Try again" for network-unavailable). Nil when the banner
+    /// has no actionable affordance.
+    let onResultAction: () -> Void
 
     /// Brief result banner shown above the Record CTA after a
     /// capture lifecycle event. Cleared by the parent (or by the
@@ -26,6 +31,15 @@ struct HomeView: View {
         case completed(captureID: String)
         case cancelled
         case failed(reason: String)
+        /// Microphone permission denied. Specialized so the banner
+        /// can render an "Open Settings" deep-link affordance
+        /// rather than a generic error — the user can't recover
+        /// without going to Settings.
+        case microphonePermissionDenied
+        /// Device has no working network. Specialized so the banner
+        /// can render a "Try again" affordance with offline-aware
+        /// copy.
+        case networkUnavailable
     }
 
     var body: some View {
@@ -74,7 +88,7 @@ struct HomeView: View {
 
     // MARK: - Record CTA
 
-    /// The hero. 96pt circular Lava 600 button with a centered
+    /// The hero. 144pt circular Lava 600 button with a centered
     /// SF Symbol mic icon. Tapping fires `onRecord` which kicks off
     /// `captureService.startCapture(...)` upstream.
     ///
@@ -84,6 +98,11 @@ struct HomeView: View {
     /// fast on a warm connection but can hit a few seconds on cold
     /// start. Without the spinner, users would double-tap and that
     /// re-tap would be rejected by `CaptureServiceError.alreadyCapturing`.
+    ///
+    /// Press feedback: scale down to 92% on tap-down using
+    /// `BrandMotion.brandPress` (100 ms easeOut, respects reduce
+    /// motion). Catches the eye on the way down + adds physical-feeling
+    /// tactility without competing with the pulsing Lava during recording.
     private var recordButton: some View {
         Button(action: onRecord) {
             ZStack {
@@ -103,7 +122,7 @@ struct HomeView: View {
                 }
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(RecordButtonPressStyle())
         .accessibilityLabel("Record")
         .accessibilityHint("Starts a capture session in this project.")
         .disabled(isStartingCapture)
@@ -122,6 +141,8 @@ struct HomeView: View {
                 accentColor: BrandColors.statusSuccess,
                 title: "Capture saved",
                 detail: "ID \(captureID.prefix(8))…",
+                actionTitle: nil,
+                onAction: nil,
                 onDismiss: onClearResult
             )
         case .cancelled:
@@ -130,6 +151,8 @@ struct HomeView: View {
                 accentColor: BrandColors.textSecondary,
                 title: "Capture cancelled",
                 detail: nil,
+                actionTitle: nil,
+                onAction: nil,
                 onDismiss: onClearResult
             )
         case .failed(let reason):
@@ -138,6 +161,28 @@ struct HomeView: View {
                 accentColor: BrandColors.statusError,
                 title: "Capture failed",
                 detail: reason,
+                actionTitle: nil,
+                onAction: nil,
+                onDismiss: onClearResult
+            )
+        case .microphonePermissionDenied:
+            ResultBanner(
+                icon: "mic.slash.fill",
+                accentColor: BrandColors.statusError,
+                title: "Microphone access denied",
+                detail: "lakeLoom needs microphone access to record. Open Settings to allow it.",
+                actionTitle: "Open Settings",
+                onAction: onResultAction,
+                onDismiss: onClearResult
+            )
+        case .networkUnavailable:
+            ResultBanner(
+                icon: "wifi.slash",
+                accentColor: BrandColors.statusWarning,
+                title: "You're offline",
+                detail: "Couldn't reach the lakeLoom Databricks App. Try again when you have a signal.",
+                actionTitle: "Try again",
+                onAction: onResultAction,
                 onDismiss: onClearResult
             )
         }
@@ -152,39 +197,75 @@ struct HomeView: View {
     }
 }
 
+/// `ButtonStyle` for the Record CTA. Scales the label to 92% on
+/// press using the brand motion's 100ms easeOut curve, and
+/// degrades to no animation when Reduce Motion is on. We can't
+/// rely on the system `.borderedProminent` style for this because
+/// the Record button is a custom Circle, not a chip.
+private struct RecordButtonPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.92 : 1.0)
+            .animation(
+                Animation.brandRespectingReduceMotion(
+                    .brandPress,
+                    duration: BrandMotion.buttonPress
+                ),
+                value: configuration.isPressed
+            )
+    }
+}
+
 /// Small reusable result banner used by HomeView for the
-/// completed / cancelled / failed states.
+/// completed / cancelled / failed / permission-denied /
+/// network-unavailable states. When `actionTitle` is set, the
+/// banner renders a primary CTA in addition to the dismiss
+/// affordance.
 private struct ResultBanner: View {
     let icon: String
     let accentColor: Color
     let title: String
     let detail: String?
+    let actionTitle: String?
+    let onAction: (() -> Void)?
     let onDismiss: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: Spacing.md) {
-            Image(systemName: icon)
-                .font(BrandTypography.titleSmall)
-                .foregroundStyle(accentColor)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(BrandTypography.bodyEmphasis)
-                    .foregroundStyle(BrandColors.textPrimary)
-                if let detail {
-                    Text(detail)
-                        .font(BrandTypography.caption)
-                        .foregroundStyle(BrandColors.textSecondary)
-                        .lineLimit(2)
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            HStack(alignment: .top, spacing: Spacing.md) {
+                Image(systemName: icon)
+                    .font(BrandTypography.titleSmall)
+                    .foregroundStyle(accentColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(BrandTypography.bodyEmphasis)
+                        .foregroundStyle(BrandColors.textPrimary)
+                    if let detail {
+                        Text(detail)
+                            .font(BrandTypography.caption)
+                            .foregroundStyle(BrandColors.textSecondary)
+                            .lineLimit(3)
+                    }
                 }
+                Spacer()
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(BrandTypography.captionMedium)
+                        .foregroundStyle(BrandColors.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss")
             }
-            Spacer()
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-                    .font(BrandTypography.captionMedium)
-                    .foregroundStyle(BrandColors.textSecondary)
+
+            if let actionTitle, let onAction {
+                Button(action: onAction) {
+                    Text(actionTitle)
+                        .font(BrandTypography.bodyEmphasis)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(accentColor)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Dismiss")
         }
         .padding(Spacing.md)
         .background(BrandColors.surfacePrimary, in: RoundedRectangle(cornerRadius: 12))

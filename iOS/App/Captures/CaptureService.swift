@@ -124,9 +124,25 @@ public enum CaptureServiceError: Error, Sendable, Equatable {
     /// ``CaptureAPIError``.
     case createSessionFailed(reason: String)
 
+    /// `createCaptureSession` failed specifically because the
+    /// device had no working network. Surfaced as its own case
+    /// (vs the generic `createSessionFailed`) so the UI can render
+    /// a "You're offline — try again when you have a signal"
+    /// affordance rather than a stack-trace-flavored reason
+    /// string.
+    case createSessionNetworkUnavailable
+
     /// The recorder failed to start. The server-side session has
     /// been best-effort patched to `.cancelled`.
     case recorderStartFailed(reason: String)
+
+    /// The user denied microphone access. The server-side session
+    /// has been best-effort patched to `.cancelled`. The UI should
+    /// surface an "Open Settings" deep-link affordance rather than
+    /// a re-tap-the-Record-button retry, since `Record` will fail
+    /// with the same error until the user grants permission in
+    /// Settings.
+    case microphonePermissionDenied
 
     /// The recorder failed to finalize (e.g., engine threw on stop).
     /// The server-side session remains `.active`; the caller can

@@ -219,8 +219,18 @@ public actor LiveCaptureService: CaptureService {
                 clientTimestamp: nowProvider()
             )
         } catch let error as CaptureAPIError {
-            transition(to: .failed(reason: "create: \(String(describing: error))"))
-            throw CaptureServiceError.createSessionFailed(reason: String(describing: error))
+            // Surface the network-unavailable case specifically so
+            // the UI can render an offline-aware banner rather than
+            // a stringified reason; everything else stays under the
+            // generic `createSessionFailed`.
+            switch error {
+            case .networkUnavailable:
+                transition(to: .failed(reason: "create: networkUnavailable"))
+                throw CaptureServiceError.createSessionNetworkUnavailable
+            default:
+                transition(to: .failed(reason: "create: \(String(describing: error))"))
+                throw CaptureServiceError.createSessionFailed(reason: String(describing: error))
+            }
         } catch {
             transition(to: .failed(reason: "create: \(error.localizedDescription)"))
             throw CaptureServiceError.createSessionFailed(reason: error.localizedDescription)
@@ -231,13 +241,23 @@ public actor LiveCaptureService: CaptureService {
         do {
             _ = try await recorder.start(captureSessionID: session.id)
         } catch let error as AudioRecorderError {
+            // Pull the permission-denied case out of the generic
+            // bucket so the UI can render an "Open Settings"
+            // affordance instead of a re-tap-the-Record-button
+            // retry (which would fail with the same error).
             await rollbackServerSession(
                 workspaceID: workspaceID,
                 captureSessionID: session.id,
                 because: "recorder.start: \(String(describing: error))"
             )
-            transition(to: .failed(reason: "recorder.start: \(String(describing: error))"))
-            throw CaptureServiceError.recorderStartFailed(reason: String(describing: error))
+            switch error {
+            case .permissionDenied:
+                transition(to: .failed(reason: "recorder.start: permissionDenied"))
+                throw CaptureServiceError.microphonePermissionDenied
+            default:
+                transition(to: .failed(reason: "recorder.start: \(String(describing: error))"))
+                throw CaptureServiceError.recorderStartFailed(reason: String(describing: error))
+            }
         } catch {
             await rollbackServerSession(
                 workspaceID: workspaceID,

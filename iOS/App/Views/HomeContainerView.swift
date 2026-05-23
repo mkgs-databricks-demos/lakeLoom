@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Steady-state container shown after onboarding completes. Owns
 /// the orchestration between ``HomeView`` (idle) and
@@ -43,7 +44,8 @@ struct HomeContainerView: View {
                 lastResult: lastResult,
                 isStartingCapture: isStartingCapture,
                 onRecord: startCapture,
-                onClearResult: { lastResult = .none }
+                onClearResult: { lastResult = .none },
+                onResultAction: performResultAction
             )
             .toolbar { toolbar }
         }
@@ -97,6 +99,22 @@ struct HomeContainerView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            if let api = coordinator.captureAPI,
+               let context = coordinator.activeContext {
+                NavigationLink {
+                    SessionsListView(
+                        captureAPI: api,
+                        workspaceID: context.workspace.id,
+                        projectID: context.project.id,
+                        projectName: context.project.name
+                    )
+                } label: {
+                    Image(systemName: "list.bullet.rectangle")
+                        .accessibilityLabel("Captures")
+                }
+            }
+        }
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 #if DEBUG
@@ -186,12 +204,38 @@ struct HomeContainerView: View {
                 )
                 // .recording transition is observed in handle(transition:)
             } catch let error as CaptureServiceError {
-                lastResult = .failed(reason: errorDescription(for: error))
+                lastResult = result(for: error)
             } catch {
                 lastResult = .failed(reason: error.localizedDescription)
             }
             isStartingCapture = false
         }
+    }
+
+    /// Handler for the result-banner CTA. The closure is the same
+    /// for every banner type; the action it performs is keyed off
+    /// the current `lastResult`.
+    ///
+    /// * `.microphonePermissionDenied` → open the iOS Settings app
+    ///   so the user can grant access.
+    /// * `.networkUnavailable` → re-fire `startCapture`.
+    /// * Anything else → no-op (the banners that hit this path
+    ///   should be the only ones that have an action button).
+    private func performResultAction() {
+        switch lastResult {
+        case .microphonePermissionDenied:
+            openSettings()
+        case .networkUnavailable:
+            startCapture()
+        default:
+            break
+        }
+    }
+
+    private func openSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString),
+              UIApplication.shared.canOpenURL(url) else { return }
+        UIApplication.shared.open(url)
     }
 
     private func stopCapture() {
@@ -249,22 +293,36 @@ struct HomeContainerView: View {
         return "Capture \(formatter.string(from: Date()))"
     }
 
-    private func errorDescription(for error: CaptureServiceError) -> String {
+    /// Translate a typed `CaptureServiceError` into the
+    /// home view's result banner. Specific cases get their own
+    /// banner type (with an action affordance); the rest collapse
+    /// into the generic `.failed` banner with a human-friendly
+    /// reason string.
+    static func result(for error: CaptureServiceError) -> HomeView.HomeViewResult {
         switch error {
+        case .microphonePermissionDenied:
+            return .microphonePermissionDenied
+        case .createSessionNetworkUnavailable:
+            return .networkUnavailable
         case .alreadyCapturing:
-            return "A capture is already in progress."
+            return .failed(reason: "A capture is already in progress.")
         case .notRecording:
-            return "No active capture to stop."
+            return .failed(reason: "No active capture to stop.")
         case .createSessionFailed(let reason):
-            return "Couldn't open the session: \(reason)"
+            return .failed(reason: "Couldn't open the session: \(reason)")
         case .recorderStartFailed(let reason):
-            return "Couldn't start recording: \(reason)"
+            return .failed(reason: "Couldn't start recording: \(reason)")
         case .recorderStopFailed(let reason):
-            return "Couldn't stop the recorder cleanly: \(reason)"
+            return .failed(reason: "Couldn't stop the recorder cleanly: \(reason)")
         case .hashingFailed(let reason):
-            return "Couldn't hash the recording: \(reason)"
+            return .failed(reason: "Couldn't hash the recording: \(reason)")
         case .enqueueFailed(let reason):
-            return "Couldn't queue the upload: \(reason)"
+            return .failed(reason: "Couldn't queue the upload: \(reason)")
         }
+    }
+
+    /// Instance shorthand for ``HomeContainerView/result(for:)``.
+    private func result(for error: CaptureServiceError) -> HomeView.HomeViewResult {
+        Self.result(for: error)
     }
 }

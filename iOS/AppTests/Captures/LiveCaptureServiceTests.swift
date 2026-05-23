@@ -259,7 +259,7 @@ struct LiveCaptureServiceTests {
         let bundle = Self.makeBundle()
         await bundle.api.enqueueCreateResult(.failure(.networkUnavailable))
 
-        await #expect(throws: CaptureServiceError.createSessionFailed(reason: "networkUnavailable")) {
+        await #expect(throws: CaptureServiceError.createSessionNetworkUnavailable) {
             try await bundle.service.startCapture(
                 workspaceID: Self.workspaceID,
                 projectID: Self.projectID,
@@ -279,7 +279,7 @@ struct LiveCaptureServiceTests {
         await bundle.api.enqueueCreateResult(.success(Self.captureSession()))
         await bundle.recorder.setStartError(AudioRecorderError.permissionDenied)
 
-        await #expect(throws: CaptureServiceError.recorderStartFailed(reason: "permissionDenied")) {
+        await #expect(throws: CaptureServiceError.microphonePermissionDenied) {
             try await bundle.service.startCapture(
                 workspaceID: Self.workspaceID,
                 projectID: Self.projectID,
