@@ -42,6 +42,7 @@ struct LakeloomApp: App {
         )
         let captureAPI = LiveCaptureAPIClient(lakeloomApp: lakeloomApp)
         let transcriptEvents = LiveTranscriptEventsClient(lakeloomApp: lakeloomApp)
+        let speechTranscriber = LiveSpeechTranscriber()
 
         // Upload pipeline. Worker loop is started from the App's
         // `.task` modifier below so the queue rehydration happens on
@@ -71,12 +72,24 @@ struct LakeloomApp: App {
             let contextStore: CaptureContextStore?
             do { contextStore = try CaptureContextStore.makeDefault() }
             catch { contextStore = nil }
+            // Closure that the capture service awaits when it's
+            // about to emit transcript events. We can't snapshot the
+            // paired_session_id at app-launch time — the user may
+            // not be paired yet — so the service polls when it's
+            // ready to send. Sendable closure captures `auth` by
+            // reference; AuthServicing is Sendable.
+            let pairedSessionIDProvider: @Sendable () async -> String? = { [auth] in
+                await auth.activeWorkspace?.authMethod.pairedSessionID
+            }
             captureService = LiveCaptureService(
                 captureAPI: captureAPI,
                 recorder: LiveAudioRecorder(),
                 uploadCoordinator: uploadCoordinator,
                 contextStore: contextStore,
-                deviceIdentity: deviceIdentity
+                deviceIdentity: deviceIdentity,
+                speechTranscriber: speechTranscriber,
+                transcriptEvents: transcriptEvents,
+                pairedSessionIDProvider: pairedSessionIDProvider
             )
         } else {
             // Without an upload coordinator the capture flow has

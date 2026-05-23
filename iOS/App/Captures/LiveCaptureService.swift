@@ -25,6 +25,21 @@ public actor LiveCaptureService: CaptureService {
     /// it as a sibling form field. Optional so older tests that don't
     /// drive the identity-aware paths keep compiling.
     private let deviceIdentity: (any DeviceIdentityStore)?
+    /// Optional on-device speech transcriber. When set together with
+    /// `transcriptEvents`, the finalize path kicks off a post-stop
+    /// transcription Task that streams `final_transcript` events to
+    /// ZeroBus while the audio file uploads in parallel. Both nil →
+    /// no transcription, audio still uploads (back-compat with tests
+    /// + the path where SpeechAnalyzer permission is denied).
+    private let speechTranscriber: (any SpeechTranscriber)?
+    /// Optional ZeroBus events client. Same nil-tolerance as above.
+    private let transcriptEvents: (any TranscriptEventsClient)?
+    /// Workspace + paired-session resolver — the transcript events
+    /// endpoint is `/api/sessions/<paired_session_id>/events`, so we
+    /// need to know the active paired session at emit time without
+    /// taking a dep on AppCoordinator. Production wiring supplies a
+    /// closure; tests can omit (then transcript emission is skipped).
+    private let pairedSessionIDProvider: (@Sendable () async -> String?)?
     private let logger: AppLogger
     private let nowProvider: @Sendable () -> Date
     private let uploadIDProvider: @Sendable () -> String
@@ -49,6 +64,9 @@ public actor LiveCaptureService: CaptureService {
         uploadCoordinator: any UploadCoordinator,
         contextStore: CaptureContextStore? = nil,
         deviceIdentity: (any DeviceIdentityStore)? = nil,
+        speechTranscriber: (any SpeechTranscriber)? = nil,
+        transcriptEvents: (any TranscriptEventsClient)? = nil,
+        pairedSessionIDProvider: (@Sendable () async -> String?)? = nil,
         logger: AppLogger = AppLogger(category: .capture)
     ) {
         self.captureAPI = captureAPI
@@ -56,6 +74,9 @@ public actor LiveCaptureService: CaptureService {
         self.uploadCoordinator = uploadCoordinator
         self.contextStore = contextStore
         self.deviceIdentity = deviceIdentity
+        self.speechTranscriber = speechTranscriber
+        self.transcriptEvents = transcriptEvents
+        self.pairedSessionIDProvider = pairedSessionIDProvider
         self.logger = logger
         self.nowProvider = Date.init
         self.uploadIDProvider = { UUID().uuidString }
@@ -71,6 +92,9 @@ public actor LiveCaptureService: CaptureService {
         uploadCoordinator: any UploadCoordinator,
         contextStore: CaptureContextStore? = nil,
         deviceIdentity: (any DeviceIdentityStore)? = nil,
+        speechTranscriber: (any SpeechTranscriber)? = nil,
+        transcriptEvents: (any TranscriptEventsClient)? = nil,
+        pairedSessionIDProvider: (@Sendable () async -> String?)? = nil,
         logger: AppLogger = AppLogger(category: .capture),
         nowProvider: @Sendable @escaping () -> Date,
         uploadIDProvider: @Sendable @escaping () -> String,
@@ -81,6 +105,9 @@ public actor LiveCaptureService: CaptureService {
         self.uploadCoordinator = uploadCoordinator
         self.contextStore = contextStore
         self.deviceIdentity = deviceIdentity
+        self.speechTranscriber = speechTranscriber
+        self.transcriptEvents = transcriptEvents
+        self.pairedSessionIDProvider = pairedSessionIDProvider
         self.logger = logger
         self.nowProvider = nowProvider
         self.uploadIDProvider = uploadIDProvider
@@ -360,6 +387,23 @@ public actor LiveCaptureService: CaptureService {
             throw CaptureServiceError.enqueueFailed(reason: error.localizedDescription)
         }
 
+        // Kick off best-effort on-device transcription in parallel
+        // with the upload. Failures here log but don't fail the
+        // capture — the .m4a is still on its way to UC volume and
+        // the server-side Whisper pass is the authoritative
+        // transcript per Genie's AI pipeline note. Transcription
+        // requires speechTranscriber + transcriptEvents + a
+        // pairedSessionIDProvider to be wired; if any is missing
+        // (test paths, permission denied earlier in this session)
+        // we silently skip.
+        transcribeAudioInBackground(
+            fileURL: recording.fileURL,
+            workspaceID: context.workspaceID,
+            projectID: context.projectID,
+            deviceID: audioDeviceID,
+            startedAt: recording.startedAt
+        )
+
         // Subscribe to the upload coordinator's state stream
         // synchronously inside the actor BEFORE returning. That
         // guarantees the watcher has its subscription registered
@@ -399,6 +443,90 @@ public actor LiveCaptureService: CaptureService {
     }
 
     // MARK: - Private
+
+    /// Fires a detached Task that transcribes the just-recorded
+    /// `.m4a` and posts each segment as a `final_transcript`
+    /// ZeroBus event. Returns immediately; the Task is decoupled
+    /// from the capture lifecycle so transcription latency doesn't
+    /// affect upload finalization.
+    private func transcribeAudioInBackground(
+        fileURL: URL,
+        workspaceID: String,
+        projectID: String,
+        deviceID: String?,
+        startedAt: Date
+    ) {
+        guard
+            let speechTranscriber,
+            let transcriptEvents,
+            let pairedSessionIDProvider
+        else { return }
+
+        let logger = self.logger
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        Task { [logger] in
+            guard let pairedSessionID = await pairedSessionIDProvider(),
+                  !pairedSessionID.isEmpty else {
+                await logger.warning(
+                    "speech.transcribe.skipped",
+                    metadata: ["reason": .string("no paired session id")]
+                )
+                return
+            }
+
+            let stream: AsyncThrowingStream<TranscriptSegment, Error>
+            do {
+                stream = try await speechTranscriber.transcribe(fileURL: fileURL, locale: nil)
+            } catch {
+                await logger.warning(
+                    "speech.transcribe.start_failed",
+                    metadata: ["reason": .string(String(describing: error))]
+                )
+                return
+            }
+
+            do {
+                for try await segment in stream {
+                    let eventTimeDate = startedAt.addingTimeInterval(segment.startTimeSeconds)
+                    let event = TranscriptEvent(
+                        eventType: .finalTranscript,
+                        text: segment.text,
+                        confidence: segment.confidence,
+                        language: "en-US",
+                        segmentIndex: segment.segmentIndex,
+                        durationMs: segment.durationMs,
+                        source: "on_device",
+                        model: "sf_speech_recognizer",
+                        projectID: projectID,
+                        deviceID: deviceID,
+                        eventTime: isoFormatter.string(from: eventTimeDate)
+                    )
+                    do {
+                        _ = try await transcriptEvents.sendEvent(
+                            workspaceID: workspaceID,
+                            pairedSessionID: pairedSessionID,
+                            event: event
+                        )
+                    } catch {
+                        await logger.warning(
+                            "speech.transcribe.event_send_failed",
+                            metadata: [
+                                "segment_index": .int(Int64(segment.segmentIndex)),
+                                "reason": .string(String(describing: error))
+                            ]
+                        )
+                    }
+                }
+            } catch {
+                await logger.warning(
+                    "speech.transcribe.mid_stream_failed",
+                    metadata: ["reason": .string(String(describing: error))]
+                )
+            }
+        }
+    }
 
     /// Best-effort resolve of the stable device UUID. Failure logs
     /// but does not throw — the create-body and PendingUpload simply
