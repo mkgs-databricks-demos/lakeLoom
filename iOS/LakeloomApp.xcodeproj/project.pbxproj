@@ -190,6 +190,12 @@
 		18020A1118001800180018B1 /* TranscriptEventEncodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18010A1118001800180018B1 /* TranscriptEventEncodingTests.swift */; };
 		18020A1218001800180018B2 /* LiveTranscriptEventsClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18010A1218001800180018B2 /* LiveTranscriptEventsClientTests.swift */; };
 		18020A1318001800180018B3 /* DeviceIdentityStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18010A1318001800180018B3 /* DeviceIdentityStoreTests.swift */; };
+		19020A0119001900190019A1 /* TranscriptSegment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19010A0119001900190019A1 /* TranscriptSegment.swift */; };
+		19020A0219001900190019A2 /* SpeechTranscriberError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19010A0219001900190019A2 /* SpeechTranscriberError.swift */; };
+		19020A0319001900190019A3 /* SpeechTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19010A0319001900190019A3 /* SpeechTranscriber.swift */; };
+		19020A0419001900190019A4 /* LiveSpeechTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19010A0419001900190019A4 /* LiveSpeechTranscriber.swift */; };
+		19020A1119001900190019B1 /* FakeSpeechTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19010A1119001900190019B1 /* FakeSpeechTranscriber.swift */; };
+		19020A1219001900190019B2 /* LiveCaptureServiceTranscriptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19010A1219001900190019B2 /* LiveCaptureServiceTranscriptionTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -395,6 +401,12 @@
 		18010A1118001800180018B1 /* TranscriptEventEncodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptEventEncodingTests.swift; sourceTree = "<group>"; };
 		18010A1218001800180018B2 /* LiveTranscriptEventsClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTranscriptEventsClientTests.swift; sourceTree = "<group>"; };
 		18010A1318001800180018B3 /* DeviceIdentityStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentityStoreTests.swift; sourceTree = "<group>"; };
+		19010A0119001900190019A1 /* TranscriptSegment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptSegment.swift; sourceTree = "<group>"; };
+		19010A0219001900190019A2 /* SpeechTranscriberError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechTranscriberError.swift; sourceTree = "<group>"; };
+		19010A0319001900190019A3 /* SpeechTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechTranscriber.swift; sourceTree = "<group>"; };
+		19010A0419001900190019A4 /* LiveSpeechTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveSpeechTranscriber.swift; sourceTree = "<group>"; };
+		19010A1119001900190019B1 /* FakeSpeechTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeSpeechTranscriber.swift; sourceTree = "<group>"; };
+		19010A1219001900190019B2 /* LiveCaptureServiceTranscriptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveCaptureServiceTranscriptionTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -652,6 +664,7 @@
 			children = (
 				A0030A01A001A001A001A001 /* Audio */,
 				E0030A01E001E001E001E001 /* Camera */,
+				19030A0119001900190019C1 /* Speech */,
 				18030A0118001800180018C1 /* Transcripts */,
 				B0030A01B001B001B001B001 /* Upload */,
 				5F242B88AF0A6339ED026919 /* CaptureAPIClient.swift */,
@@ -676,6 +689,26 @@
 				18010A0318001800180018A3 /* TranscriptEventsError.swift */,
 			);
 			path = Transcripts;
+			sourceTree = "<group>";
+		};
+		19030A0119001900190019C1 /* Speech */ = {
+			isa = PBXGroup;
+			children = (
+				19010A0419001900190019A4 /* LiveSpeechTranscriber.swift */,
+				19010A0319001900190019A3 /* SpeechTranscriber.swift */,
+				19010A0219001900190019A2 /* SpeechTranscriberError.swift */,
+				19010A0119001900190019A1 /* TranscriptSegment.swift */,
+			);
+			path = Speech;
+			sourceTree = "<group>";
+		};
+		19030A1119001900190019D1 /* Speech */ = {
+			isa = PBXGroup;
+			children = (
+				19010A1119001900190019B1 /* FakeSpeechTranscriber.swift */,
+				19010A1219001900190019B2 /* LiveCaptureServiceTranscriptionTests.swift */,
+			);
+			path = Speech;
 			sourceTree = "<group>";
 		};
 		E0030A01E001E001E001E001 /* Camera */ = {
@@ -854,6 +887,7 @@
 			children = (
 				A0030A02A002A002A002A002 /* Audio */,
 				E0030A02E002E002E002E002 /* Camera */,
+				19030A1119001900190019D1 /* Speech */,
 				18030A1118001800180018D1 /* Transcripts */,
 				B0030A02B002B002B002B002 /* Upload */,
 				C0030A01C001C001C001C001 /* Helpers */,
@@ -1219,6 +1253,8 @@
 				18020A1118001800180018B1 /* TranscriptEventEncodingTests.swift in Sources */,
 				18020A1218001800180018B2 /* LiveTranscriptEventsClientTests.swift in Sources */,
 				18020A1318001800180018B3 /* DeviceIdentityStoreTests.swift in Sources */,
+				19020A1119001900190019B1 /* FakeSpeechTranscriber.swift in Sources */,
+				19020A1219001900190019B2 /* LiveCaptureServiceTranscriptionTests.swift in Sources */,
 				14020A0214001400140014DE /* PendingUploadRoutingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1266,6 +1302,10 @@
 				18020A0218001800180018A2 /* TranscriptEventsClient.swift in Sources */,
 				18020A0318001800180018A3 /* TranscriptEventsError.swift in Sources */,
 				18020A0418001800180018A4 /* DeviceIdentityStore.swift in Sources */,
+				19020A0119001900190019A1 /* TranscriptSegment.swift in Sources */,
+				19020A0219001900190019A2 /* SpeechTranscriberError.swift in Sources */,
+				19020A0319001900190019A3 /* SpeechTranscriber.swift in Sources */,
+				19020A0419001900190019A4 /* LiveSpeechTranscriber.swift in Sources */,
 				DA3DE0271D8CF642B2DBCD87 /* ConsentStepView.swift in Sources */,
 				39648CCBC7B49D1D1AA8224F /* ConsentVersion.swift in Sources */,
 				A2335FCCF1E61286BBF82B3D /* CoreDataStack+InMemory.swift in Sources */,
@@ -1537,6 +1577,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = lakeLoom;
 				INFOPLIST_KEY_NSCameraUsageDescription = "lakeLoom uses the camera to scan the pairing QR code shown by the lakeLoom Databricks App and to capture photos that attach to your active capture session.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "lakeLoom records audio during a capture session so the Databricks side can transcribe the conversation into a project brief.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "lakeLoom runs on-device speech recognition on the audio you've just recorded to stream a live transcript to the project's session log.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -1563,6 +1604,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = lakeLoom;
 				INFOPLIST_KEY_NSCameraUsageDescription = "lakeLoom uses the camera to scan the pairing QR code shown by the lakeLoom Databricks App and to capture photos that attach to your active capture session.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "lakeLoom records audio during a capture session so the Databricks side can transcribe the conversation into a project brief.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "lakeLoom runs on-device speech recognition on the audio you've just recorded to stream a live transcript to the project's session log.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -1606,6 +1648,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = lakeLoom;
 				INFOPLIST_KEY_NSCameraUsageDescription = "lakeLoom uses the camera to scan the pairing QR code shown by the lakeLoom Databricks App and to capture photos that attach to your active capture session.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "lakeLoom records audio during a capture session so the Databricks side can transcribe the conversation into a project brief.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "lakeLoom runs on-device speech recognition on the audio you've just recorded to stream a live transcript to the project's session log.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
