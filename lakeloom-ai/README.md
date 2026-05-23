@@ -49,6 +49,10 @@ Use the list ID from the list command above:
 databricks ip-access-lists update <LIST_ID> --json '{"label": "lakeLoomZeroBus", "list_type": "ALLOW", "ip_addresses": ["98.10.37.0/24"], "enabled": true}'
 ```
 
+```
+databricks ip-access-lists update f4dc1a12-f273-48a3-9732-70ed837b419e --json '{"label": "lakeLoom", "list_type": "ALLOW", "ip_addresses": ["98.10.37.0/24", "45.46.229.0/24", "74.254.145.0/24"], "enabled": true}'
+```
+
 For our home network, the list ID is `f4dc1a12-f273-48a3-9732-70ed837b419e`
 and the current CIDR is `98.10.37.0/24` (full /24 subnet).
 
