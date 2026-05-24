@@ -37,10 +37,25 @@ public actor LiveStreamingSpeechRecognizer: StreamingSpeechRecognizer {
     private var bufferDrainTask: Task<Void, Never>?
     private var segmentContinuation: AsyncThrowingStream<TranscriptSegment, Error>.Continuation?
     private var didStop = false
-    /// Number of phrases we've already yielded from the current
-    /// recognition session. Each `processResult` call emits
-    /// phrases[emittedCount...] only.
-    private var emittedPhraseCount = 0
+    /// Highest phrase start time we've already yielded. Used to
+    /// dedupe across multiple result callbacks. Robust to two Apple
+    /// behaviors we observed:
+    ///   1. `bestTranscription` is cumulative across callbacks
+    ///      (start times increase monotonically — easy case).
+    ///   2. `bestTranscription` resets per utterance with
+    ///      utterance-relative or session-absolute start times
+    ///      — start times still grow monotonically across utterances
+    ///      because the recorder's clock keeps advancing.
+    /// Either way, we only emit a phrase when its start exceeds
+    /// what we've emitted so far.
+    private var maxEmittedStartTime: Double = -.infinity
+    /// Monotonic segment_index counter assigned to emitted phrases.
+    private var globalSegmentIndex: Int = 0
+    /// Count of times the recognizer fired `isFinal=true`. Buffer
+    /// mode fires this at every utterance boundary, not just at
+    /// endAudio() — so multiple finals per session is normal.
+    /// Logged for diagnostic visibility.
+    private var finalCallbackCount: Int = 0
 
     public init(logger: AppLogger = AppLogger(category: .capture)) {
         self.logger = logger
@@ -89,7 +104,9 @@ public actor LiveStreamingSpeechRecognizer: StreamingSpeechRecognizer {
         self.request = requestLocal
 
         // Reset per-session state.
-        emittedPhraseCount = 0
+        maxEmittedStartTime = -.infinity
+        globalSegmentIndex = 0
+        finalCallbackCount = 0
         didStop = false
 
         let (stream, continuation) = AsyncThrowingStream<TranscriptSegment, Error>.makeStream()
@@ -155,7 +172,18 @@ public actor LiveStreamingSpeechRecognizer: StreamingSpeechRecognizer {
                 if Task.isCancelled { break }
                 drainRequest.append(envelope.buffer)
             }
+            // Buffer stream finished (recorder stopped or cancelled).
+            // Signal end-of-input to the recognizer; it will fire one
+            // last `isFinal=true` callback with any trailing utterance.
             drainRequest.endAudio()
+            // Give the recognizer a brief window to deliver the
+            // post-endAudio terminal callback. Empirically Apple
+            // fires it within ~200ms; 1.5s is comfortable headroom
+            // without making Stop feel sluggish. After the window,
+            // we finish the segment stream so awaiters unblock —
+            // whether or not the terminal callback arrived.
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            await self.finishStream(error: nil)
         }
 
         return stream
@@ -178,12 +206,8 @@ public actor LiveStreamingSpeechRecognizer: StreamingSpeechRecognizer {
     private func processResult(_ result: SFSpeechRecognitionResult) {
         let transcription = result.bestTranscription
         let isFinal = result.isFinal
+        if isFinal { finalCallbackCount += 1 }
 
-        // Run the FULL transcription through PhraseGrouper. Phrase
-        // boundaries (pause + punctuation) are stable enough that
-        // a phrase, once delimited, rarely changes — so emitting
-        // phrases[emittedCount...] gives us incremental delivery
-        // without major duplicate noise.
         let words = transcription.segments.map { apple -> WordTiming in
             WordTiming(
                 text: apple.substring,
@@ -194,58 +218,91 @@ public actor LiveStreamingSpeechRecognizer: StreamingSpeechRecognizer {
         }
         let phrases = PhraseGrouper.phrases(from: words)
 
-        // On non-final callbacks, hold back the LAST phrase — it
-        // may still grow as more audio is processed. On final,
-        // emit everything including the last.
-        let emittableEnd: Int
-        if isFinal {
-            emittableEnd = phrases.count
-        } else if phrases.count > 0 {
-            emittableEnd = phrases.count - 1
-        } else {
-            emittableEnd = 0
+        // Per-callback diagnostic. Lets us see in the device log
+        // how Apple is delivering results — multiple isFinal=true
+        // callbacks per session are normal in buffer mode (one per
+        // utterance), and we want visibility into whether that's
+        // what's happening.
+        let preview = transcription.formattedString
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .prefix(60)
+        let isFinalCopy = isFinal
+        let wordCount = transcription.segments.count
+        let finalCallbackCountCopy = finalCallbackCount
+        let phraseCount = phrases.count
+        Task { [logger] in
+            await logger.debug(
+                "speech.streaming.callback",
+                metadata: [
+                    "is_final": .string(String(isFinalCopy)),
+                    "words": .int(Int64(wordCount)),
+                    "phrases": .int(Int64(phraseCount)),
+                    "preview": .string(preview.isEmpty ? "(empty)" : String(preview)),
+                    "final_callbacks_so_far": .int(Int64(finalCallbackCountCopy))
+                ]
+            )
         }
 
-        if emittableEnd > emittedPhraseCount {
-            let toEmit = phrases[emittedPhraseCount..<emittableEnd]
-            for phrase in toEmit {
-                // Re-index with our session-monotonic counter so
-                // downstream consumers see a clean 0, 1, 2, ...
-                // segment_index sequence even though PhraseGrouper
-                // computed indices relative to its input.
-                let yielded = TranscriptSegment(
-                    text: phrase.text,
-                    confidence: phrase.confidence,
-                    segmentIndex: emittedPhraseCount,
-                    durationMs: phrase.durationMs,
-                    startTimeSeconds: phrase.startTimeSeconds
-                )
-                segmentContinuation?.yield(yielded)
-                emittedPhraseCount += 1
-            }
+        // Emission strategy: for each phrase from Apple, emit it if
+        // its startTime exceeds the highest we've emitted so far.
+        // This handles BOTH possible Apple behaviors:
+        //   (a) bestTranscription cumulative — start times grow
+        //       monotonically; we just emit new ones.
+        //   (b) bestTranscription per-utterance — each callback
+        //       brings fresh phrases, but timestamps are
+        //       session-absolute (relative to recorder start), so
+        //       new utterances naturally have higher start times.
+        //
+        // For non-final callbacks, hold back the LAST phrase unless
+        // it ends with sentence punctuation — it may still grow
+        // and we don't want to emit then re-emit different text.
+        for (i, phrase) in phrases.enumerated() {
+            let isLastPhrase = i == phrases.count - 1
+            let endsInSentencePunct = phrase.text
+                .trimmingCharacters(in: .whitespaces)
+                .last.map { ".!?".contains($0) } ?? false
+            let isStable = isFinal || !isLastPhrase || endsInSentencePunct
+            guard isStable else { continue }
+            guard phrase.startTimeSeconds > maxEmittedStartTime else { continue }
+
+            let yielded = TranscriptSegment(
+                text: phrase.text,
+                confidence: phrase.confidence,
+                segmentIndex: globalSegmentIndex,
+                durationMs: phrase.durationMs,
+                startTimeSeconds: phrase.startTimeSeconds
+            )
+            segmentContinuation?.yield(yielded)
+            globalSegmentIndex += 1
+            maxEmittedStartTime = phrase.startTimeSeconds
         }
 
-        if isFinal {
-            let phraseCount = emittedPhraseCount
-            let wordCount = transcription.segments.count
-            Task {
-                await logger.info(
-                    "speech.streaming.ok",
-                    metadata: [
-                        "phrases": .int(Int64(phraseCount)),
-                        "raw_word_segments": .int(Int64(wordCount))
-                    ]
-                )
-            }
-            finishStream(error: nil)
-        }
+        // CRITICAL: do NOT finish the segment stream on isFinal=true.
+        // In buffer mode with shouldReportPartialResults=true, Apple
+        // fires isFinal at every utterance boundary, not just at
+        // endAudio. Closing on the first one would drop everything
+        // after — which is exactly the bug we saw in PR 9b's first
+        // device test (only the first utterance landed in
+        // transcript_events_raw). The drain task closes the stream
+        // once the buffer source ends + we've called endAudio.
     }
 
-    private func finishStream(error: NSError?) {
+    private func finishStream(error: NSError?) async {
+        guard segmentContinuation != nil else { return }
         let continuation = segmentContinuation
         segmentContinuation = nil
+        task?.cancel()
         task = nil
         request = nil
+        let total = globalSegmentIndex
+        let finals = finalCallbackCount
+        await logger.info(
+            "speech.streaming.ok",
+            metadata: [
+                "phrases_emitted": .int(Int64(total)),
+                "final_callbacks": .int(Int64(finals))
+            ]
+        )
         if let error {
             continuation?.finish(throwing: SpeechTranscriberError.recognitionFailed(
                 reason: error.localizedDescription,
