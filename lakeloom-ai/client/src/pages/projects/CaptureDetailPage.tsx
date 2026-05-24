@@ -134,6 +134,16 @@ export function CaptureDetailPage() {
     })();
   }, [captureId]);
 
+  // Auto-select first upload (prioritize audio) when capture loads
+  useEffect(() => {
+    if (!capture?.uploads?.length) return;
+    // Already selected — don't override user choice
+    if (selectedUpload) return;
+    // Prefer audio uploads, fall back to first upload
+    const firstAudio = capture.uploads.find((u) => u.mime_type.startsWith('audio/'));
+    setSelectedUpload(firstAudio ?? capture.uploads[0]);
+  }, [capture]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleTransition = async () => {
     if (!confirmAction || !captureId) return;
     try {

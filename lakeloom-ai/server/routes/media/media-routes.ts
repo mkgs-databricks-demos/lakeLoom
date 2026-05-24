@@ -152,7 +152,21 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
       }
     });
 
-    // ── GET /api/media/:upload_id ────────────────────────────────────────
+    // ── OPTIONS /api/media/:upload_id (CORS preflight) ──────────────────
+    // Required for credentialed Range requests during audio seeking.
+    app.options('/api/media/:upload_id', (req: Request, res: Response) => {
+      if (req.headers.origin) {
+        res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+        res.setHeader('Access-Control-Max-Age', '86400');
+        res.setHeader('Vary', 'Origin');
+      }
+      res.status(204).end();
+    });
+
+        // ── GET /api/media/:upload_id ────────────────────────────────────────
     // Stream file content from UC Volume. Supports HTTP Range requests.
     app.get('/api/media/:upload_id', auth, async (req: Request, res: Response, next: NextFunction) => {
       try {

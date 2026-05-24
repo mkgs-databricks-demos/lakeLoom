@@ -180,11 +180,11 @@ export function AudioPlayer({ uploadId, title, sizeBytes, durationHint }: AudioP
 
   return (
     <div className="bg-[var(--surface-raised)] border border-[var(--border-default)] rounded-xl overflow-hidden">
-      {/* Hidden audio element — crossOrigin needed for Web Audio AnalyserNode through auth proxy */}
+      {/* Hidden audio element — use-credentials sends cookies for auth while enabling CORS for Web Audio */}
       <audio
         ref={audioRef}
         src={streamUrl}
-        crossOrigin="anonymous"
+        crossOrigin="use-credentials"
         preload="metadata"
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}

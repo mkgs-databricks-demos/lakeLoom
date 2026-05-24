@@ -74,8 +74,8 @@ export function ConfirmDialog({
         if (e.target === dialogRef.current) onClose();
       }}
       className={cn(
-        'p-0 bg-transparent backdrop:bg-black/40',
-        'backdrop:animate-[fadeIn_200ms_ease-out]',
+        'fixed inset-0 m-auto p-0 bg-transparent',
+        'backdrop:bg-black/40 backdrop:animate-[fadeIn_200ms_ease-out]',
         open && 'open:animate-[scaleIn_300ms_cubic-bezier(0.16,1,0.3,1)]',
       )}
     >
