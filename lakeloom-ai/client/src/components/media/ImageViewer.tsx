@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Camera, Download, Image, Maximize2, Minimize2, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { Camera, Download, Image, Maximize2, X, ZoomIn, ZoomOut } from 'lucide-react';
 
 interface ImageViewerProps {
   /** Upload ID — used to build the image URL */

@@ -6,7 +6,7 @@ export interface UploadItem {
   id: string;
   kind: string;
   mime_type: string;
-  original_filename?: string;
+  original_filename?: string | null;
   size_bytes?: number;
   uploaded_at?: string;
   sha256_hex?: string;
@@ -23,12 +23,15 @@ interface MediaPanelProps {
 export function MediaPanel({ upload }: MediaPanelProps) {
   const { id, kind, mime_type, original_filename, size_bytes, uploaded_at, sha256_hex } = upload;
 
+  // Coerce null to undefined for child component props
+  const title = original_filename ?? undefined;
+
   // Audio types
   if (mime_type.startsWith('audio/')) {
     return (
       <AudioPlayer
         uploadId={id}
-        title={original_filename}
+        title={title}
         sizeBytes={size_bytes}
       />
     );
@@ -39,7 +42,7 @@ export function MediaPanel({ upload }: MediaPanelProps) {
     return (
       <ImageViewer
         uploadId={id}
-        title={original_filename}
+        title={title}
         mimeType={mime_type}
         sizeBytes={size_bytes}
         kind={kind === 'photo' ? 'photo' : 'screenshot'}
@@ -53,7 +56,7 @@ export function MediaPanel({ upload }: MediaPanelProps) {
     return (
       <DocumentViewer
         uploadId={id}
-        title={original_filename}
+        title={title}
         mimeType={mime_type}
         sizeBytes={size_bytes}
         uploadedAt={uploaded_at}
@@ -70,7 +73,7 @@ export function MediaPanel({ upload }: MediaPanelProps) {
       </p>
       <a
         href={`/api/media/${id}`}
-        download={original_filename}
+        download={title}
         className="text-sm text-[var(--accent-info)] hover:underline"
       >
         Download file
