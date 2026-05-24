@@ -1,5 +1,6 @@
 # Session Index
 
+* [2026-05-24] Phase 2 Capture Session Browser Complete — `2026-05-24_phase2-capture-session-complete.md`
 * [2026-05-23] Shared PairingTestClient, Migrations 009/010, Lakehouse Sync Schema Fix — `2026-05-23_shared-pairing-client-and-schema-sync.md`
 * [2026-05-23] Device Identity Contract Implementation — `2026-05-23_device-identity-contract.md`
 * [2026-05-21] ZeroBus Ingest Root Cause Fix & Full Validation — `2026-05-21_zerobus-ingest-root-cause-and-validation.md`
