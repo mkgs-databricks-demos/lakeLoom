@@ -10,6 +10,11 @@ import SwiftUI
 struct HomeView: View {
 
     let workspaceName: String
+    /// Host portion of the paired Databricks App URL (e.g.,
+    /// `fevm-hls-fde.cloud.databricks.com`). Rendered next to the
+    /// username in the footer so the user always sees which
+    /// workspace they're talking to without opening the menu.
+    let workspaceHost: String
     let projectName: String
     let userName: String
     let lastResult: HomeViewResult
@@ -191,9 +196,18 @@ struct HomeView: View {
     // MARK: - Hint footer
 
     private var hint: some View {
-        Text("\(userName)")
-            .font(BrandTypography.caption.monospaced())
-            .foregroundStyle(BrandColors.textSecondary)
+        VStack(spacing: 2) {
+            if !workspaceHost.isEmpty {
+                Text(workspaceHost)
+                    .font(BrandTypography.caption.monospaced())
+                    .foregroundStyle(BrandColors.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Text(userName)
+                .font(BrandTypography.caption.monospaced())
+                .foregroundStyle(BrandColors.textSecondary)
+        }
     }
 }
 

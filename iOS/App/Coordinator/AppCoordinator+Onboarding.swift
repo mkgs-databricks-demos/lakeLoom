@@ -109,6 +109,65 @@ extension AppCoordinator {
         await loadProjectsForOnboarding(workspace: workspace)
     }
 
+    // MARK: Post-onboarding project switching
+
+    /// Switch the active project to a different one in the same
+    /// workspace without re-pairing. Fetches fresh metadata for the
+    /// target project (so a switch picks up server-side renames),
+    /// persists it as the workspace's new default, and replaces
+    /// ``activeContext`` so the home view and downstream services
+    /// pick up the change on the next render tick.
+    ///
+    /// Silently no-ops if there's no active context. Logs + returns
+    /// on fetch failure so a transient network blip doesn't tear the
+    /// existing context down.
+    public func switchActiveProject(to projectID: String) async {
+        guard let context = activeContext else { return }
+        if context.project.id == projectID { return }
+        let workspaceID = context.workspace.id
+
+        let resolved: ProjectMetadata
+        do {
+            resolved = try await projects.fetch(
+                projectID: projectID,
+                workspaceID: workspaceID
+            )
+        } catch {
+            await logger.warning(
+                "switchActiveProject: fetch failed",
+                metadata: [
+                    "project_id": .uuidPrefix(projectID),
+                    "reason": .string(String(describing: error))
+                ]
+            )
+            return
+        }
+
+        // Best-effort persistence — failure here doesn't roll back
+        // the in-memory switch (the user explicitly asked for it).
+        // Next cold launch will fall through to firstAvailableProject
+        // if setDefault didn't stick, which is recoverable.
+        try? await projects.setDefault(
+            projectID: resolved.id,
+            workspaceID: workspaceID
+        )
+
+        activeContext = ActiveContext(
+            user: context.user,
+            workspace: context.workspace,
+            project: resolved,
+            establishedAt: nowProvider()
+        )
+
+        await logger.info(
+            "project switched",
+            metadata: [
+                "workspace_id": .uuidPrefix(workspaceID),
+                "project_id": .uuidPrefix(resolved.id)
+            ]
+        )
+    }
+
     // MARK: Step 5 — project create
 
     public func createProject(name: String, description: String?) async {
