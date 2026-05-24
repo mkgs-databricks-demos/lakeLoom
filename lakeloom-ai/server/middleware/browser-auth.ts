@@ -67,6 +67,12 @@ export function browserAuth() {
  *
  * Detects which auth method is present and delegates accordingly.
  * Use on endpoints that both iOS and browser clients call (e.g., project CRUD).
+ *
+ * IMPORTANT: iOS MUST send Layer 2 headers (X-Lakeloom-Session-Token,
+ * X-Lakeloom-Timestamp, X-Lakeloom-Signature) on ALL API calls that write
+ * user-attributed data — including project CRUD. If iOS sends only the
+ * M2M Bearer (Layer 0), the sidecar resolves to the Xcode SPN identity
+ * (not the human), which causes user_id mismatch.
  */
 export function dualAuth(opts: { lakebase: { query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }> } }) {
   const { iosAuth } = require('./ios-auth') as typeof import('./ios-auth');
