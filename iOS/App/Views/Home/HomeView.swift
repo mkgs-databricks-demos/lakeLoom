@@ -77,6 +77,13 @@ struct HomeView: View {
                 .font(BrandTypography.bodyEmphasis)
                 .foregroundStyle(BrandColors.textPrimary)
                 .multilineTextAlignment(.center)
+            if !workspaceHost.isEmpty {
+                Text(workspaceHost)
+                    .font(BrandTypography.caption.monospaced())
+                    .foregroundStyle(BrandColors.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
 
             Text("PROJECT")
                 .font(BrandTypography.caption)
@@ -196,18 +203,9 @@ struct HomeView: View {
     // MARK: - Hint footer
 
     private var hint: some View {
-        VStack(spacing: 2) {
-            if !workspaceHost.isEmpty {
-                Text(workspaceHost)
-                    .font(BrandTypography.caption.monospaced())
-                    .foregroundStyle(BrandColors.textSecondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Text(userName)
-                .font(BrandTypography.caption.monospaced())
-                .foregroundStyle(BrandColors.textSecondary)
-        }
+        Text(userName)
+            .font(BrandTypography.caption.monospaced())
+            .foregroundStyle(BrandColors.textSecondary)
     }
 }
 

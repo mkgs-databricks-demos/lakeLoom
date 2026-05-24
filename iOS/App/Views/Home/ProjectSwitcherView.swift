@@ -22,6 +22,13 @@ struct ProjectSwitcherView: View {
     let workspaceName: String
     let activeProjectID: String
     let onSelect: (String) -> Void
+    /// Closure invoked with the new project's name + description
+    /// when the user submits the inline create form. The caller
+    /// (`HomeContainerView`) routes this through
+    /// `AppCoordinator.createAndSwitchToProject(name:description:)`,
+    /// which both creates the project on the server and switches
+    /// the active context to it.
+    let onCreate: (_ name: String, _ description: String?) async throws -> Void
     let onDismiss: () -> Void
 
     @State private var loadState: LoadState = .loading
@@ -35,17 +42,20 @@ struct ProjectSwitcherView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                switch loadState {
-                case .loading:
-                    loadingView
-                case .loaded(let list):
-                    listView(list)
-                case .empty:
-                    emptyView
-                case .error(let reason):
-                    errorView(reason: reason)
+            VStack(spacing: 0) {
+                Group {
+                    switch loadState {
+                    case .loading:
+                        loadingView
+                    case .loaded(let list):
+                        listView(list)
+                    case .empty:
+                        emptyView
+                    case .error(let reason):
+                        errorView(reason: reason)
+                    }
                 }
+                createFooter
             }
             .navigationTitle("Switch project")
             .navigationBarTitleDisplayMode(.inline)
@@ -59,6 +69,37 @@ struct ProjectSwitcherView: View {
             .refreshable { await reload(forceRefresh: true) }
         }
         .task { await initialLoad() }
+    }
+
+    // MARK: - Create footer
+
+    /// Persistent footer below the project list. Pushes
+    /// ``ProjectCreateFormView`` onto the navigation stack so the
+    /// user can name the new project + add a description without
+    /// leaving the sheet. On successful create, the form view
+    /// finishes and pops back; `onCreate` is what actually fires the
+    /// coordinator's `createAndSwitchToProject(...)` round trip.
+    private var createFooter: some View {
+        VStack(spacing: 0) {
+            Divider()
+                .background(BrandColors.borderDefault)
+            NavigationLink {
+                ProjectCreateFormView(
+                    workspaceName: workspaceName,
+                    onSubmit: onCreate,
+                    onSuccess: onDismiss
+                )
+            } label: {
+                Label("New project", systemImage: "plus.circle.fill")
+                    .font(BrandTypography.bodyEmphasis)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(BrandColors.accentPrimary)
+            .padding(.horizontal, Spacing.lg)
+            .padding(.vertical, Spacing.md)
+        }
+        .background(BrandColors.surfacePrimary)
     }
 
     // MARK: - States
@@ -174,6 +215,7 @@ struct ProjectSwitcherView: View {
         }
     }
 
+    /// Display reason for an error surfaced during list/create.
     private func reasonString(for error: any Error) -> String {
         if let projectError = error as? ProjectError {
             switch projectError {
@@ -193,5 +235,120 @@ struct ProjectSwitcherView: View {
             }
         }
         return error.localizedDescription
+    }
+}
+
+/// Inline create form pushed onto ``ProjectSwitcherView``'s nav
+/// stack. Two-field form (name + optional description) plus a
+/// "Create" CTA. On success: dismisses the entire sheet via
+/// `onSuccess` so the user lands back on the home screen with the
+/// new project already active. On failure: renders the typed
+/// `ProjectError` reason inline; the form stays open so the user
+/// can edit and retry.
+private struct ProjectCreateFormView: View {
+    let workspaceName: String
+    let onSubmit: (_ name: String, _ description: String?) async throws -> Void
+    let onSuccess: () -> Void
+
+    @State private var name: String = ""
+    @State private var description: String = ""
+    @State private var isSubmitting = false
+    @State private var lastError: String?
+
+    @FocusState private var nameFieldFocused: Bool
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("Name", text: $name)
+                    .focused($nameFieldFocused)
+                    .textInputAutocapitalization(.words)
+                    .autocorrectionDisabled()
+                    .submitLabel(.next)
+                TextField("Description (optional)", text: $description, axis: .vertical)
+                    .lineLimit(2 ... 4)
+                    .textInputAutocapitalization(.sentences)
+            } header: {
+                Text("New project in \(workspaceName)")
+                    .font(BrandTypography.caption)
+                    .foregroundStyle(BrandColors.textSecondary)
+            }
+
+            if let lastError {
+                Section {
+                    Text(lastError)
+                        .font(BrandTypography.caption)
+                        .foregroundStyle(BrandColors.statusError)
+                }
+            }
+
+            Section {
+                Button {
+                    Task { await submit() }
+                } label: {
+                    HStack {
+                        if isSubmitting {
+                            ProgressView().controlSize(.small)
+                        }
+                        Text(isSubmitting ? "Creating…" : "Create project")
+                            .font(BrandTypography.bodyEmphasis)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(BrandColors.accentPrimary)
+                .disabled(isSubmitting || trimmedName.isEmpty)
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .background(BrandColors.surfaceSecondary)
+        .navigationTitle("New project")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { nameFieldFocused = true }
+    }
+
+    private var trimmedName: String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var trimmedDescription: String? {
+        let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func submit() async {
+        guard !trimmedName.isEmpty else { return }
+        isSubmitting = true
+        lastError = nil
+        defer { isSubmitting = false }
+        do {
+            try await onSubmit(trimmedName, trimmedDescription)
+            // Successful create + switch — bubble up to the sheet so
+            // it dismisses and the home view re-renders against the
+            // new active project.
+            onSuccess()
+        } catch let error as ProjectError {
+            lastError = ProjectCreateFormView.message(for: error)
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    private static func message(for error: ProjectError) -> String {
+        switch error {
+        case .notSignedIn:                   return "Sign in again to create a project."
+        case .workspaceMismatch:             return "This workspace's session expired. Re-pair to continue."
+        case .networkUnavailable:            return "You're offline. Try again when you have a signal."
+        case .timeout:                       return "The request timed out. Try again in a moment."
+        case .permissionDenied(let r):       return "Not authorized: \(r)"
+        case .notFound:                      return "Workspace not found."
+        case .serverUnavailable:             return "lakeLoom is having trouble right now. Try again in a moment."
+        case .authFailed(let r):             return "Your session expired: \(r)"
+        case .validationFailed(let r):       return r
+        case .duplicateName:                 return "A project with this name already exists."
+        case .rejectedByServer(_, let r):    return r
+        case .rateLimited:                   return "Too many requests. Try again in a moment."
+        case .unknown(let r):                return r
+        }
     }
 }

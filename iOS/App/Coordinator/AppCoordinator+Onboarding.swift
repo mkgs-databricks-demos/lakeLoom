@@ -168,6 +168,53 @@ extension AppCoordinator {
         )
     }
 
+    /// Create a new project in the active workspace and switch the
+    /// active context to it in one round trip. The post-onboarding
+    /// analog of ``createProject(name:description:)`` — bypasses the
+    /// onboarding state machine because the user already has an
+    /// active context; we're just adding a project to it and
+    /// activating it.
+    ///
+    /// Returns the created project's name on success so the caller
+    /// (the project switcher sheet) can show a brief confirmation
+    /// before dismissing. Throws ``ProjectError`` on failure so the
+    /// caller can render the typed error inline.
+    @discardableResult
+    public func createAndSwitchToProject(
+        name: String,
+        description: String?
+    ) async throws -> ProjectMetadata {
+        guard let context = activeContext else {
+            throw ProjectError.notSignedIn
+        }
+        let workspace = context.workspace
+        let project = try await projects.create(
+            name: name,
+            description: description,
+            workspaceID: workspace.id
+        )
+        // Persist as the new default — failure is non-fatal (the
+        // user explicitly chose this project, in-memory swap stands).
+        try? await projects.setDefault(
+            projectID: project.id,
+            workspaceID: workspace.id
+        )
+        activeContext = ActiveContext(
+            user: context.user,
+            workspace: workspace,
+            project: project,
+            establishedAt: nowProvider()
+        )
+        await logger.info(
+            "project created + switched",
+            metadata: [
+                "workspace_id": .uuidPrefix(workspace.id),
+                "project_id": .uuidPrefix(project.id)
+            ]
+        )
+        return project
+    }
+
     // MARK: Step 5 — project create
 
     public func createProject(name: String, description: String?) async {

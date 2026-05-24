@@ -102,6 +102,16 @@ struct HomeContainerView: View {
                             showingProjectSwitcher = false
                         }
                     },
+                    onCreate: { name, description in
+                        // Throws ProjectError on failure; the form view
+                        // surfaces it inline. On success the form
+                        // dismisses the whole sheet via its onSuccess
+                        // callback (which maps to onDismiss here).
+                        _ = try await coordinator.createAndSwitchToProject(
+                            name: name,
+                            description: description
+                        )
+                    },
                     onDismiss: { showingProjectSwitcher = false }
                 )
             }
