@@ -1,5 +1,6 @@
 # Session Index
 
+* [2026-05-24] Phase 3 Media Viewer — Build Fixes & Audio Playback — `2026-05-24_phase3-build-fixes-audio-playback.md`
 * [2026-05-24] iOS Auth Hardening & Device Assignment Backfill — `2026-05-24_ios-auth-hardening-device-backfill.md`
 * [2026-05-24] Phase 2 Capture Session Browser Complete — `2026-05-24_phase2-capture-session-complete.md`
 * [2026-05-23] Shared PairingTestClient, Migrations 009/010, Lakehouse Sync Schema Fix — `2026-05-23_shared-pairing-client-and-schema-sync.md`
@@ -13,6 +14,7 @@
 
 | Date | Summary | File |
 |------|---------|------|
+| 2026-05-24 | Phase 3 build fixes: TS type assertions, unused imports, null/undefined compat, CORS + deferred Web Audio for audio playback | [phase3-build-fixes-audio-playback](./2026-05-24_phase3-build-fixes-audio-playback.md) |
 | 2026-05-24 | iOS auth hardened (SPN rejection), migrations 012 (user_id remediation) + 013 (device assignment backfill), auto-assign on iOS create | [ios-auth-hardening-device-backfill](./2026-05-24_ios-auth-hardening-device-backfill.md) |
 | 2026-05-24 | Phase 2 Capture Session Browser — sort toggle, inline label editing, empty state CTA | [phase2-capture-session-complete](./2026-05-24_phase2-capture-session-complete.md) |
 | 2026-05-23 | Shared PairingTestClient module, migrations 009 (client_type) + 010 (username), Lakehouse Sync Delta schema fix | [shared-pairing-client-and-schema-sync](./2026-05-23_shared-pairing-client-and-schema-sync.md) |

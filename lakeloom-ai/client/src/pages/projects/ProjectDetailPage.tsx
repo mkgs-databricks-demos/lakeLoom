@@ -5,6 +5,9 @@
  * Displays project metadata header + paginated list of capture sessions
  * with state filtering, sort toggle, and browser-side state transitions.
  *
+ * Project-level documents open in a modal overlay (same MediaModal used
+ * on CaptureDetailPage). PDFs render inline via iframe.
+ *
  * The "Pair Device" CTA opens a modal (PairDeviceModal) instead of navigating
  * away, keeping the user in project context.
  *
@@ -13,10 +16,11 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router';
-import { ArrowLeft, Smartphone, Loader2, ChevronDown, ArrowUpDown } from 'lucide-react';
+import { ArrowLeft, Smartphone, Loader2, ChevronDown, ArrowUpDown, Mic2, Camera, FileText, Download } from 'lucide-react';
 import { StatusBadge, TimeAgo, Duration, EmptyState, ConfirmDialog, PairDeviceModal } from '../../components';
+import { MediaModal } from '../../components/media';
 
-// ── Types ────────────────────────────────────────────────────────────────────
+// ── Types ──────────────────────────────────────────────────────────────────────
 
 interface Project {
   id?: string;
@@ -40,6 +44,16 @@ interface CaptureSession {
   ended_at: string | null;
   upload_count: number;
   total_size_bytes: number;
+  upload_kinds: string[];
+}
+
+interface ProjectUpload {
+  id: string;
+  kind: string;
+  mime_type: string;
+  original_filename: string | null;
+  size_bytes: number;
+  uploaded_at: string;
 }
 
 interface CapturesResponse {
@@ -49,7 +63,7 @@ interface CapturesResponse {
 type StateFilter = 'all' | 'active' | 'completed' | 'cancelled';
 type SortDir = 'desc' | 'asc';
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────────
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -59,7 +73,50 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(i > 1 ? 1 : 0)} ${units[i]}`;
 }
 
-// ── API helpers ──────────────────────────────────────────────────────────────
+// ── Media kind icons ──────────────────────────────────────────────────────────
+
+const KIND_ICON_MAP: Record<string, { icon: typeof Mic2; label: string; color: string }> = {
+  audio: { icon: Mic2, label: 'Audio', color: 'text-[var(--accent-primary,#FF3621)]' },
+  screenshot: { icon: Camera, label: 'Photo', color: 'text-[var(--accent-info,#2272B4)]' },
+  photo: { icon: Camera, label: 'Photo', color: 'text-[var(--accent-info,#2272B4)]' },
+  document: { icon: FileText, label: 'Document', color: 'text-[var(--accent-warning,#D97706)]' },
+};
+
+function MediaKindIcons({ kinds }: { kinds: string[] }) {
+  if (!kinds || kinds.length === 0) return null;
+
+  // Deduplicate photo/screenshot into one icon
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const k of kinds) {
+    const key = k === 'screenshot' ? 'photo' : k;
+    if (!seen.has(key)) {
+      seen.add(key);
+      normalized.push(k);
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-1.5">
+      {normalized.map((kind) => {
+        const config = KIND_ICON_MAP[kind];
+        if (!config) return null;
+        const Icon = config.icon;
+        return (
+          <span
+            key={kind}
+            title={config.label}
+            className={`${config.color} opacity-70`}
+          >
+            <Icon className="w-3.5 h-3.5" />
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── API helpers ────────────────────────────────────────────────────────────────
 
 async function fetchProject(id: string): Promise<Project> {
   const res = await fetch(`/api/v1/projects/${id}`);
@@ -84,6 +141,13 @@ async function fetchCaptures(
   return res.json();
 }
 
+async function fetchProjectUploads(projectId: string): Promise<ProjectUpload[]> {
+  const res = await fetch(`/api/media/project/${projectId}`);
+  if (!res.ok) return []; // graceful fallback
+  const data = await res.json();
+  return data.uploads ?? [];
+}
+
 async function transitionCaptureState(
   captureId: string,
   state: 'completed' | 'cancelled',
@@ -96,7 +160,7 @@ async function transitionCaptureState(
   if (!res.ok) throw new Error(`State transition failed: ${res.status}`);
 }
 
-// ── Main component ───────────────────────────────────────────────────────────
+// ── Main component ─────────────────────────────────────────────────────────────
 
 export function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -104,6 +168,7 @@ export function ProjectDetailPage() {
 
   const [project, setProject] = useState<Project | null>(null);
   const [captures, setCaptures] = useState<CaptureSession[]>([]);
+  const [projectUploads, setProjectUploads] = useState<ProjectUpload[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -122,21 +187,26 @@ export function ProjectDetailPage() {
   const [showPairModal, setShowPairModal] = useState(false);
   const [assignedDevice, setAssignedDevice] = useState<{ id: string; label: string } | null>(null);
 
+  // Document preview modal state
+  const [selectedDocument, setSelectedDocument] = useState<ProjectUpload | null>(null);
+
   const projectId = id!;
 
-  // Load project + captures + assigned devices
+  // Load project + captures + assigned devices + project-level uploads
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const [proj, caps, devicesRes] = await Promise.all([
+      const [proj, caps, devicesRes, projUploads] = await Promise.all([
         fetchProject(projectId),
         fetchCaptures(projectId, stateFilter, sortDir),
         fetch(`/api/v1/projects/${projectId}/devices`).then(r => r.ok ? r.json() : { devices: [] }),
+        fetchProjectUploads(projectId),
       ]);
       setProject(proj);
       setCaptures(caps.captures);
       setHasMore(caps.captures.length >= 25);
+      setProjectUploads(projUploads);
       // Set first assigned device (most recent assignment)
       const devices = devicesRes.devices ?? [];
       if (devices.length > 0) {
@@ -204,11 +274,11 @@ export function ProjectDetailPage() {
 
   const projectName = project?.project_name ?? project?.name ?? 'Project';
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────────────────────────
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-6">
-      {/* ── Back nav ──────────────────────────────────────────────────────── */}
+      {/* ── Back nav ──────────────────────────────────────────────────────────── */}
       <Link
         to="/"
         className="inline-flex items-center gap-1.5 text-sm text-[var(--text-secondary,#5A6F77)] hover:text-[var(--text-primary,#1B3139)] transition-colors duration-100 mb-4"
@@ -217,7 +287,7 @@ export function ProjectDetailPage() {
         Back to Projects
       </Link>
 
-      {/* ── Project header ────────────────────────────────────────────────── */}
+      {/* ── Project header ────────────────────────────────────────────────────── */}
       {project && (
         <div className="mb-8">
           <h1 className="text-2xl font-bold text-[var(--text-primary,#1B3139)]">
@@ -236,7 +306,39 @@ export function ProjectDetailPage() {
         </div>
       )}
 
-      {/* ── Section header + filter + sort ───────────────────────────────── */}
+      {/* ── Project-level documents ──────────────────────────────────────────── */}
+      {projectUploads.length > 0 && (
+        <div className="mb-8">
+          <h2 className="text-base font-semibold text-[var(--text-primary,#1B3139)] mb-3">
+            Project Documents
+          </h2>
+          <div className="grid gap-2">
+            {projectUploads.map((upload) => (
+              <div
+                key={upload.id}
+                onClick={() => setSelectedDocument(upload)}
+                className="flex items-center gap-3 px-4 py-3 rounded-lg border
+                           border-[var(--border-default,#DCE0E2)] bg-[var(--surface-raised,#fff)]
+                           hover:border-[var(--border-focus,#2272B4)] hover:shadow-sm
+                           transition-all duration-200 group cursor-pointer"
+              >
+                <FileText className="w-5 h-5 text-[var(--accent-warning,#D97706)] shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm font-medium text-[var(--text-primary,#1B3139)] truncate block">
+                    {upload.original_filename ?? `Document`}
+                  </span>
+                  <span className="text-xs text-[var(--text-secondary,#5A6F77)]">
+                    {formatBytes(upload.size_bytes)} · {upload.mime_type.split('/').pop()?.toUpperCase()}
+                  </span>
+                </div>
+                <Download className="w-4 h-4 text-[var(--text-secondary,#5A6F77)] opacity-0 group-hover:opacity-100 transition-opacity duration-150" />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Section header + filter + sort ───────────────────────────────────── */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
           <h2 className="text-base font-semibold text-[var(--text-primary,#1B3139)]">
@@ -305,7 +407,7 @@ export function ProjectDetailPage() {
         </div>
       </div>
 
-      {/* ── Error state ───────────────────────────────────────────────────── */}
+      {/* ── Error state ───────────────────────────────────────────────────────── */}
       {error && (
         <div className="mb-4 px-4 py-3 rounded-lg border-l-[3px] border-l-[var(--accent-error,#BD2B26)]
                         bg-[var(--accent-error-subtle,#FABFBA)] text-sm text-[var(--text-primary,#1B3139)]">
@@ -313,7 +415,7 @@ export function ProjectDetailPage() {
         </div>
       )}
 
-      {/* ── Loading skeleton ──────────────────────────────────────────────── */}
+      {/* ── Loading skeleton ──────────────────────────────────────────────────── */}
       {loading && (
         <div className="space-y-3">
           {[1, 2, 3].map((i) => (
@@ -328,7 +430,7 @@ export function ProjectDetailPage() {
         </div>
       )}
 
-      {/* ── Empty state ───────────────────────────────────────────────────── */}
+      {/* ── Empty state ───────────────────────────────────────────────────────── */}
       {!loading && captures.length === 0 && (
         <EmptyState
           icon={<Smartphone className="w-7 h-7" />}
@@ -348,7 +450,7 @@ export function ProjectDetailPage() {
         />
       )}
 
-      {/* ── Capture session cards ─────────────────────────────────────────── */}
+      {/* ── Capture session cards ─────────────────────────────────────────────── */}
       {!loading && captures.length > 0 && (
         <div className="space-y-3">
           {captures.map((capture) => (
@@ -370,6 +472,8 @@ export function ProjectDetailPage() {
                         {capture.label}
                       </span>
                     )}
+                    {/* Media type icons */}
+                    <MediaKindIcons kinds={capture.upload_kinds} />
                   </div>
                   <div className="flex items-center gap-2 text-xs text-[var(--text-secondary,#5A6F77)]">
                     {capture.device_label && (
@@ -450,7 +554,13 @@ export function ProjectDetailPage() {
         </div>
       )}
 
-      {/* ── Confirm dialog ────────────────────────────────────────────────── */}
+      {/* ── Document preview modal ─────────────────────────────────────────────── */}
+      <MediaModal
+        upload={selectedDocument}
+        onClose={() => setSelectedDocument(null)}
+      />
+
+      {/* ── Confirm dialog ────────────────────────────────────────────────────── */}
       <ConfirmDialog
         open={!!confirmAction}
         onClose={() => setConfirmAction(null)}
@@ -470,7 +580,7 @@ export function ProjectDetailPage() {
         variant={confirmAction?.state === 'cancelled' ? 'danger' : 'default'}
       />
 
-      {/* ── Pair device modal ────────────────────────────────────────────── */}
+      {/* ── Pair device modal ──────────────────────────────────────────────────── */}
       <PairDeviceModal
         open={showPairModal}
         onClose={() => setShowPairModal(false)}

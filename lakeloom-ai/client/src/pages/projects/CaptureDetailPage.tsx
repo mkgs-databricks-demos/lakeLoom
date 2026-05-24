@@ -5,6 +5,7 @@
  * Displays capture metadata header + chronological upload timeline.
  * State transitions available for active sessions.
  * Inline label editing (click pencil icon to rename).
+ * Media preview via modal overlay (click any upload to preview).
  *
  * Brand: Databricks semantic tokens, DM Sans, motion vars, WCAG AA.
  */
@@ -13,8 +14,9 @@ import { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router';
 import { ArrowLeft, Clock, Pencil, Check, X } from 'lucide-react';
 import { StatusBadge, TimeAgo, Duration, FileIconContainer, EmptyState, ConfirmDialog } from '../../components';
+import { MediaModal } from '../../components/media';
 
-// ── Types ────────────────────────────────────────────────────────────────────
+// ── Types ────────────────────────────────────────────────────────────────────────────────────
 
 interface Upload {
   id: string;
@@ -41,7 +43,7 @@ interface CaptureDetail {
   uploads?: Upload[];
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────────────────────
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -63,7 +65,7 @@ function formatTimeOffset(startedAt: string, uploadedAt: string): string {
   return remMins > 0 ? `+${hours}h${remMins}m` : `+${hours}h`;
 }
 
-// ── API helpers ──────────────────────────────────────────────────────────────
+// ── API helpers ───────────────────────────────────────────────────────────────────────────────
 
 async function fetchCapture(captureId: string): Promise<CaptureDetail> {
   const res = await fetch(`/api/captures/${captureId}?include=uploads`);
@@ -96,7 +98,7 @@ async function updateCaptureLabel(
   return res.json();
 }
 
-// ── Main component ───────────────────────────────────────────────────────────
+// ── Main component ────────────────────────────────────────────────────────────────────────────
 
 export function CaptureDetailPage() {
   const { id: projectId, cid: captureId } = useParams<{ id: string; cid: string }>();
@@ -114,6 +116,9 @@ export function CaptureDetailPage() {
   const [editLabelValue, setEditLabelValue] = useState('');
   const [labelSaving, setLabelSaving] = useState(false);
   const labelInputRef = useRef<HTMLInputElement>(null);
+
+  // Media modal state
+  const [selectedUpload, setSelectedUpload] = useState<Upload | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -146,7 +151,7 @@ export function CaptureDetailPage() {
     }
   };
 
-  // ── Label editing handlers ─────────────────────────────────────────────────
+  // ── Label editing handlers ─────────────────────────────────────────────────────────────────
 
   const startEditingLabel = () => {
     setEditLabelValue(capture?.label || '');
@@ -195,11 +200,11 @@ export function CaptureDetailPage() {
   const uploads = capture?.uploads ?? [];
   const totalBytes = uploads.reduce((sum, u) => sum + (u.size_bytes || 0), 0);
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  // ── Render ───────────────────────────────────────────────────────────────────────────────────
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-6">
-      {/* ── Back nav ──────────────────────────────────────────────────────── */}
+      {/* ── Back nav ──────────────────────────────────────────────────────────────────── */}
       <Link
         to={`/projects/${projectId}`}
         className="inline-flex items-center gap-1.5 text-sm text-[var(--text-secondary,#5A6F77)] hover:text-[var(--text-primary,#1B3139)] transition-colors duration-100 mb-4"
@@ -208,7 +213,7 @@ export function CaptureDetailPage() {
         Back to project
       </Link>
 
-      {/* ── Error state ───────────────────────────────────────────────────── */}
+      {/* ── Error state ───────────────────────────────────────────────────────────────── */}
       {error && (
         <div className="mb-4 px-4 py-3 rounded-lg border-l-[3px] border-l-[var(--accent-error,#BD2B26)]
                         bg-[var(--accent-error-subtle,#FABFBA)] text-sm text-[var(--text-primary,#1B3139)]">
@@ -216,7 +221,7 @@ export function CaptureDetailPage() {
         </div>
       )}
 
-      {/* ── Loading skeleton ──────────────────────────────────────────────── */}
+      {/* ── Loading skeleton ──────────────────────────────────────────────────────────── */}
       {loading && (
         <div className="space-y-4 animate-pulse">
           <div className="h-6 bg-[var(--surface-tertiary,#EEEDE9)] rounded w-1/3" />
@@ -225,12 +230,12 @@ export function CaptureDetailPage() {
         </div>
       )}
 
-      {/* ── Capture header ────────────────────────────────────────────────── */}
+      {/* ── Capture header ────────────────────────────────────────────────────────────── */}
       {!loading && capture && (
         <>
           <div className="mb-6">
             <div className="flex items-center gap-3 mb-2">
-              {/* ── Inline label editing ─────────────────────────────────── */}
+              {/* ── Inline label editing ───────────────────── */}
               {isEditingLabel ? (
                 <div className="flex items-center gap-2">
                   <input
@@ -324,7 +329,7 @@ export function CaptureDetailPage() {
             )}
           </div>
 
-          {/* ── Upload timeline ────────────────────────────────────────────── */}
+          {/* ── Upload timeline ────────────────────────────────────────────────────────────── */}
           <div className="border-t border-[var(--border-default,#DCE0E2)] pt-6">
             <h2 className="text-base font-semibold text-[var(--text-primary,#1B3139)] mb-4">
               Uploads
@@ -346,8 +351,10 @@ export function CaptureDetailPage() {
                 {uploads.map((upload) => (
                   <div
                     key={upload.id}
-                    className="flex items-center gap-3 px-4 py-3 rounded-lg
-                               hover:bg-[var(--surface-tertiary,#EEEDE9)] transition-colors duration-100"
+                    onClick={() => setSelectedUpload(upload)}
+                    className="flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer
+                               transition-colors duration-100
+                               hover:bg-[var(--surface-tertiary,#EEEDE9)]"
                   >
                     {/* Time offset */}
                     <span className="w-12 text-xs text-[var(--text-secondary,#5A6F77)] font-mono text-right flex-shrink-0">
@@ -379,7 +386,13 @@ export function CaptureDetailPage() {
         </>
       )}
 
-      {/* ── Confirm dialog ────────────────────────────────────────────────── */}
+      {/* ── Media preview modal ────────────────────────────────────────────────────────── */}
+      <MediaModal
+        upload={selectedUpload}
+        onClose={() => setSelectedUpload(null)}
+      />
+
+      {/* ── Confirm dialog ────────────────────────────────────────────────────────────── */}
       <ConfirmDialog
         open={!!confirmAction}
         onClose={() => setConfirmAction(null)}

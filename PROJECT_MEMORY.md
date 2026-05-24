@@ -64,7 +64,7 @@ lakeLoom/
 │   │   ├── middleware/            # ios-auth.ts, browser-auth.ts + dualAuth()
 │   │   ├── migrations/            # 001–007 (paired_sessions → zerobus_ingest_metrics)
 │   │   ├── services/              # secrets, sse, zerobus stream pool
-│   │   └── routes/                # pairing, captures, uploads, events, projects
+│   │   └── routes/                # pairing, captures, uploads, events, projects, media
 │   ├── client/                     # React frontend (Vite + Tailwind v4)
 │   │   ├── src/                   # App.tsx, pages/ (pairing, projects, stubs)
 │   │   └── public/                # Favicons, manifest
@@ -353,7 +353,8 @@ The SDK's `Endpoint` object does NOT have a `hostname` attribute. Use the REST A
 * ~~**Next feature branch:** Orphan-byte sweeper — scheduled job to scan UC Volumes for files without a matching `app.uploads` row.~~ **DONE 2026-05-14 — `orphan_byte_sweeper` job, weekly Sunday 2am UTC, report-only v1.**
 * ~~Await Isaac's confirmation: (1) HEIC vs JPEG/PNG from iOS, (2) base64url vs standard base64 for `device_pubkey`.~~ **DONE 2026-05-14 — iOS sends JPEG only (no HEIC), base64url no-padding confirmed.**
 * ~~End-to-end QR pairing on physical iPhone.~~ **DONE 2026-05-15 — Module 01 validated, PR #18 merged.**
-* **~~Next: Browser UI Phase 2~~ — IN PROGRESS (2026-05-16).** Device assignment, project card indicators, user identity pill all shipped. Remaining: session list, session detail view, session label editing. See `fixtures/databricks-app-ui-plan.md`.
+* ~~**Next: Browser UI Phase 2** — COMPLETE (2026-05-24).~~ Device assignment, project card indicators, user identity pill, capture session list/detail, inline label editing, state transitions all shipped.
+* **Next: Browser UI Phase 3 — IN PROGRESS (2026-05-24).** Media Viewer & Audio Playback. Streaming proxy, AudioPlayer (waveform + speed), ImageViewer (lightbox + zoom), DocumentViewer (PDF inline). Branch `gc-phase3-browser-ui`. See `fixtures/databricks-app-ui-plan.md`.
 * ~~**Next: ZeroBus transcript ingest validation.**~~ **DONE 2026-05-21 — root cause fixed, 100-event load test passed, CI/CD teardown cell, Isaac notified.**
 * **Next: iOS Module 02** — CaptureEngine. Will exercise audio + screenshot + photo upload endpoints.
 * **Next: Silver/Gold pipeline** — Spark Declarative Pipeline for transcript_events_raw → enriched → aggregated views.
@@ -445,32 +446,54 @@ All server components implemented: crypto lib, migration runner, `paired_session
 * **Test 9:** Added to `pairing-api-test` notebook — validates all 6 routes are registered and dualAuth active.
 * **Lakebase extension support confirmed:** `CREATE EXTENSION IF NOT EXISTS pg_trgm` succeeded. Positive signal for future `pgvector` use.
 
-### Browser UI Phase 2 — Device Assignment & User Identity: IN PROGRESS (2026-05-16)
+### Browser UI Phase 2 — Device Assignment & Capture Sessions: COMPLETE (2026-05-24)
 
-**Branch:** `phase2-capture-session-browser`
+**Branches:** `phase2-capture-session-browser` → `mg-ui-improvements` → merged to main
 
 **Migration 005:** `app.project_device_assignments` — links `project_id` to `paired_session_id`. Unique constraint prevents duplicates. `ON CONFLICT DO UPDATE` makes assignment idempotent.
+
+**Migrations 008-013:** device_id on captures/uploads, client_type on paired_sessions, username on paired_sessions, original_filename on uploads, user_id remediation, device assignment backfill.
 
 **Server endpoints added:**
 - `POST /api/v1/projects/:id/devices` — upsert device assignment
 - `GET /api/v1/projects/:id/devices` — list assigned devices (JOIN paired_sessions for labels)
 - `GET /api/me` — returns `{ email, display_name, scim_id }` from auth sidecar headers
+- `GET /api/captures/:id?include=uploads` — full capture detail with uploads
+- `PATCH /api/v1/captures/:id/state` — state transition (active → completed/cancelled)
+- `PATCH /api/v1/captures/:id/label` — inline label editing
 
 **Client features shipped:**
-- `ProjectDetailPage`: device assignment state, green success banner, "Capture Sessions" header chip (green/gray)
-- `PairDeviceModal`: `activeDeviceId` prop, active indicator (pulsing green dot, tinted background)
-- `ProjectsPage`: per-card device pill — green with label (assigned) or gray "Unpaired" (unassigned), `whitespace-nowrap`
-- `App.tsx`: user identity pill in nav header (Lava 600 initials circle + email), uses `useCurrentUser` hook
-- Device-agnostic text: "Pair Device" instead of "Pair iPhone" (future Watch/iPad support)
+- `ProjectDetailPage`: device assignment, capture session list (sort toggle, state filtering), green success banner
+- `CaptureDetailPage`: metadata header, chronological upload timeline, state transition buttons, inline label editing (click-to-edit with Enter/Escape/blur), confirm dialogs
+- `PairDeviceModal`: `activeDeviceId` prop, active indicator (pulsing green dot)
+- `ProjectsPage`: per-card device pill — green (assigned) or gray "Unpaired"
+- `App.tsx`: user identity pill in nav header (Lava 600 initials circle + email)
+- Empty states with CTAs, loading skeletons, error boundaries
 
-**New client file:** `client/src/hooks/useCurrentUser.ts` — fetches `/api/me` on mount, caches for session
+**New client files:** `useCurrentUser.ts`, `CaptureDetailPage.tsx`, reusable components (`StatusBadge`, `TimeAgo`, `Duration`, `FileIconContainer`, `EmptyState`, `ConfirmDialog`)
 
-**Test 14:** Validates `/api/me` — accepts 200 (identity returned) or 401 (no headers, expected from SPN)
+### Browser UI Phase 3 — Media Viewer & Audio Playback: IN PROGRESS (2026-05-24)
 
-**Remaining Phase 2 work:**
-- Session list per project (sortable by date, filterable by state)
-- Session detail view (metadata header, upload timeline, state transition buttons)
-- Session label editing
+**Branch:** `gc-phase3-browser-ui` (7 commits)
+
+**Server: Media streaming proxy** (`server/routes/media/media-routes.ts`):
+- `GET /api/media/:upload_id` — Stream file from UC Volume. Full Range request support (206 Partial Content). CORS headers for Web Audio compatibility.
+- `GET /api/media/:upload_id/metadata` — Upload metadata JSON from Lakebase.
+- `GET /api/media/session/:capture_session_id` — List uploads for a capture session.
+- Auth: `dualAuth()` (browser OR iOS Layer 2)
+- Volume path resolution: strips `/Volumes/{catalog}/{schema}/{volume}/` prefix, maps upload `kind` to volume key
+
+**Client: Media viewer components** (`client/src/components/media/`):
+- `AudioPlayer.tsx` — HTML5 audio + Web Audio API waveform (AnalyserNode → canvas frequency bars), speed control (0.5x–2x), seek, download. Deferred `createMediaElementSource()` to avoid CORS-taint silencing.
+- `ImageViewer.tsx` — Thumbnail card + lightbox modal (zoom 0.5x–4x, Escape to close, backdrop click)
+- `DocumentViewer.tsx` — PDF inline via iframe, DOCX download card, SHA-256 integrity hash
+- `MediaPanel.tsx` — Auto-dispatch by MIME type: `audio/*` → AudioPlayer, `image/*` → ImageViewer, `application/pdf|officedocument` → DocumentViewer
+
+**Integration:** `CaptureDetailPage` — clickable upload timeline items → inline MediaPanel with fade-in animation
+
+**Key lesson:** Web Audio `createMediaElementSource()` + auth proxy = silent audio. Fix: `crossOrigin="anonymous"` on `<audio>` + explicit CORS headers on server + defer Web Audio connection until after playback starts.
+
+**Status:** Build passing, app deployed. Audio playback fix deployed, pending verification.
 
 ### QR Pairing Host Fix: COMPLETE (2026-05-14)
 * **Bug:** `app.base_url` in QR payload encoded `https://localhost:8000` because Express reads the container's loopback address from `req.headers.host`. iPhone tried to connect to its own loopback → ECONNREFUSED.

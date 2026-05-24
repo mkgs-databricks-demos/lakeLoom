@@ -74,12 +74,20 @@ export function ConfirmDialog({
         if (e.target === dialogRef.current) onClose();
       }}
       className={cn(
-        'p-0 bg-transparent backdrop:bg-black/40',
-        'backdrop:animate-[fadeIn_200ms_ease-out]',
-        open && 'open:animate-[scaleIn_300ms_cubic-bezier(0.16,1,0.3,1)]',
+        // hidden by default; open:grid activates only when showModal() adds [open] attr.
+        // This prevents the grid display from overriding the native <dialog> display:none.
+        'fixed inset-0 z-50 m-0 p-4 w-screen h-screen max-w-none max-h-none',
+        'bg-transparent hidden open:grid place-items-center',
+        'backdrop:bg-black/40',
       )}
     >
-      <div className="bg-[var(--surface-raised,#fff)] border border-[var(--border-default,#DCE0E2)] rounded-xl shadow-xl w-[min(420px,90vw)]">
+      <div
+        className={cn(
+          'bg-[var(--surface-raised,#fff)] border border-[var(--border-default,#DCE0E2)]',
+          'rounded-xl shadow-xl w-[min(420px,calc(100vw-2rem))]',
+          open && 'animate-[scaleIn_200ms_cubic-bezier(0.16,1,0.3,1)]',
+        )}
+      >
         {/* Header */}
         <div className="flex items-start gap-3 px-6 py-4 border-b border-[var(--border-default,#DCE0E2)]">
           {variant === 'danger' && (
