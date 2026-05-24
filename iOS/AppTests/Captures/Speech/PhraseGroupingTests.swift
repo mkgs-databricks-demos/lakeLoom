@@ -167,4 +167,84 @@ struct PhraseGroupingTests {
         #expect(phrases[0].durationMs == 1500)
         #expect(phrases[0].startTimeSeconds == 1.0)
     }
+
+    // MARK: - PR 8f: empty-phrase filter
+
+    @Test("a single empty-text word produces zero phrases — not one bogus event")
+    func emptyTextWordIsDropped() {
+        let words = [
+            Self.word("", start: 0.0, duration: 0.0, confidence: 0.0)
+        ]
+        let phrases = PhraseGrouper.phrases(from: words)
+        #expect(phrases.isEmpty)
+    }
+
+    @Test("a phrase that joins to all-whitespace is dropped")
+    func whitespaceOnlyPhraseIsDropped() {
+        let words = [
+            Self.word("   ", start: 0.0, duration: 0.1),
+            Self.word("\t", start: 0.2, duration: 0.1)
+        ]
+        let phrases = PhraseGrouper.phrases(from: words, pauseThresholdSeconds: 0.7)
+        #expect(phrases.isEmpty)
+    }
+
+    @Test("mixed empty + real phrases drop the empty one and re-index the rest from 0")
+    func emptyPhraseDroppedAndReindexed() {
+        let words = [
+            Self.word("hello",  start: 0.0),
+            // 2s gap → next phrase
+            Self.word("",       start: 2.0, duration: 0.0, confidence: 0.0),
+            // 2s gap → next phrase
+            Self.word("world",  start: 4.0)
+        ]
+        let phrases = PhraseGrouper.phrases(from: words, pauseThresholdSeconds: 0.7)
+        #expect(phrases.count == 2)
+        // Middle empty phrase is dropped; remaining phrases re-indexed 0, 1.
+        #expect(phrases.map(\.text) == ["hello", "world"])
+        #expect(phrases.map(\.segmentIndex) == [0, 1])
+    }
+
+    // MARK: - PR 8f: punctuation-based split
+
+    @Test("sentence-ending period splits the phrase even with no pause gap")
+    func periodSplitsTightlyTimedPhrases() {
+        // Tight cadence (~0.1s gaps) but Apple inserted a period
+        // at the end of the first sentence — should split.
+        let words = [
+            Self.word("hello.", start: 0.0, duration: 0.3),
+            Self.word("how",    start: 0.4, duration: 0.2),
+            Self.word("are",    start: 0.7, duration: 0.2),
+            Self.word("you?",   start: 1.0, duration: 0.3)
+        ]
+        let phrases = PhraseGrouper.phrases(from: words, pauseThresholdSeconds: 5.0)
+        #expect(phrases.count == 2)
+        #expect(phrases.map(\.text) == ["hello.", "how are you?"])
+    }
+
+    @Test("question mark + exclamation also trigger phrase boundaries")
+    func questionAndExclamationSplit() {
+        let words = [
+            Self.word("hi!",    start: 0.0, duration: 0.2),
+            Self.word("really?", start: 0.3, duration: 0.4),
+            Self.word("yes",    start: 0.8, duration: 0.3)
+        ]
+        let phrases = PhraseGrouper.phrases(from: words, pauseThresholdSeconds: 5.0)
+        #expect(phrases.count == 3)
+        #expect(phrases.map(\.text) == ["hi!", "really?", "yes"])
+    }
+
+    @Test("comma does NOT trigger a phrase boundary — too soft a signal")
+    func commaDoesNotSplit() {
+        let words = [
+            Self.word("first,", start: 0.0, duration: 0.3),
+            Self.word("then",   start: 0.4, duration: 0.3),
+            Self.word("done.",  start: 0.8, duration: 0.4)
+        ]
+        let phrases = PhraseGrouper.phrases(from: words, pauseThresholdSeconds: 5.0)
+        // "first, then done." is one phrase (the period at the end
+        // doesn't split because there are no following words).
+        #expect(phrases.count == 1)
+        #expect(phrases[0].text == "first, then done.")
+    }
 }
