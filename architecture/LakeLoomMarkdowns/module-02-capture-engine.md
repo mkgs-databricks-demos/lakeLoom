@@ -493,7 +493,7 @@ private func handleResult(_ result: SpeechTranscriber.Result) async {
 
 ## 7. AudioRecorder — Opus Encoding to Disk
 
-> **As-built (2026-05-16):** v1 shipped with **M4A/AAC** (the "fallback" described in §7.2 below). The current `LiveAudioRecorder` wraps `AVAudioRecorder` with iOS defaults rather than libopus. The Opus path remains the design target for v1.1+ when compression matters at scale; the file-upload pipeline is content-type-agnostic past the `MultipartFormBuilder` so the encoder swap is contained. See §18 for what's actually running.
+> **As-built (2026-05-24):** v1 ships **M4A/AAC** (the "fallback" described in §7.2 below), not Opus. PR 9a moved the recorder backend from `AVAudioRecorder` → `AVAudioEngine` + `AVAudioFile`(CAF) + a CAF→AAC transcode step. PR 9b added a live PCM-buffer fan-out from the same engine tap to a streaming speech recognizer (see §22). The transcode is pinned to 64 kbps mono / 16 kHz AAC for voice-grade quality at ~240 KB / 30 s; downstream STT pipelines (Whisper) ingest 16 kHz mono natively. The file-upload pipeline past `MultipartFormBuilder` is content-type-agnostic so the Opus path remains a clean future swap. See §18 for what's actually running.
 
 Runs in parallel with TranscriberFeed, consuming the same audio actor stream. Writes a single Ogg-Opus file per session.
 
@@ -1006,6 +1006,8 @@ This appendix documents what's actually running today. It pairs with §§2–16 
 
 The four-route transport client for `app.capture_sessions`. All routes go through `LakeloomAppClient.request(...)` so they inherit the full two-layer iosAuth (Layer 0 M2M bearer + Layer 1 session token + ECDSA over canonical form). No bespoke URLRequest construction; no bespoke signing.
 
+> **As-built (2026-05-24):** the same pattern now applies to `ProjectService`. Per Genie's `hey_isaac/2026-05-24_ios-layer2-on-project-endpoints.md`, the server's `dualAuth` middleware enforces Layer 2 on every `/api/v1/...` route — bare-SPN requests get a 401 with a clear "Service principal identity detected without Layer 2 auth" message. `LiveProjectAPIClient` was reworked to route through `LakeloomAppClient.requestRaw(...)` (PR #60), same as captures + uploads + transcript events. The protocol's `token: AccessToken` and `endpoint: AppEndpoint` parameters are now unused by the live impl and will be dropped in a follow-up.
+
 ### 17.1 Protocol
 
 ```swift
@@ -1067,7 +1069,7 @@ public protocol CaptureAPIClient: Sendable {
 
 ## 18. AudioRecorder — Shipped Implementation
 
-The `LiveAudioRecorder` actor that's running today. M4A/AAC instead of Opus (see §7's as-built note).
+The `LiveAudioRecorder` actor that's running today. M4A/AAC instead of Opus (see §7's as-built note). PR 9a swapped the recording backend from `AVAudioRecorder` → `AVAudioEngine` + `AVAudioFile`(CAF) + an explicit-bitrate CAF→AAC transcode; PR 9b added live PCM buffer fan-out for in-session speech recognition (see §22).
 
 ### 18.1 Protocol
 
@@ -1098,7 +1100,11 @@ public struct AudioRecording: Sendable, Equatable, Hashable {
 
 ### 18.2 Engine Seam
 
-`LiveAudioRecorder` doesn't wrap `AVAudioRecorder` directly. It delegates CoreAudio specifics to an `AudioRecordingEngine` protocol so the recorder's state machine + file layout can be unit-tested without real audio hardware. The live engine handles permission, session config, file-write start/stop. Tests inject a fake engine.
+`LiveAudioRecorder` doesn't wrap any CoreAudio API directly. It delegates CoreAudio specifics to an `AudioRecordingEngine` protocol so the recorder's state machine + file layout can be unit-tested without real audio hardware. The live engine handles permission, session config, file-write start/stop. Tests inject a fake engine.
+
+**As-built (PR 9a):** the production engine is `EngineAudioRecordingEngine`, which uses `AVAudioEngine` + `AVAudioFile`(CAF) as an intermediate, then transcodes CAF → AAC m4a via `AVAssetReader` + `AVAssetWriter` with explicit bitrate (PR 9a originally used `AVAssetExportSession`; that left files at ~256 kbps with no knob to lower it — see §18.4). The older `LiveAudioRecordingEngine` (wrapping `AVAudioRecorder`) remains in the protocol's seam mostly for unit-test parity.
+
+The CAF intermediate is short-lived: it's deleted immediately after the m4a transcode succeeds. CAF is chosen over writing AAC directly because `AVAudioFile` on iOS supports PCM/CAF reliably; AAC encoding requires the writer-based path used in the transcode step anyway.
 
 ### 18.3 File Layout
 
@@ -1110,16 +1116,37 @@ The `Captures/` directory is flagged `isExcludedFromBackup = true` so recordings
 
 ### 18.4 Encoder Settings
 
-iOS defaults via `AVAudioRecorder`:
+CAF intermediate (written by `AVAudioFile` from the engine's input tap):
+
+- `AVFormatIDKey = kAudioFormatLinearPCM` (default for `AVAudioFile`)
+- Sample rate / channel count: pulled from `inputNode.outputFormat(forBus: 0)` — typically 48 kHz Float32 mono on iPhone
+
+Final m4a (written by `AVAssetWriter` during the transcode step):
 
 - `AVFormatIDKey = kAudioFormatMPEG4AAC`
-- `AVSampleRateKey = 44_100.0` (44.1 kHz)
+- `AVSampleRateKey = 16_000` (16 kHz — matches downstream Whisper input natively)
 - `AVNumberOfChannelsKey = 1` (mono)
-- `AVEncoderAudioQualityKey = AVAudioQuality.medium.rawValue`
+- `AVEncoderBitRateKey = 64_000` (64 kbps — broadcast voice quality)
+
+The AAC encoder handles the 48 kHz → 16 kHz resample. A 30 s session lands ~240 KB on disk; the prior `AVAssetExportPresetAppleM4A` default produced ~900 KB with no knob to lower it.
 
 Genie's server-side MIME allowlist accepts both `audio/m4a` and `audio/mp4`; iOS sends `audio/mp4`.
 
-### 18.5 Future: Camera + Screen Capture (PR 5/6)
+### 18.5 Live PCM Buffer Fan-Out (PR 9b)
+
+The same `installTap` closure that writes to `AVAudioFile` also yields each `AVAudioPCMBuffer` (wrapped in a `PCMBufferEnvelope: @unchecked Sendable` box) to an `AsyncStream` consumed by the streaming speech recognizer. Single mic owner, two consumers — file writer plus recognizer — feeding off the same input tap so there's no parallel-engine race condition (which was the failure mode of the abandoned PR 8d approach).
+
+`AudioBufferSource` is the protocol the recognizer subscribes against:
+
+```swift
+public protocol AudioBufferSource: Sendable {
+    func buffers() async -> AsyncStream<PCMBufferEnvelope>?
+}
+```
+
+`EngineAudioRecordingEngine` conforms; the stream is created on `start(writingTo:)` and finished on `stop()` / `cancel()`. See §22 for how the recognizer consumes it.
+
+### 18.6 Future: Camera + Screen Capture (PR 5/6)
 
 The same protocol-seam pattern will apply for the camera (`AVCapturePhotoOutput`) and screen-broadcast (`ReplayKit` extension) paths. Each will produce a finalized file on disk + a value type with metadata; `CaptureService` will hand them to `UploadCoordinator` exactly the way audio does today.
 
@@ -1306,7 +1333,47 @@ Closing the persistence gap is tracked as a follow-on (capture-context snapshot 
 
 ---
 
-## 21. Files Currently Shipped
+## 22. Live Streaming Speech Recognizer (PR 9b)
+
+Per Isaac's product goal — "rapid prototyping of the requirements as the requirements are being discussed in the room is key" — transcripts need to flow to ZeroBus during the recording, not after. PR 9b wires the streaming path.
+
+### 22.1 Pipeline
+
+```
+EngineAudioRecordingEngine.installTap
+    ├─→ AVAudioFile (CAF intermediate → AAC m4a on stop)
+    └─→ AsyncStream<PCMBufferEnvelope>
+                   │
+                   ▼
+          LiveStreamingSpeechRecognizer (actor)
+                   │  feeds SFSpeechAudioBufferRecognitionRequest
+                   ▼
+          AsyncThrowingStream<TranscriptSegment, Error>
+                   │
+                   ▼
+          LiveCaptureService → TranscriptStreamer → /api/sessions/:id/events
+```
+
+The recognizer configures `SFSpeechRecognizer` with:
+- `requiresOnDeviceRecognition = true` (privacy; no network round-trip)
+- `shouldReportPartialResults = true` (multiple `isFinal` callbacks per session at utterance boundaries)
+- `addsPunctuation = true` (iOS 16+, for human-readable transcripts)
+
+`source = "on_device_live"` and `model = "sf_speech_streaming_phrased"` are attached to every emitted `TranscriptEvent` so the server can distinguish live-mode segments from post-recording re-transcribed ones.
+
+### 22.2 Multi-`isFinal` Lifecycle Fix
+
+The recognizer in buffer mode with `shouldReportPartialResults = true` fires `isFinal = true` at **every** utterance boundary — pauses, sentence terminators — not just at the end of the session. PR 9b's initial implementation closed the result stream on the first `isFinal`, which silently dropped every utterance after the first one (real-device test: 1 phrase emitted for a 24 s multi-sentence recording).
+
+Fix (commit `53b8834`): the result-handling task **never** finishes the stream. Instead, a separate "drain task" consumes the buffer stream, calls `request.endAudio()` when the producer signals end-of-input, waits 1.5 s for the recognizer to flush, then finishes the result stream. `maxEmittedStartTime` tracks de-dupe across multiple `isFinal` callbacks so a cumulative `bestTranscription` stays correct.
+
+### 22.3 Co-existence with Post-Recording Whisper
+
+The live stream is best-effort during the session — it's for in-session UX and the rapid-prototyping demo loop. The m4a upload + (eventual) Whisper re-transcription remains the source of truth for the final document pipeline. Both attach to the same `paired_sessions` row, so downstream consumers can prefer the Whisper segments when both are present.
+
+---
+
+## 23. Files Currently Shipped
 
 ```
 iOS/App/Captures/
@@ -1320,7 +1387,12 @@ iOS/App/Captures/
 ├── Audio/
 │   ├── AudioRecorder.swift            # protocol + state + Recording + errors
 │   ├── AudioRecordingEngine.swift     # AVAudioRecorder seam + LiveAudioRecordingEngine
+│   ├── AudioBufferSource.swift        # PR 9b: protocol + PCMBufferEnvelope
+│   ├── EngineAudioRecordingEngine.swift # PR 9a/9b: AVAudioEngine + AVAudioFile + AAC writer
 │   └── LiveAudioRecorder.swift        # actor implementation
+├── Speech/
+│   ├── StreamingSpeechRecognizer.swift     # PR 9b: protocol
+│   └── LiveStreamingSpeechRecognizer.swift # PR 9b: SFSpeechRecognizer buffer-mode actor
 └── Upload/
     ├── PendingUpload.swift            # value type + state machine
     ├── UploadCoordinator.swift        # protocol + errors
@@ -1328,20 +1400,7 @@ iOS/App/Captures/
     ├── UploadQueueStore.swift         # disk persistence
     └── MultipartFormBuilder.swift     # multipart/form-data builder
 
-iOS/AppTests/Captures/
-├── CaptureAPIClientTests.swift          (12 tests)
-├── LiveCaptureServiceTests.swift        (10 tests)
-├── Audio/
-│   ├── FakeAudioRecordingEngine.swift
-│   └── LiveAudioRecorderTests.swift     (10 tests)
-├── Upload/
-│   ├── LiveUploadCoordinatorTests.swift  (9 tests)
-│   ├── MultipartFormBuilderTests.swift   (5 tests)
-│   └── UploadQueueStoreTests.swift       (5 tests)
-└── Helpers/
-    ├── FakeCaptureAPIClient.swift
-    ├── FakeAudioRecorder.swift
-    └── FakeUploadCoordinator.swift
+iOS/AppTests/Captures/  — 322 unit tests across LakeloomAppTests
 ```
 
-42 unit tests across the module. Full suite (LakeloomApp + LakeloomAppTests) passes in ~0.6s on iPhone 17 Pro simulator.
+Full suite (LakeloomApp + LakeloomAppTests) passes in ~1.2 s on iPhone 17 simulator. The SwiftUI views (`SessionsListView` with infinite-scroll pagination, `CaptureDetailView` with in-flight upload merge, `RecordingView`, etc.) aren't covered by unit tests today — Module 08's UI test plan covers those at the AppUITests level.
