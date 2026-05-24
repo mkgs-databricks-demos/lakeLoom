@@ -166,7 +166,7 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
       res.status(204).end();
     });
 
-        // ── GET /api/media/:upload_id ────────────────────────────────────────
+    // ── GET /api/media/:upload_id ────────────────────────────────────────
     // Stream file content from UC Volume. Supports HTTP Range requests.
     app.get('/api/media/:upload_id', auth, async (req: Request, res: Response, next: NextFunction) => {
       try {
@@ -242,7 +242,10 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
             },
           });
 
-          if (rangedResponse.ok || rangedResponse.status === 206) {
+          // Only a true 206 response is safe to proxy as partial content.
+          // The internal files route may ignore Range and return 200 with the
+          // full body; wrapping that as 206 produces an invalid media response.
+          if (rangedResponse.status === 206) {
             const contentLength = range.end - range.start + 1;
             res.status(206);
             res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${sizeBytes}`);
@@ -251,7 +254,7 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
             return;
           }
 
-          console.warn(`[media] Range proxy failed (${rangedResponse.status}); retrying full download for playback compatibility`);
+          console.warn(`[media] Range proxy not honored (${rangedResponse.status}); retrying full download for playback compatibility`);
         }
 
         // Fallback path: full file stream (also used for non-range requests)
