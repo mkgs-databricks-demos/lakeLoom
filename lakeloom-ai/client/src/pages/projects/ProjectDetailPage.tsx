@@ -5,6 +5,9 @@
  * Displays project metadata header + paginated list of capture sessions
  * with state filtering, sort toggle, and browser-side state transitions.
  *
+ * Project-level documents open in a modal overlay (same MediaModal used
+ * on CaptureDetailPage). PDFs render inline via iframe.
+ *
  * The "Pair Device" CTA opens a modal (PairDeviceModal) instead of navigating
  * away, keeping the user in project context.
  *
@@ -15,6 +18,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router';
 import { ArrowLeft, Smartphone, Loader2, ChevronDown, ArrowUpDown, Mic2, Camera, FileText, Download } from 'lucide-react';
 import { StatusBadge, TimeAgo, Duration, EmptyState, ConfirmDialog, PairDeviceModal } from '../../components';
+import { MediaModal } from '../../components/media';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -183,6 +187,9 @@ export function ProjectDetailPage() {
   const [showPairModal, setShowPairModal] = useState(false);
   const [assignedDevice, setAssignedDevice] = useState<{ id: string; label: string } | null>(null);
 
+  // Document preview modal state
+  const [selectedDocument, setSelectedDocument] = useState<ProjectUpload | null>(null);
+
   const projectId = id!;
 
   // Load project + captures + assigned devices + project-level uploads
@@ -307,15 +314,13 @@ export function ProjectDetailPage() {
           </h2>
           <div className="grid gap-2">
             {projectUploads.map((upload) => (
-              <a
+              <div
                 key={upload.id}
-                href={`/api/media/${upload.id}`}
-                target="_blank"
-                rel="noopener noreferrer"
+                onClick={() => setSelectedDocument(upload)}
                 className="flex items-center gap-3 px-4 py-3 rounded-lg border
                            border-[var(--border-default,#DCE0E2)] bg-[var(--surface-raised,#fff)]
                            hover:border-[var(--border-focus,#2272B4)] hover:shadow-sm
-                           transition-all duration-200 group"
+                           transition-all duration-200 group cursor-pointer"
               >
                 <FileText className="w-5 h-5 text-[var(--accent-warning,#D97706)] shrink-0" />
                 <div className="flex-1 min-w-0">
@@ -327,7 +332,7 @@ export function ProjectDetailPage() {
                   </span>
                 </div>
                 <Download className="w-4 h-4 text-[var(--text-secondary,#5A6F77)] opacity-0 group-hover:opacity-100 transition-opacity duration-150" />
-              </a>
+              </div>
             ))}
           </div>
         </div>
@@ -548,6 +553,12 @@ export function ProjectDetailPage() {
           )}
         </div>
       )}
+
+      {/* ── Document preview modal ─────────────────────────────────────────────── */}
+      <MediaModal
+        upload={selectedDocument}
+        onClose={() => setSelectedDocument(null)}
+      />
 
       {/* ── Confirm dialog ────────────────────────────────────────────────────── */}
       <ConfirmDialog
