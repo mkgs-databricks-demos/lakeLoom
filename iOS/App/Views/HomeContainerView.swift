@@ -35,6 +35,8 @@ struct HomeContainerView: View {
     @State private var showingSmokeTest = false
     #endif
 
+    @State private var showingPendingUploads = false
+
     var body: some View {
         NavigationStack {
             HomeView(
@@ -76,6 +78,14 @@ struct HomeContainerView: View {
             let stream = await service.stateUpdates()
             for await next in stream {
                 handle(transition: next)
+            }
+        }
+        .sheet(isPresented: $showingPendingUploads) {
+            if let coordinator = coordinator.uploadCoordinator {
+                PendingUploadsView(
+                    uploadCoordinator: coordinator,
+                    onDismiss: { showingPendingUploads = false }
+                )
             }
         }
         #if DEBUG
@@ -121,6 +131,13 @@ struct HomeContainerView: View {
         }
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
+                if coordinator.uploadCoordinator != nil {
+                    Button {
+                        showingPendingUploads = true
+                    } label: {
+                        Label("Pending uploads", systemImage: "tray.and.arrow.up")
+                    }
+                }
                 #if DEBUG
                 if coordinator.captureAPI != nil, coordinator.activeContext != nil {
                     Button {
