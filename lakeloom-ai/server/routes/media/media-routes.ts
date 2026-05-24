@@ -90,6 +90,23 @@ function getRelativePath(volumePath: string): string {
   return parts.slice(4).join('/');
 }
 
+async function pipeResponseToExpress(internalResponse: globalThis.Response, res: Response): Promise<void> {
+  if (!internalResponse.body) {
+    res.end();
+    return;
+  }
+
+  const reader = internalResponse.body.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!res.write(value)) {
+      await new Promise<void>((resolve) => res.once('drain', resolve));
+    }
+  }
+  res.end();
+}
+
 // ── Route setup ────────────────────────────────────────────────────────────────
 
 export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
@@ -175,6 +192,7 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
 
         // 3. Build the internal AppKit files download URL
         const downloadUrl = `/api/files/${volumeKey}/download?path=${encodeURIComponent(relativePath)}`;
+        const port = process.env.PORT || '8000';
 
         // 4. Handle Range requests
         const rangeHeader = req.headers.range;
@@ -184,106 +202,61 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
         res.setHeader('Content-Type', mimeType);
         res.setHeader('Content-Disposition', `inline; filename="${originalFilename}"`);
         res.setHeader('Cache-Control', 'private, max-age=3600');
-        // Needed for HTMLMediaElement + Web Audio API (AnalyserNode) in browsers.
-        // Same-origin requests through auth sidecars/proxies can still require explicit CORS
-        // for the media element to be considered origin-clean.
         if (req.headers.origin) {
           res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
           res.setHeader('Vary', 'Origin');
         }
         res.setHeader('Access-Control-Allow-Credentials', 'true');
 
+        const forwardedHeaders = {
+          ...(req.headers['x-forwarded-user'] ? { 'x-forwarded-user': req.headers['x-forwarded-user'] as string } : {}),
+          ...(req.headers['x-forwarded-email'] ? { 'x-forwarded-email': req.headers['x-forwarded-email'] as string } : {}),
+          ...(req.headers.cookie ? { cookie: req.headers.cookie as string } : {}),
+        };
+
         if (rangeHeader && sizeBytes > 0) {
-          // Parse range
           const range = parseRangeHeader(rangeHeader, sizeBytes);
           if (!range) {
             res.status(416).setHeader('Content-Range', `bytes */${sizeBytes}`).end();
             return;
           }
 
-          const port = process.env.PORT || '8000';
-          // For range requests, we proxy via internal fetch with Range header
-          const internalResponse = await fetch(`http://localhost:${port}${downloadUrl}`, {
+          const rangedResponse = await fetch(`http://localhost:${port}${downloadUrl}`, {
             headers: {
-              'Range': `bytes=${range.start}-${range.end}`,
-              ...(req.headers['x-forwarded-user'] ? { 'x-forwarded-user': req.headers['x-forwarded-user'] as string } : {}),
-              ...(req.headers['x-forwarded-email'] ? { 'x-forwarded-email': req.headers['x-forwarded-email'] as string } : {}),
-              ...(req.headers.cookie ? { cookie: req.headers.cookie as string } : {}),
+              Range: `bytes=${range.start}-${range.end}`,
+              ...forwardedHeaders,
             },
           });
 
-          if (!internalResponse.ok && internalResponse.status !== 206) {
-            console.warn('[media] Range proxy failed (' + internalResponse.status + '), falling back to full stream');
+          if (rangedResponse.ok || rangedResponse.status === 206) {
+            const contentLength = range.end - range.start + 1;
+            res.status(206);
+            res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${sizeBytes}`);
+            res.setHeader('Content-Length', contentLength.toString());
+            await pipeResponseToExpress(rangedResponse, res);
+            return;
           }
 
-          const contentLength = range.end - range.start + 1;
-          res.status(206);
-          res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${sizeBytes}`);
-          res.setHeader('Content-Length', contentLength.toString());
-
-          if (internalResponse.body) {
-            const reader = internalResponse.body.getReader();
-            const pump = async () => {
-              while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                if (!res.write(value)) {
-                  await new Promise<void>((resolve) => res.once('drain', resolve));
-                }
-              }
-              res.end();
-            };
-            pump().catch((err) => {
-              console.error('[media] Stream pump error:', err);
-              if (!res.headersSent) res.status(500).end();
-              else res.destroy();
-            });
-          } else {
-            res.end();
-          }
-        } else {
-          // Full file — proxy without Range header
-          res.setHeader('Content-Length', sizeBytes.toString());
-
-          const port = process.env.PORT || '8000';
-          const internalResponse = await fetch(`http://localhost:${port}${downloadUrl}`, {
-            headers: {
-              ...(req.headers['x-forwarded-user'] ? { 'x-forwarded-user': req.headers['x-forwarded-user'] as string } : {}),
-              ...(req.headers['x-forwarded-email'] ? { 'x-forwarded-email': req.headers['x-forwarded-email'] as string } : {}),
-              ...(req.headers.cookie ? { cookie: req.headers.cookie as string } : {}),
-            },
-          });
-
-          if (!internalResponse.ok) {
-            throw new AppError({
-              type: ErrorTypes.INTERNAL_ERROR,
-              status: 502,
-              title: 'Volume read failed',
-              detail: `Failed to read file from volume (HTTP ${internalResponse.status}).`,
-            });
-          }
-
-          if (internalResponse.body) {
-            const reader = internalResponse.body.getReader();
-            const pump = async () => {
-              while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                if (!res.write(value)) {
-                  await new Promise<void>((resolve) => res.once('drain', resolve));
-                }
-              }
-              res.end();
-            };
-            pump().catch((err) => {
-              console.error('[media] Stream pump error:', err);
-              if (!res.headersSent) res.status(500).end();
-              else res.destroy();
-            });
-          } else {
-            res.end();
-          }
+          console.warn(`[media] Range proxy failed (${rangedResponse.status}); retrying full download for playback compatibility`);
         }
+
+        // Fallback path: full file stream (also used for non-range requests)
+        const fullResponse = await fetch(`http://localhost:${port}${downloadUrl}`, {
+          headers: forwardedHeaders,
+        });
+
+        if (!fullResponse.ok) {
+          throw new AppError({
+            type: ErrorTypes.INTERNAL_ERROR,
+            status: 502,
+            title: 'Volume read failed',
+            detail: `Failed to read file from volume (HTTP ${fullResponse.status}).`,
+          });
+        }
+
+        res.status(200);
+        res.setHeader('Content-Length', sizeBytes.toString());
+        await pipeResponseToExpress(fullResponse, res);
       } catch (err) {
         next(err);
       }
