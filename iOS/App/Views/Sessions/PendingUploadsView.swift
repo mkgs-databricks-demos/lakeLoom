@@ -25,6 +25,15 @@ import SwiftUI
 struct PendingUploadsView: View {
 
     let uploadCoordinator: any UploadCoordinator
+    /// Optional — when provided alongside ``workspaceID``, "Retry &
+    /// clear" also PATCHes each cleared upload's parent capture
+    /// session from `.active` → `.completed` on the server, so the
+    /// orphan cleanup finishes the job that the watcher race
+    /// originally skipped. Skipped when nil (e.g., user isn't
+    /// signed in to a workspace), in which case the action still
+    /// performs local-queue cleanup.
+    let captureAPI: (any CaptureAPIClient)?
+    let workspaceID: String?
     let onDismiss: () -> Void
 
     @State private var uploads: [PendingUpload] = []
@@ -165,6 +174,14 @@ struct PendingUploadsView: View {
     /// reach a terminal state, then discard the ones that succeeded.
     /// Failed-permanent items are left for manual handling so the
     /// user sees what couldn't be recovered.
+    ///
+    /// When ``captureAPI`` + ``workspaceID`` are available, also
+    /// PATCH each unique parent capture session from `.active` →
+    /// `.completed` so the server-side finalize that the watcher
+    /// race missed finishes here. PATCH errors are swallowed — the
+    /// server returns 409 for non-active captures (already completed
+    /// or cancelled), which is the expected case for any session
+    /// the user has since hand-finalized, so the failure is benign.
     private func retryAndClear() async {
         isProcessing = true
         defer { isProcessing = false }
@@ -183,10 +200,32 @@ struct PendingUploadsView: View {
         }
 
         let final = await uploadCoordinator.currentUploads()
-        for upload in final where upload.state.isTerminalSucceeded {
+        let succeeded = final.filter { $0.state.isTerminalSucceeded }
+        await finalizeCapturesOnServer(for: succeeded)
+        for upload in succeeded {
             await uploadCoordinator.discard(uploadID: upload.id)
         }
         await refresh()
+    }
+
+    /// Best-effort PATCH of each unique parent capture session to
+    /// `.completed`. Iterates the union of `captureSessionID`s across
+    /// the cleared uploads — multiple uploads can attach to the same
+    /// capture (audio + photos + screenshots), so dedupe before
+    /// hitting the network. Errors are swallowed so a single 409 on
+    /// an already-completed capture doesn't abort the cleanup of the
+    /// remaining ones.
+    private func finalizeCapturesOnServer(for cleared: [PendingUpload]) async {
+        guard let captureAPI, let workspaceID else { return }
+        let captureIDs = Set(cleared.map { $0.captureSessionID })
+        for captureID in captureIDs {
+            _ = try? await captureAPI.updateCaptureSession(
+                workspaceID: workspaceID,
+                captureSessionID: captureID,
+                state: .completed,
+                endedAt: nil
+            )
+        }
     }
 
     private func hasInFlight() async -> Bool {

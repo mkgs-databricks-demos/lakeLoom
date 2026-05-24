@@ -81,9 +81,11 @@ struct HomeContainerView: View {
             }
         }
         .sheet(isPresented: $showingPendingUploads) {
-            if let coordinator = coordinator.uploadCoordinator {
+            if let uploads = coordinator.uploadCoordinator {
                 PendingUploadsView(
-                    uploadCoordinator: coordinator,
+                    uploadCoordinator: uploads,
+                    captureAPI: coordinator.captureAPI,
+                    workspaceID: coordinator.activeContext?.workspace.id,
                     onDismiss: { showingPendingUploads = false }
                 )
             }
