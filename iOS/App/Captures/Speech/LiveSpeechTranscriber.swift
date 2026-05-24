@@ -19,6 +19,11 @@ import Foundation
 public actor LiveSpeechTranscriber: SpeechTranscriber {
 
     private let logger: AppLogger
+    /// Gap (in seconds) between consecutive word-segments that
+    /// signals a phrase boundary. See ``PhraseGrouper``. Defaults to
+    /// 0.7s — adjust if a future tuning pass shows a different
+    /// optimum.
+    private let pauseThresholdSeconds: TimeInterval
 
     /// In-flight recognition task. Held so a new transcribe call can
     /// cancel any prior recognition cleanly. Production wiring runs
@@ -26,7 +31,11 @@ public actor LiveSpeechTranscriber: SpeechTranscriber {
     /// per capture stop) but we still want defensive cancellation.
     private var currentTask: SFSpeechRecognitionTask?
 
-    public init(logger: AppLogger = AppLogger(category: .capture)) {
+    public init(
+        pauseThresholdSeconds: TimeInterval = PhraseGrouper.defaultPauseThresholdSeconds,
+        logger: AppLogger = AppLogger(category: .capture)
+    ) {
+        self.pauseThresholdSeconds = pauseThresholdSeconds
         self.logger = logger
     }
 
@@ -87,6 +96,7 @@ public actor LiveSpeechTranscriber: SpeechTranscriber {
         currentTask?.cancel()
 
         let actorLogger = logger
+        let pauseThresholdSeconds = self.pauseThresholdSeconds
         let stream = AsyncThrowingStream<TranscriptSegment, Error> { continuation in
             let task = recognizer.recognitionTask(with: request) { result, error in
                 if let error {
@@ -109,7 +119,10 @@ public actor LiveSpeechTranscriber: SpeechTranscriber {
                 }
                 guard let result else { return }
                 guard result.isFinal else { return }
-                let segments = Self.segments(from: result.bestTranscription)
+                let segments = Self.segments(
+                    from: result.bestTranscription,
+                    pauseThresholdSeconds: pauseThresholdSeconds
+                )
                 for segment in segments {
                     continuation.yield(segment)
                 }
@@ -133,28 +146,26 @@ public actor LiveSpeechTranscriber: SpeechTranscriber {
 
     // MARK: - Helpers
 
-    /// Convert Apple's `SFTranscription.segments` into our typed
-    /// ``TranscriptSegment`` value, computing duration_ms and a
-    /// mean confidence per segment. SFSpeechRecognizer's
-    /// `SFTranscriptionSegment` reports per-segment timing, so we
-    /// emit one TranscriptSegment per Apple segment with a
-    /// monotonic index starting at 0.
-    private static func segments(from transcription: SFTranscription) -> [TranscriptSegment] {
-        var out: [TranscriptSegment] = []
-        for (i, apple) in transcription.segments.enumerated() {
-            let durationMs = Int((apple.duration * 1000.0).rounded())
-            let confidence: Double? = apple.confidence > 0 ? Double(apple.confidence) : nil
-            out.append(
-                TranscriptSegment(
-                    text: apple.substring,
-                    confidence: confidence,
-                    segmentIndex: i,
-                    durationMs: max(0, durationMs),
-                    startTimeSeconds: apple.timestamp
-                )
+    /// Convert Apple's `SFTranscription.segments` (which is
+    /// word-level — one entry per recognized word) into
+    /// phrase-level ``TranscriptSegment``s using ``PhraseGrouper``
+    /// for the actual rollup logic.
+    private static func segments(
+        from transcription: SFTranscription,
+        pauseThresholdSeconds: TimeInterval
+    ) -> [TranscriptSegment] {
+        let words: [WordTiming] = transcription.segments.map { apple in
+            WordTiming(
+                text: apple.substring,
+                startTimeSeconds: apple.timestamp,
+                durationSeconds: apple.duration,
+                confidence: apple.confidence
             )
         }
-        return out
+        return PhraseGrouper.phrases(
+            from: words,
+            pauseThresholdSeconds: pauseThresholdSeconds
+        )
     }
 
     private func ensureAuthorized() async throws {

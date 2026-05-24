@@ -172,7 +172,7 @@ struct LiveCaptureServiceTranscriptionTests {
         #expect(events[0].event.projectID == Self.projectID)
         #expect(events[0].event.deviceID == Self.deviceID)
         #expect(events[0].event.source == "on_device")
-        #expect(events[0].event.model == "sf_speech_recognizer")
+        #expect(events[0].event.model == "sf_speech_recognizer_phrased")
         #expect(events[0].event.language == "en-US")
         #expect(events[1].event.text == "world")
         #expect(events[1].event.segmentIndex == 1)
