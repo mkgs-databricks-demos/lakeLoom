@@ -57,16 +57,16 @@ lakeLoom/
 ├── lakeloom-ai/
 │   ├── databricks.yml              # App bundle config
 │   ├── app.yaml                    # Databricks App runtime manifest (command, env vars)
-│   ├── package.json                # Node.js dependencies (AppKit 0.24.0, React 19, Zod, ZeroBus SDK)
+│   ├── package.json                # Node.js dependencies (AppKit 0.36.0, React 19, Zod, ZeroBus SDK)
 │   ├── server/                     # Express API (TypeScript)
 │   │   ├── server.ts              # Entry: secrets → migrations → routes → serve
 │   │   ├── lib/                   # crypto.ts, errors.ts (RFC 9457)
 │   │   ├── middleware/            # ios-auth.ts, browser-auth.ts + dualAuth()
 │   │   ├── migrations/            # 001–013 (paired_sessions → device assignment backfill)
 │   │   ├── services/              # secrets, sse, zerobus stream pool
-│   │   └── routes/                # pairing, captures, uploads, events, projects
+│   │   └── routes/                # pairing, captures, uploads, events, projects, media
 │   ├── client/                     # React frontend (Vite + Tailwind v4)
-│   │   ├── src/                   # App.tsx, pages/ (pairing, projects, stubs)
+│   │   ├── src/                   # App.tsx, pages/, components/media/
 │   │   └── public/                # Favicons, manifest
 │   ├── shared/appkit-types/        # Shared TypeScript types
 │   ├── patches/zerobus-ingest-sdk/ # SDK patch (index.js, index.d.ts)
@@ -116,6 +116,7 @@ lakeLoom/
 * **2026-05-20: First successful upload (audio).** Both blocking bugs fixed (iosAuth invocation + SDK 0.17 signatures). Upload confirmed in `lb_uploads_history`. Isaac notified via `hey_isaac/2026-05-20_audio-uploads-working.md`.
 * **2026-05-23: Migrations 009/010 deployed.** `client_type` on uploads (server-determined), `username` on paired_sessions (from `x-forwarded-email` at QR gen). Shared `PairingTestClient` module replaces duplicated test boilerplate. Lakehouse Sync schema mismatch fixed via Delta `ALTER TABLE ADD COLUMN`.
 * **2026-05-24: iOS auth hardening + device assignment backfill.** Migration 012 remediates 55 projects misattributed to SPN (→ human SCIM ID). Migration 013 backfills `project_device_assignments` from `capture_sessions` (5 rows). `browserAuth()` hardened to reject bare SPN requests (requires `X-Forwarded-Email`). `project-routes.ts` auto-assigns device on iOS project creation (when `req.user.sessionId` present). Phase 2 UI fully COMPLETE (sort toggle, inline label editing, empty state CTA shipped same day).
+* **2026-05-24: Phase 3 — Media Viewer & Audio Playback.** Branch `gc-phase3-browser-ui`. New `server/routes/media/media-routes.ts` with 3 endpoints: stream (Range support + CORS), metadata, session uploads. Client: `AudioPlayer` (Web Audio waveform, speed control), `ImageViewer` (lightbox + zoom), `DocumentViewer` (PDF iframe, DOCX download), `MediaPanel` (auto-dispatch by MIME). Key fix: `crossOrigin="anonymous"` + deferred `createMediaElementSource()` + explicit CORS headers to prevent Chrome silencing audio through auth proxy. Build deployed successfully after 4 iterative fixes (template literals, type assertions, unused imports, Web Audio CORS).
 
 
 ## Resolved Target Variables (dev)
