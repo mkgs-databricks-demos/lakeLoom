@@ -16,8 +16,12 @@ public protocol UploadCoordinator: Sendable {
     /// Enqueue a finalized capture artifact. The coordinator takes
     /// ownership of the file on disk: callers must not delete or
     /// move the file at `pending.localFileURL` after enqueue
-    /// returns. Successful uploads remove the file; failed terminal
-    /// uploads leave it for diagnostics.
+    /// returns. On success the coordinator deletes the local file
+    /// **and** removes the entry from its queue (the `.succeeded`
+    /// broadcast is delivered to subscribers first, then the entry
+    /// vanishes from ``currentUploads()``). Failed terminal uploads
+    /// leave both the file and the queue entry intact so the user
+    /// can retry / discard from the UI.
     func enqueue(_ pending: PendingUpload) async throws
 
     /// Snapshot of every upload currently tracked, in enqueue order.

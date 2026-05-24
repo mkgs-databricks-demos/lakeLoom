@@ -35,10 +35,20 @@ struct HomeContainerView: View {
     @State private var showingSmokeTest = false
     #endif
 
+    @State private var showingPendingUploads = false
+    @State private var showingProjectSwitcher = false
+
+    /// Live count of `UploadCoordinator.currentUploads()`. Drives a
+    /// badge on the toolbar so the user can tell at a glance when
+    /// there's anything in flight or stuck. Re-snapshots on every
+    /// upload-state transition.
+    @State private var pendingUploadCount = 0
+
     var body: some View {
         NavigationStack {
             HomeView(
                 workspaceName: workspaceName,
+                workspaceHost: workspaceHost,
                 projectName: projectName,
                 userName: userName,
                 lastResult: lastResult,
@@ -78,6 +88,44 @@ struct HomeContainerView: View {
                 handle(transition: next)
             }
         }
+        .task { await observePendingUploadCount() }
+        .sheet(isPresented: $showingProjectSwitcher) {
+            if let context = coordinator.activeContext {
+                ProjectSwitcherView(
+                    projects: coordinator.projects,
+                    workspaceID: context.workspace.id,
+                    workspaceName: context.workspace.workspaceName,
+                    activeProjectID: context.project.id,
+                    onSelect: { projectID in
+                        Task {
+                            await coordinator.switchActiveProject(to: projectID)
+                            showingProjectSwitcher = false
+                        }
+                    },
+                    onCreate: { name, description in
+                        // Throws ProjectError on failure; the form view
+                        // surfaces it inline. On success the form
+                        // dismisses the whole sheet via its onSuccess
+                        // callback (which maps to onDismiss here).
+                        _ = try await coordinator.createAndSwitchToProject(
+                            name: name,
+                            description: description
+                        )
+                    },
+                    onDismiss: { showingProjectSwitcher = false }
+                )
+            }
+        }
+        .sheet(isPresented: $showingPendingUploads) {
+            if let uploads = coordinator.uploadCoordinator {
+                PendingUploadsView(
+                    uploadCoordinator: uploads,
+                    captureAPI: coordinator.captureAPI,
+                    workspaceID: coordinator.activeContext?.workspace.id,
+                    onDismiss: { showingPendingUploads = false }
+                )
+            }
+        }
         #if DEBUG
         .sheet(isPresented: $showingSmokeTest) {
             if let api = coordinator.captureAPI,
@@ -108,6 +156,7 @@ struct HomeContainerView: View {
                 NavigationLink {
                     SessionsListView(
                         captureAPI: api,
+                        uploadCoordinator: coordinator.uploadCoordinator,
                         workspaceID: context.workspace.id,
                         projectID: context.project.id,
                         projectName: context.project.name
@@ -118,8 +167,41 @@ struct HomeContainerView: View {
                 }
             }
         }
+        if pendingUploadCount > 0 {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showingPendingUploads = true
+                } label: {
+                    Image(systemName: "tray.and.arrow.up.fill")
+                        .overlay(alignment: .topTrailing) {
+                            Text("\(pendingUploadCount)")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(BrandColors.accentPrimary, in: Capsule())
+                                .offset(x: 10, y: -8)
+                        }
+                }
+                .accessibilityLabel("Pending uploads — \(pendingUploadCount)")
+            }
+        }
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
+                if coordinator.activeContext != nil {
+                    Button {
+                        showingProjectSwitcher = true
+                    } label: {
+                        Label("Switch project", systemImage: "folder.badge.gear")
+                    }
+                }
+                if coordinator.uploadCoordinator != nil {
+                    Button {
+                        showingPendingUploads = true
+                    } label: {
+                        Label("Pending uploads", systemImage: "tray.and.arrow.up")
+                    }
+                }
                 #if DEBUG
                 if coordinator.captureAPI != nil, coordinator.activeContext != nil {
                     Button {
@@ -145,10 +227,32 @@ struct HomeContainerView: View {
         }
     }
 
+    /// Mirror `UploadCoordinator.currentUploads().count` into local
+    /// state so the toolbar badge updates live. Re-snapshots on
+    /// every `stateUpdates()` yield — covers enqueues, transitions,
+    /// and the now-automatic discard on `.succeeded` (which arrives
+    /// as a final stream event before the entry vanishes).
+    private func observePendingUploadCount() async {
+        guard let uploads = coordinator.uploadCoordinator else { return }
+        pendingUploadCount = await uploads.currentUploads().count
+        let stream = await uploads.stateUpdates()
+        for await _ in stream {
+            pendingUploadCount = await uploads.currentUploads().count
+        }
+    }
+
     // MARK: - Derived context
 
     private var workspaceName: String {
         coordinator.activeContext?.workspace.workspaceName ?? "—"
+    }
+
+    /// Host portion of the paired Databricks App URL (e.g.,
+    /// `fevm-hls-fde.cloud.databricks.com`). Empty string when no
+    /// workspace is active so `HomeView` can hide the host row
+    /// during the brief pre-context render.
+    private var workspaceHost: String {
+        coordinator.activeContext?.workspace.workspaceURL.host ?? ""
     }
 
     private var projectName: String {

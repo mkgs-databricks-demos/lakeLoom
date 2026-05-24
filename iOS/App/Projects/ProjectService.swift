@@ -30,7 +30,7 @@ public actor ProjectService: ProjectServicing {
     public init(
         auth: any AuthServicing,
         endpointResolver: any AppEndpointResolving,
-        api: any ProjectAPIClient = LiveProjectAPIClient(),
+        api: any ProjectAPIClient,
         defaults: any DefaultsStore = LiveDefaultsStore(),
         cacheTTL: TimeInterval = 5 * 60,
         logger: AppLogger = AppLogger(category: .projects),

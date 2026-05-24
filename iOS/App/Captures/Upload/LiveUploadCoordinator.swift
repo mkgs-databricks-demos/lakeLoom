@@ -222,10 +222,27 @@ public actor LiveUploadCoordinator: UploadCoordinator {
 
         do {
             try await sendOnce(upload: upload)
-            upload.state = .succeeded
-            upload.nextAttemptAt = nil
-            uploads[uploadID] = upload
+            // Full retire on success: delete the local file, remove
+            // the entry from both `uploads` and `order`, persist the
+            // shrunken queue, THEN broadcast `.succeeded` so any
+            // watcher (`LiveCaptureService.watchUploads`, the
+            // capture-detail and pending-uploads views) sees the
+            // terminal signal. Broadcasting after removal means a
+            // watcher that calls `currentUploads()` in response to
+            // the event sees the upload already gone — that's the
+            // right behavior, since a `.succeeded` upload has nothing
+            // left to do here.
+            //
+            // The original code only set `state = .succeeded` and
+            // left the entry in the dict. That accumulated `.succeeded`
+            // orphans in the persisted queue forever (every cold
+            // launch saw `upload.queue.restored count=N` growing by
+            // one per successful session) and showed them as
+            // "Uploaded" rows in PendingUploadsView until the user
+            // manually discarded them.
             try? FileManager.default.removeItem(at: upload.localFileURL)
+            uploads.removeValue(forKey: uploadID)
+            order.removeAll { $0 == uploadID }
             try? await persist()
             broadcast(uploadID: uploadID, state: .succeeded)
             await logger.info(

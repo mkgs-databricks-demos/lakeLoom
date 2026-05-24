@@ -10,6 +10,11 @@ import SwiftUI
 struct HomeView: View {
 
     let workspaceName: String
+    /// Host portion of the paired Databricks App URL (e.g.,
+    /// `fevm-hls-fde.cloud.databricks.com`). Rendered next to the
+    /// username in the footer so the user always sees which
+    /// workspace they're talking to without opening the menu.
+    let workspaceHost: String
     let projectName: String
     let userName: String
     let lastResult: HomeViewResult
@@ -48,21 +53,43 @@ struct HomeView: View {
                 .ignoresSafeArea()
 
             VStack(spacing: Spacing.xl) {
-                contextHeader
+                projectHeader
                 Spacer()
                 resultBanner
                 recordButton
                 Spacer()
-                hint
+                footer
             }
             .padding(.horizontal, Spacing.xl)
             .padding(.vertical, Spacing.lg)
         }
     }
 
-    // MARK: - Header
+    // MARK: - Project header (top of screen)
 
-    private var contextHeader: some View {
+    private var projectHeader: some View {
+        VStack(spacing: Spacing.xs) {
+            Text("PROJECT")
+                .font(BrandTypography.caption)
+                .foregroundStyle(BrandColors.textSecondary)
+                .tracking(1.2)
+            Text(projectName)
+                .font(BrandTypography.titleMedium)
+                .foregroundStyle(BrandColors.textPrimary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+        }
+    }
+
+    // MARK: - Footer (bottom of screen)
+    //
+    // Stacks the workspace identity block (label + friendly name +
+    // URL host) directly above the username. The workspace block
+    // anchors which Databricks instance we're talking to; the
+    // username is the last visual atom so the user always sees
+    // their identity at the very bottom of the screen.
+
+    private var footer: some View {
         VStack(spacing: Spacing.xs) {
             Text("WORKSPACE")
                 .font(BrandTypography.caption)
@@ -72,17 +99,17 @@ struct HomeView: View {
                 .font(BrandTypography.bodyEmphasis)
                 .foregroundStyle(BrandColors.textPrimary)
                 .multilineTextAlignment(.center)
-
-            Text("PROJECT")
-                .font(BrandTypography.caption)
+            if !workspaceHost.isEmpty {
+                Text(workspaceHost)
+                    .font(BrandTypography.caption.monospaced())
+                    .foregroundStyle(BrandColors.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Text(userName)
+                .font(BrandTypography.caption.monospaced())
                 .foregroundStyle(BrandColors.textSecondary)
-                .tracking(1.2)
                 .padding(.top, Spacing.sm)
-            Text(projectName)
-                .font(BrandTypography.titleMedium)
-                .foregroundStyle(BrandColors.textPrimary)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
         }
     }
 
@@ -188,13 +215,6 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Hint footer
-
-    private var hint: some View {
-        Text("\(userName)")
-            .font(BrandTypography.caption.monospaced())
-            .foregroundStyle(BrandColors.textSecondary)
-    }
 }
 
 /// `ButtonStyle` for the Record CTA. Scales the label to 92% on
