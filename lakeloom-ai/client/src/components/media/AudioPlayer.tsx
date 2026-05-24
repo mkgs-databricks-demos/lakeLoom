@@ -27,13 +27,31 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/**
+ * Generates a deterministic pseudo-random waveform shape for static visualization.
+ * Seeded by uploadId so the same file always looks the same.
+ */
+function generateWaveformBars(uploadId: string, count: number): number[] {
+  let hash = 0;
+  for (let i = 0; i < uploadId.length; i++) {
+    hash = ((hash << 5) - hash + uploadId.charCodeAt(i)) | 0;
+  }
+  const bars: number[] = [];
+  for (let i = 0; i < count; i++) {
+    // Simple LCG seeded by hash + index
+    hash = (hash * 1664525 + 1013904223) | 0;
+    const normalized = (Math.abs(hash) % 1000) / 1000;
+    // Shape: louder in the middle, quieter at edges (speech-like envelope)
+    const envelope = Math.sin((i / count) * Math.PI) * 0.6 + 0.4;
+    bars.push(normalized * envelope * 0.85 + 0.1);
+  }
+  return bars;
+}
+
 export function AudioPlayer({ uploadId, title, sizeBytes, durationHint }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animFrameRef = useRef<number>(0);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const sourceRef = useRef<MediaElementAudioSourceNode | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -42,84 +60,62 @@ export function AudioPlayer({ uploadId, title, sizeBytes, durationHint }: AudioP
   const [isMuted, setIsMuted] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [waveformReady, setWaveformReady] = useState(false);
 
   const streamUrl = `/api/media/${uploadId}`;
 
-  // ── Audio context & analyser setup (for waveform) ─────────────────────
-  // Deferred: only called AFTER audio is confirmed playing to avoid
-  // Chrome's MediaElementSource CORS-taint silencing through the auth proxy.
-  const initAudioContext = useCallback(() => {
-    if (audioCtxRef.current || !audioRef.current) return;
-    try {
-      const ctx = new AudioContext();
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.7;
-      const source = ctx.createMediaElementSource(audioRef.current);
-      source.connect(analyser);
-      analyser.connect(ctx.destination);
-      audioCtxRef.current = ctx;
-      analyserRef.current = analyser;
-      sourceRef.current = source;
-      setWaveformReady(true);
-    } catch {
-      // Web Audio not available — waveform won't render, audio still works
-    }
-  }, []);
+  // Pre-compute static waveform shape (deterministic per upload)
+  const waveformBars = useRef(generateWaveformBars(uploadId, 80)).current;
 
-  // ── Waveform rendering ────────────────────────────────────────────────
+  // ── Waveform rendering (static shape + progress overlay) ─────────────
+  // No Web Audio API needed — avoids CORS issues with auth sidecar proxy.
   const drawWaveform = useCallback(() => {
     const canvas = canvasRef.current;
-    const analyser = analyserRef.current;
-    if (!canvas || !analyser) return;
+    if (!canvas) return;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const bufferLength = analyser.frequencyBinCount;
-    const dataArray = new Uint8Array(bufferLength);
-    analyser.getByteFrequencyData(dataArray);
-
     const { width, height } = canvas;
     ctx.clearRect(0, 0, width, height);
 
-    const barWidth = (width / bufferLength) * 2.5;
-    let x = 0;
+    const barCount = waveformBars.length;
+    const barWidth = width / barCount;
+    const progressRatio = duration > 0 ? currentTime / duration : 0;
 
-    for (let i = 0; i < bufferLength; i++) {
-      const barHeight = (dataArray[i] / 255) * height * 0.8;
-      // Lava gradient for active bars
-      const intensity = dataArray[i] / 255;
-      ctx.fillStyle = intensity > 0.1
-        ? `rgba(255, 54, 33, ${0.3 + intensity * 0.7})`
-        : 'rgba(144, 165, 177, 0.3)';
-      ctx.fillRect(x, height - barHeight, barWidth - 1, barHeight);
-      x += barWidth;
+    for (let i = 0; i < barCount; i++) {
+      const barHeight = waveformBars[i] * height * 0.85;
+      const x = i * barWidth;
+      const barProgress = (i + 0.5) / barCount;
+
+      if (barProgress <= progressRatio) {
+        // Played portion — Lava accent
+        ctx.fillStyle = 'rgba(255, 54, 33, 0.85)';
+      } else {
+        // Unplayed portion — muted gray
+        ctx.fillStyle = 'rgba(144, 165, 177, 0.35)';
+      }
+
+      // Draw bar centered vertically
+      const y = (height - barHeight) / 2;
+      ctx.fillRect(x + 1, y, barWidth - 2, barHeight);
     }
 
     if (isPlaying) {
       animFrameRef.current = requestAnimationFrame(drawWaveform);
     }
-  }, [isPlaying]);
+  }, [isPlaying, currentTime, duration, waveformBars]);
 
   useEffect(() => {
-    if (isPlaying && analyserRef.current) {
-      drawWaveform();
-    }
+    drawWaveform();
     return () => {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
-  }, [isPlaying, drawWaveform]);
+  }, [drawWaveform]);
 
-  // ── Playback controls ─────────────────────────────────────────────────
+  // ── Playback controls ─────────────────────────────────────────────
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    // Resume suspended audio context (if waveform already connected)
-    if (audioCtxRef.current?.state === 'suspended') {
-      audioCtxRef.current.resume();
-    }
     if (isPlaying) {
       audio.pause();
     } else {
@@ -157,15 +153,9 @@ export function AudioPlayer({ uploadId, title, sizeBytes, durationHint }: AudioP
     }
   }, [isPlaying]);
 
-  // ── Audio element event handlers ──────────────────────────────────────
+  // ── Audio element event handlers ──────────────────────────────────
   const handleTimeUpdate = () => {
     setCurrentTime(audioRef.current?.currentTime ?? 0);
-    // Deferred Web Audio init: connect AFTER audio is confirmed playing.
-    // This avoids Chrome's MediaElementSource CORS-taint silencing that
-    // occurs when connecting before playback through auth proxy setups.
-    if (!audioCtxRef.current && isPlaying) {
-      initAudioContext();
-    }
   };
   const handleLoadedMetadata = () => {
     setDuration(audioRef.current?.duration ?? 0);
@@ -179,12 +169,11 @@ export function AudioPlayer({ uploadId, title, sizeBytes, durationHint }: AudioP
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
-    <div className="bg-[var(--surface-raised)] border border-[var(--border-default)] rounded-xl overflow-hidden">
-      {/* Hidden audio element — use-credentials sends cookies for auth while enabling CORS for Web Audio */}
+    <div className="bg-[var(--surface-raised,#fff)] border border-[var(--border-default,#DCE0E2)] rounded-xl overflow-hidden">
+      {/* Hidden audio element — same-origin, no crossOrigin needed (sidecar handles auth via cookies) */}
       <audio
         ref={audioRef}
         src={streamUrl}
-        crossOrigin="use-credentials"
         preload="metadata"
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
@@ -194,24 +183,17 @@ export function AudioPlayer({ uploadId, title, sizeBytes, durationHint }: AudioP
         onCanPlay={handleCanPlay}
       />
 
-      {/* Waveform visualization */}
-      <div className="relative h-16 bg-[var(--surface-secondary)] border-b border-[var(--border-default)]">
+      {/* Waveform visualization (static shape, progress-colored) */}
+      <div
+        className="relative h-16 bg-[var(--surface-secondary,#F5F5F2)] border-b border-[var(--border-default,#DCE0E2)] cursor-pointer"
+        onClick={seekTo}
+      >
         <canvas
           ref={canvasRef}
           className="absolute inset-0 w-full h-full"
           width={600}
           height={64}
         />
-        {/* Progress overlay */}
-        <div
-          className="absolute inset-y-0 left-0 bg-[var(--accent-primary)] opacity-5 pointer-events-none transition-all duration-100"
-          style={{ width: `${progress}%` }}
-        />
-        {!waveformReady && isPlaying && (
-          <div className="absolute inset-0 flex items-center justify-center">
-            <span className="text-xs text-[var(--text-tertiary)]">Connecting waveform…</span>
-          </div>
-        )}
       </div>
 
       {/* Controls */}
@@ -220,7 +202,7 @@ export function AudioPlayer({ uploadId, title, sizeBytes, durationHint }: AudioP
         <button
           onClick={togglePlay}
           disabled={isLoading || !!error}
-          className="w-9 h-9 flex items-center justify-center rounded-full bg-[var(--accent-primary)] text-white hover:brightness-90 transition-all duration-[var(--motion-fast)] disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-9 h-9 flex items-center justify-center rounded-full bg-[var(--accent-primary,#FF3621)] text-white hover:brightness-90 transition-all duration-[var(--motion-fast,100ms)] disabled:opacity-50 disabled:cursor-not-allowed"
           aria-label={isPlaying ? 'Pause' : 'Play'}
         >
           {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
@@ -229,7 +211,7 @@ export function AudioPlayer({ uploadId, title, sizeBytes, durationHint }: AudioP
         {/* Restart */}
         <button
           onClick={restart}
-          className="w-7 h-7 flex items-center justify-center rounded-md text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-tertiary)] transition-colors duration-[var(--motion-fast)]"
+          className="w-7 h-7 flex items-center justify-center rounded-md text-[var(--text-secondary,#5A6F77)] hover:text-[var(--text-primary,#1B3139)] hover:bg-[var(--surface-tertiary,#EEEDE9)] transition-colors duration-[var(--motion-fast,100ms)]"
           aria-label="Restart"
         >
           <RotateCcw className="w-3.5 h-3.5" />
@@ -237,28 +219,28 @@ export function AudioPlayer({ uploadId, title, sizeBytes, durationHint }: AudioP
 
         {/* Seek bar */}
         <div
-          className="flex-1 h-1.5 bg-[var(--surface-tertiary)] rounded-full cursor-pointer group relative"
+          className="flex-1 h-1.5 bg-[var(--surface-tertiary,#EEEDE9)] rounded-full cursor-pointer group relative"
           onClick={seekTo}
         >
           <div
-            className="absolute inset-y-0 left-0 bg-[var(--accent-primary)] rounded-full transition-all duration-100"
+            className="absolute inset-y-0 left-0 bg-[var(--accent-primary,#FF3621)] rounded-full transition-all duration-100"
             style={{ width: `${progress}%` }}
           />
           <div
-            className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-[var(--accent-primary)] rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-[var(--motion-fast)] shadow-sm"
+            className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-[var(--accent-primary,#FF3621)] rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-[var(--motion-fast,100ms)] shadow-sm"
             style={{ left: `calc(${progress}% - 6px)` }}
           />
         </div>
 
         {/* Time display */}
-        <span className="text-xs font-mono text-[var(--text-secondary)] min-w-[70px] text-right tabular-nums">
+        <span className="text-xs font-mono text-[var(--text-secondary,#5A6F77)] min-w-[70px] text-right tabular-nums">
           {formatTime(currentTime)} / {formatTime(duration)}
         </span>
 
         {/* Speed */}
         <button
           onClick={cycleSpeed}
-          className="px-2 py-1 text-xs font-medium rounded-md text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-tertiary)] transition-colors duration-[var(--motion-fast)] tabular-nums"
+          className="px-2 py-1 text-xs font-medium rounded-md text-[var(--text-secondary,#5A6F77)] hover:text-[var(--text-primary,#1B3139)] hover:bg-[var(--surface-tertiary,#EEEDE9)] transition-colors duration-[var(--motion-fast,100ms)] tabular-nums"
           aria-label="Playback speed"
         >
           {SPEEDS[speedIdx]}x
@@ -267,7 +249,7 @@ export function AudioPlayer({ uploadId, title, sizeBytes, durationHint }: AudioP
         {/* Mute */}
         <button
           onClick={toggleMute}
-          className="w-7 h-7 flex items-center justify-center rounded-md text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-tertiary)] transition-colors duration-[var(--motion-fast)]"
+          className="w-7 h-7 flex items-center justify-center rounded-md text-[var(--text-secondary,#5A6F77)] hover:text-[var(--text-primary,#1B3139)] hover:bg-[var(--surface-tertiary,#EEEDE9)] transition-colors duration-[var(--motion-fast,100ms)]"
           aria-label={isMuted ? 'Unmute' : 'Mute'}
         >
           {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
@@ -277,7 +259,7 @@ export function AudioPlayer({ uploadId, title, sizeBytes, durationHint }: AudioP
         <a
           href={streamUrl}
           download={title}
-          className="w-7 h-7 flex items-center justify-center rounded-md text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-tertiary)] transition-colors duration-[var(--motion-fast)]"
+          className="w-7 h-7 flex items-center justify-center rounded-md text-[var(--text-secondary,#5A6F77)] hover:text-[var(--text-primary,#1B3139)] hover:bg-[var(--surface-tertiary,#EEEDE9)] transition-colors duration-[var(--motion-fast,100ms)]"
           aria-label="Download"
         >
           <Download className="w-3.5 h-3.5" />
@@ -286,11 +268,11 @@ export function AudioPlayer({ uploadId, title, sizeBytes, durationHint }: AudioP
 
       {/* Footer: title + file size */}
       <div className="px-4 pb-3 flex items-center justify-between">
-        <span className="text-xs text-[var(--text-secondary)] truncate max-w-[60%]">
+        <span className="text-xs text-[var(--text-secondary,#5A6F77)] truncate max-w-[60%]">
           {title ?? 'Audio recording'}
         </span>
         {sizeBytes && (
-          <span className="text-xs text-[var(--text-tertiary)]">
+          <span className="text-xs text-[var(--text-tertiary,#90A5B1)]">
             {formatFileSize(sizeBytes)}
           </span>
         )}
@@ -299,7 +281,7 @@ export function AudioPlayer({ uploadId, title, sizeBytes, durationHint }: AudioP
       {/* Error state */}
       {error && (
         <div className="px-4 pb-3">
-          <p className="text-xs text-[var(--accent-error)]">{error}</p>
+          <p className="text-xs text-[var(--accent-error,#BD2B26)]">{error}</p>
         </div>
       )}
     </div>
