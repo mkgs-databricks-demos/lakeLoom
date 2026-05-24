@@ -107,4 +107,13 @@ public actor FakeCaptureAPIClient: CaptureAPIClient {
     ) async throws -> [CaptureSession] {
         return []
     }
+
+    public func listProjectDocuments(
+        workspaceID: String,
+        projectID: String,
+        limit: Int,
+        before: Date?
+    ) async throws -> [CaptureUpload] {
+        return []
+    }
 }

@@ -37,6 +37,7 @@ struct HomeContainerView: View {
 
     @State private var showingPendingUploads = false
     @State private var showingProjectSwitcher = false
+    @State private var showingDocuments = false
 
     /// Live count of `UploadCoordinator.currentUploads()`. Drives a
     /// badge on the toolbar so the user can tell at a glance when
@@ -93,6 +94,18 @@ struct HomeContainerView: View {
             }
         }
         .task { await observePendingUploadCount() }
+        .sheet(isPresented: $showingDocuments) {
+            if let api = coordinator.captureAPI,
+               let context = coordinator.activeContext {
+                ProjectDocumentsView(
+                    captureAPI: api,
+                    workspaceID: context.workspace.id,
+                    projectID: context.project.id,
+                    projectName: context.project.name,
+                    onDismiss: { showingDocuments = false }
+                )
+            }
+        }
         .sheet(isPresented: $showingProjectSwitcher) {
             if let context = coordinator.activeContext {
                 ProjectSwitcherView(
@@ -197,6 +210,13 @@ struct HomeContainerView: View {
                         showingProjectSwitcher = true
                     } label: {
                         Label("Switch project", systemImage: "folder.badge.gear")
+                    }
+                }
+                if coordinator.captureAPI != nil, coordinator.activeContext != nil {
+                    Button {
+                        showingDocuments = true
+                    } label: {
+                        Label("Documents", systemImage: "doc.text")
                     }
                 }
                 if coordinator.uploadCoordinator != nil {
