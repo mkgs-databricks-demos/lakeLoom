@@ -22,12 +22,10 @@ struct ProjectDocumentsView: View {
 
     enum LoadState {
         case loading
-        case loaded([CaptureUpload])
+        case loaded([ProjectDocument])
         case empty
         case error(String)
     }
-
-    private static let pageSize = 50
 
     var body: some View {
         NavigationStack {
@@ -118,7 +116,7 @@ struct ProjectDocumentsView: View {
         .background(BrandColors.surfaceSecondary)
     }
 
-    private func listView(_ list: [CaptureUpload]) -> some View {
+    private func listView(_ list: [ProjectDocument]) -> some View {
         ScrollView {
             VStack(spacing: Spacing.sm) {
                 ForEach(list) { document in
@@ -142,9 +140,7 @@ struct ProjectDocumentsView: View {
         do {
             let documents = try await captureAPI.listProjectDocuments(
                 workspaceID: workspaceID,
-                projectID: projectID,
-                limit: Self.pageSize,
-                before: nil
+                projectID: projectID
             )
             loadState = documents.isEmpty ? .empty : .loaded(documents)
         } catch let error as CaptureAPIError {
@@ -171,34 +167,35 @@ struct ProjectDocumentsView: View {
     }
 }
 
-/// One row per document. Surfaces filename, kind tag, byte size,
-/// short sha prefix, and the wall-clock `uploadedAt` time. Mirrors
-/// the visual treatment of `UploadRow` in `CaptureDetailView` so the
-/// two surfaces feel like the same family — captures and documents
+/// One row per document. Surfaces filename, MIME type, byte size,
+/// and the wall-clock `uploadedAt` time. Mirrors the visual
+/// treatment of `UploadRow` in `CaptureDetailView` so the two
+/// surfaces feel like the same family — captures and documents
 /// are both upload-records living under the same project.
 private struct DocumentRow: View {
-    let document: CaptureUpload
+    let document: ProjectDocument
 
     var body: some View {
         HStack(spacing: Spacing.md) {
-            Image(systemName: "doc.fill")
+            Image(systemName: kindIcon(for: document.kind))
                 .font(.title3)
                 .foregroundStyle(BrandColors.accentPrimary)
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 2) {
-                Text(document.originalFilename ?? "Document")
+                Text(document.originalFilename ?? document.kind.rawValue.capitalized)
                     .font(BrandTypography.bodyEmphasis)
                     .foregroundStyle(BrandColors.textPrimary)
                     .lineLimit(1)
                 HStack(spacing: 6) {
+                    Text(document.mimeType)
+                        .font(BrandTypography.caption.monospaced())
+                        .foregroundStyle(BrandColors.textSecondary)
+                        .lineLimit(1)
+                    Text("·")
+                        .foregroundStyle(BrandColors.textMuted)
                     Text(ByteCountFormatter.string(fromByteCount: document.sizeBytes, countStyle: .file))
                         .font(BrandTypography.caption)
                         .foregroundStyle(BrandColors.textSecondary)
-                    Text("·")
-                        .foregroundStyle(BrandColors.textMuted)
-                    Text(document.sha256Hex.prefix(8))
-                        .font(BrandTypography.caption.monospaced())
-                        .foregroundStyle(BrandColors.textMuted)
                     Text("·")
                         .foregroundStyle(BrandColors.textMuted)
                     TimelineView(.periodic(from: .now, by: 60)) { context in
@@ -216,5 +213,14 @@ private struct DocumentRow: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(BrandColors.borderDefault, lineWidth: 0.5)
         )
+    }
+
+    private func kindIcon(for kind: CaptureUpload.Kind) -> String {
+        switch kind {
+        case .document:    return "doc.fill"
+        case .audio:       return "waveform"
+        case .photo:       return "camera.fill"
+        case .screenshot:  return "rectangle.dashed"
+        }
     }
 }

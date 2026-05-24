@@ -110,10 +110,8 @@ public actor FakeCaptureAPIClient: CaptureAPIClient {
 
     public func listProjectDocuments(
         workspaceID: String,
-        projectID: String,
-        limit: Int,
-        before: Date?
-    ) async throws -> [CaptureUpload] {
+        projectID: String
+    ) async throws -> [ProjectDocument] {
         return []
     }
 }
