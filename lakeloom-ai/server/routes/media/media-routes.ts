@@ -8,6 +8,8 @@
  * Endpoints:
  *   GET /api/media/:upload_id          — Stream file content (supports Range)
  *   GET /api/media/:upload_id/metadata — Upload metadata from Lakebase
+ *   GET /api/media/session/:capture_session_id — List uploads for a capture session
+ *   GET /api/media/project/:project_id — List project-level uploads (documents)
  *
  * Auth: browserAuth (on-behalf-of-user) — these are browser-only endpoints.
  * iOS downloads files via capture session sync, not this endpoint.
@@ -291,6 +293,26 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
            WHERE capture_session_id = $1
            ORDER BY uploaded_at ASC`,
           [captureSessionId],
+        );
+
+        res.json({ uploads: rows });
+      } catch (err) {
+        next(err);
+      }
+    });
+
+    // ── GET /api/media/project/:project_id ─────────────────────────────────
+    // List project-level uploads (documents not tied to a capture session).
+    app.get('/api/media/project/:project_id', auth, async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const projectId = req.params.project_id as string;
+
+        const { rows } = await lakebase.query(
+          `SELECT id, kind, mime_type, original_filename, size_bytes, uploaded_at
+           FROM app.uploads
+           WHERE project_id = $1 AND capture_session_id IS NULL AND revoked_at IS NULL
+           ORDER BY uploaded_at DESC`,
+          [projectId],
         );
 
         res.json({ uploads: rows });

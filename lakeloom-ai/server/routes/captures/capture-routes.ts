@@ -322,16 +322,20 @@ export async function setupCaptureRoutes(appkit: AppKitContext): Promise<void> {
           paramIdx++;
         }
 
-        // Enriched query with upload_count and total_size_bytes via LATERAL join
+        // Enriched query with upload_count, total_size_bytes, and upload_kinds via LATERAL join
         const sql = `
           SELECT
             cs.id, cs.project_id, cs.created_by_user_id, cs.device_label,
             cs.state, cs.label, cs.started_at, cs.ended_at,
             COALESCE(u.upload_count, 0)::int AS upload_count,
-            COALESCE(u.total_size_bytes, 0)::bigint AS total_size_bytes
+            COALESCE(u.total_size_bytes, 0)::bigint AS total_size_bytes,
+            COALESCE(u.upload_kinds, ARRAY[]::text[]) AS upload_kinds
           FROM app.capture_sessions cs
           LEFT JOIN LATERAL (
-            SELECT COUNT(*) AS upload_count, SUM(size_bytes) AS total_size_bytes
+            SELECT
+              COUNT(*) AS upload_count,
+              SUM(size_bytes) AS total_size_bytes,
+              array_agg(DISTINCT kind) FILTER (WHERE kind IS NOT NULL) AS upload_kinds
             FROM app.uploads
             WHERE capture_session_id = cs.id AND revoked_at IS NULL
           ) u ON true
