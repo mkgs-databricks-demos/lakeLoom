@@ -48,6 +48,11 @@ public actor LiveCaptureService: CaptureService {
     /// instance that backs `LiveAudioRecorder`. Tests can leave it
     /// nil to use the file-based fallback.
     private let audioBufferSource: (any AudioBufferSource)?
+    /// PR 10c: optional camera path for in-session photo capture.
+    /// Production wiring sets `LivePhotoCapture`; tests that don't
+    /// exercise the photo flow can omit. When nil,
+    /// ``capturePhoto()`` throws ``CaptureServiceError/photoCaptureUnavailable``.
+    private let photoCapture: (any PhotoCapture)?
     /// Workspace + paired-session resolver — the transcript events
     /// endpoint is `/api/sessions/<paired_session_id>/events`, so we
     /// need to know the active paired session at emit time without
@@ -99,6 +104,7 @@ public actor LiveCaptureService: CaptureService {
         transcriptStreamer: (any TranscriptStreamer)? = nil,
         streamingRecognizer: (any StreamingSpeechRecognizer)? = nil,
         audioBufferSource: (any AudioBufferSource)? = nil,
+        photoCapture: (any PhotoCapture)? = nil,
         pairedSessionIDProvider: (@Sendable () async -> String?)? = nil,
         logger: AppLogger = AppLogger(category: .capture)
     ) {
@@ -111,6 +117,7 @@ public actor LiveCaptureService: CaptureService {
         self.transcriptStreamer = transcriptStreamer
         self.streamingRecognizer = streamingRecognizer
         self.audioBufferSource = audioBufferSource
+        self.photoCapture = photoCapture
         self.pairedSessionIDProvider = pairedSessionIDProvider
         self.logger = logger
         self.nowProvider = Date.init
@@ -131,6 +138,7 @@ public actor LiveCaptureService: CaptureService {
         transcriptStreamer: (any TranscriptStreamer)? = nil,
         streamingRecognizer: (any StreamingSpeechRecognizer)? = nil,
         audioBufferSource: (any AudioBufferSource)? = nil,
+        photoCapture: (any PhotoCapture)? = nil,
         pairedSessionIDProvider: (@Sendable () async -> String?)? = nil,
         logger: AppLogger = AppLogger(category: .capture),
         nowProvider: @Sendable @escaping () -> Date,
@@ -146,6 +154,7 @@ public actor LiveCaptureService: CaptureService {
         self.transcriptStreamer = transcriptStreamer
         self.streamingRecognizer = streamingRecognizer
         self.audioBufferSource = audioBufferSource
+        self.photoCapture = photoCapture
         self.pairedSessionIDProvider = pairedSessionIDProvider
         self.logger = logger
         self.nowProvider = nowProvider
@@ -492,9 +501,90 @@ public actor LiveCaptureService: CaptureService {
             )
         }
 
-        transition(to: .finalizing(context, pendingUploadIDs: [pending.id]))
-        await persistFinalizingIfNeeded(context: context, pending: [pending.id])
-        spawnWatcher(stream: uploadStream, for: context, pendingUploadIDs: [pending.id])
+        // Snapshot every non-terminal upload still attached to this
+        // capture session — the audio we just enqueued + any photos
+        // taken during the recording that haven't drained yet. Server
+        // rejects uploads to non-active captures, so the watcher
+        // must wait for all of them before PATCHing to .completed.
+        // Auto-retired (succeeded) photos are already gone from
+        // currentUploads(); we don't need to track them.
+        let snapshot = await uploadCoordinator.currentUploads()
+        let pendingIDs = Set(
+            snapshot
+                .filter { $0.captureSessionID == context.captureSessionID }
+                .filter { !$0.state.isTerminal }
+                .map { $0.id }
+        )
+        // The audio we just enqueued is always non-terminal at this
+        // moment (worker hasn't started it yet), so it's guaranteed
+        // to be in the snapshot.
+        transition(to: .finalizing(context, pendingUploadIDs: pendingIDs))
+        await persistFinalizingIfNeeded(context: context, pending: pendingIDs)
+        spawnWatcher(stream: uploadStream, for: context, pendingUploadIDs: pendingIDs)
+    }
+
+    public func capturePhoto() async throws {
+        guard case .recording(let context) = current else {
+            throw CaptureServiceError.notRecording
+        }
+        guard let photoCapture else {
+            throw CaptureServiceError.photoCaptureUnavailable
+        }
+
+        let photo: CapturedPhoto
+        do {
+            photo = try await photoCapture.capturePhoto(captureSessionID: context.captureSessionID)
+        } catch let error as PhotoCaptureError {
+            await logger.warning(
+                "photo.capture.failed",
+                metadata: [
+                    "capture_session_id": .uuidPrefix(context.captureSessionID),
+                    "reason": .string(String(describing: error))
+                ]
+            )
+            throw CaptureServiceError.photoCaptureFailed(reason: String(describing: error))
+        } catch {
+            throw CaptureServiceError.photoCaptureFailed(reason: error.localizedDescription)
+        }
+
+        let sha: String
+        do {
+            sha = try fileHasher(photo.fileURL)
+        } catch {
+            throw CaptureServiceError.hashingFailed(reason: error.localizedDescription)
+        }
+
+        let pending = PendingUpload(
+            id: uploadIDProvider(),
+            workspaceID: context.workspaceID,
+            captureSessionID: context.captureSessionID,
+            kind: .photo,
+            localFileURL: photo.fileURL,
+            mimeType: photo.mimeType,
+            sizeBytes: photo.sizeBytes,
+            sha256Hex: sha,
+            clientTimestamp: photo.capturedAt,
+            originalFilename: photo.fileURL.lastPathComponent,
+            deviceID: await resolvedDeviceID(),
+            createdAt: nowProvider()
+        )
+
+        do {
+            try await uploadCoordinator.enqueue(pending)
+        } catch let error as UploadCoordinatorError {
+            throw CaptureServiceError.enqueueFailed(reason: String(describing: error))
+        } catch {
+            throw CaptureServiceError.enqueueFailed(reason: error.localizedDescription)
+        }
+
+        await logger.info(
+            "photo.capture.enqueued",
+            metadata: [
+                "capture_session_id": .uuidPrefix(context.captureSessionID),
+                "upload_id": .uuidPrefix(pending.id),
+                "bytes": .int(photo.sizeBytes)
+            ]
+        )
     }
 
     public func cancelCapture() async throws {

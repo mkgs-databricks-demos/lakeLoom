@@ -115,6 +115,7 @@ struct LakeloomApp: App {
                 transcriptStreamer: transcriptStreamer,
                 streamingRecognizer: streamingRecognizer,
                 audioBufferSource: engineRecordingEngine,
+                photoCapture: photoCapture,
                 pairedSessionIDProvider: pairedSessionIDProvider
             )
         } else {

@@ -74,6 +74,26 @@ public protocol CaptureService: Sendable {
     /// when the recognizer finishes (capture stops or cancels), or
     /// when the subscriber drops it.
     func transcriptSegmentUpdates() async -> AsyncStream<TranscriptSegment>
+
+    /// Capture a single photo and attach it to the active capture
+    /// session. Presents the camera (delegated to ``PhotoCapture``),
+    /// hashes the resulting JPEG, and enqueues it on the
+    /// ``UploadCoordinator`` as a `.photo` upload bound to the
+    /// current `captureSessionID`. The user can take multiple
+    /// photos per session; each call produces an independent
+    /// `PendingUpload`.
+    ///
+    /// Throws ``CaptureServiceError/notRecording`` if there's no
+    /// active recording, ``CaptureServiceError/photoCaptureFailed``
+    /// for camera permission / hardware / capture failures, and the
+    /// existing hashing / enqueue errors otherwise.
+    ///
+    /// Photos enqueued during a session are tracked in the watcher's
+    /// pending set at ``stopCapture()`` time so the server-side
+    /// `state=completed` PATCH waits for all in-flight photo uploads
+    /// to drain before firing (the server rejects uploads against
+    /// non-active captures).
+    func capturePhoto() async throws
 }
 
 /// State machine surfaced to the UI. Each non-`.idle` case carries
@@ -169,4 +189,17 @@ public enum CaptureServiceError: Error, Sendable, Equatable {
 
     /// Enqueueing the upload failed (file missing, persistence error).
     case enqueueFailed(reason: String)
+
+    /// Photo capture failed during a `.recording` session — camera
+    /// permission denied, hardware unavailable, or capture path
+    /// errored. Carries a stringified `PhotoCaptureError` so the UI
+    /// can route permission-denied to Settings while surfacing the
+    /// rest as generic failures.
+    case photoCaptureFailed(reason: String)
+
+    /// Photo capture was requested but the active wiring doesn't
+    /// include a ``PhotoCapture`` dependency. Production wiring
+    /// always supplies one; this is the safety net for tests that
+    /// omit it.
+    case photoCaptureUnavailable
 }

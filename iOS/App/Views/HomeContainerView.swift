@@ -70,6 +70,25 @@ struct HomeContainerView: View {
                     transcriptStream: { [captureService = coordinator.captureService] in
                         guard let service = captureService else { return nil }
                         return await service.transcriptSegmentUpdates()
+                    },
+                    onCapturePhoto: { [captureService = coordinator.captureService] in
+                        guard let service = captureService else { return }
+                        do {
+                            try await service.capturePhoto()
+                        } catch let error as CaptureServiceError {
+                            // Camera failures don't tear down the
+                            // capture — surface the same banner
+                            // machinery used for terminal results
+                            // so the user sees what went wrong and
+                            // can retry.
+                            await MainActor.run {
+                                self.lastResult = Self.result(for: error)
+                            }
+                        } catch {
+                            await MainActor.run {
+                                self.lastResult = .failed(reason: error.localizedDescription)
+                            }
+                        }
                     }
                 )
                 .ignoresSafeArea()
@@ -449,6 +468,10 @@ struct HomeContainerView: View {
             return .failed(reason: "Couldn't hash the recording: \(reason)")
         case .enqueueFailed(let reason):
             return .failed(reason: "Couldn't queue the upload: \(reason)")
+        case .photoCaptureFailed(let reason):
+            return .failed(reason: "Couldn't capture the photo: \(reason)")
+        case .photoCaptureUnavailable:
+            return .failed(reason: "Photo capture isn't available on this device.")
         }
     }
 
