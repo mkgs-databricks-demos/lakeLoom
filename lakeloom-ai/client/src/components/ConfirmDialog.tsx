@@ -74,12 +74,20 @@ export function ConfirmDialog({
         if (e.target === dialogRef.current) onClose();
       }}
       className={cn(
-        'fixed inset-0 m-auto p-0 bg-transparent',
-        'backdrop:bg-black/40 backdrop:animate-[fadeIn_200ms_ease-out]',
-        open && 'open:animate-[scaleIn_300ms_cubic-bezier(0.16,1,0.3,1)]',
+        // Full-viewport overlay with grid centering — reliable across all browsers
+        // showModal() places dialog in top-layer; we override UA positioning with grid.
+        'fixed inset-0 z-50 m-0 p-4 w-screen h-screen max-w-none max-h-none',
+        'bg-transparent grid place-items-center',
+        'backdrop:bg-black/40',
       )}
     >
-      <div className="bg-[var(--surface-raised,#fff)] border border-[var(--border-default,#DCE0E2)] rounded-xl shadow-xl w-[min(420px,90vw)]">
+      <div
+        className={cn(
+          'bg-[var(--surface-raised,#fff)] border border-[var(--border-default,#DCE0E2)]',
+          'rounded-xl shadow-xl w-[min(420px,calc(100vw-2rem))]',
+          open && 'animate-[scaleIn_200ms_cubic-bezier(0.16,1,0.3,1)]',
+        )}
+      >
         {/* Header */}
         <div className="flex items-start gap-3 px-6 py-4 border-b border-[var(--border-default,#DCE0E2)]">
           {variant === 'danger' && (
