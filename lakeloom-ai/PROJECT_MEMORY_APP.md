@@ -62,7 +62,7 @@ lakeLoom/
 │   │   ├── server.ts              # Entry: secrets → migrations → routes → serve
 │   │   ├── lib/                   # crypto.ts, errors.ts (RFC 9457)
 │   │   ├── middleware/            # ios-auth.ts, browser-auth.ts + dualAuth()
-│   │   ├── migrations/            # 001–010 (paired_sessions → username + client_type)
+│   │   ├── migrations/            # 001–013 (paired_sessions → device assignment backfill)
 │   │   ├── services/              # secrets, sse, zerobus stream pool
 │   │   └── routes/                # pairing, captures, uploads, events, projects
 │   ├── client/                     # React frontend (Vite + Tailwind v4)
@@ -115,6 +115,7 @@ lakeLoom/
 * **2026-05-15: QR pairing validated end-to-end on physical iPhone.** Full chain: QR scan → M2M → confirm → device-key binding → project create → home screen. iOS Module 01 merged (PR #18). Collaboration model (hi_genie/hey_isaac) proven effective for cross-domain debugging.
 * **2026-05-20: First successful upload (audio).** Both blocking bugs fixed (iosAuth invocation + SDK 0.17 signatures). Upload confirmed in `lb_uploads_history`. Isaac notified via `hey_isaac/2026-05-20_audio-uploads-working.md`.
 * **2026-05-23: Migrations 009/010 deployed.** `client_type` on uploads (server-determined), `username` on paired_sessions (from `x-forwarded-email` at QR gen). Shared `PairingTestClient` module replaces duplicated test boilerplate. Lakehouse Sync schema mismatch fixed via Delta `ALTER TABLE ADD COLUMN`.
+* **2026-05-24: iOS auth hardening + device assignment backfill.** Migration 012 remediates 55 projects misattributed to SPN (→ human SCIM ID). Migration 013 backfills `project_device_assignments` from `capture_sessions` (5 rows). `browserAuth()` hardened to reject bare SPN requests (requires `X-Forwarded-Email`). `project-routes.ts` auto-assigns device on iOS project creation (when `req.user.sessionId` present). Phase 2 UI fully COMPLETE (sort toggle, inline label editing, empty state CTA shipped same day).
 
 
 ## Resolved Target Variables (dev)
@@ -376,7 +377,7 @@ filesApi.delete({ file_path: string }): Promise<EmptyResponse>
 * ~~**Upload pipeline E2E** — Fix iosAuth middleware invocation + SDK 0.17 object signatures.~~ **DONE 2026-05-20 — First successful audio upload. All four upload endpoints (audio/screenshots/photos/documents) now operational.**
 * **Next: iOS Module 02** — CaptureEngine. Will exercise audio + screenshot + photo upload endpoints. Isaac notified 2026-05-20.
 * **Next: Browser UI Phase 3** — Session list per project, session detail view, upload timeline, state transition buttons.
-* **Non-blocking follow-up:** Isaac investigating `GET /api/v1/projects` list failure during onboarding (likely iOS `LiveProjectAPIClient` not routing through full header injector).
+* ~~**Non-blocking follow-up:** Isaac investigating `GET /api/v1/projects` list failure during onboarding.~~ **RESOLVED 2026-05-24 — Root cause: iOS `ProjectService` sending only Layer 0 M2M without Layer 2 headers. Server now 401-rejects bare SPN requests. Isaac notified via `hey_isaac/2026-05-24_ios-layer2-on-project-endpoints.md`.**
 * **Non-blocking cleanup:** `package-lock.json` regeneration, remove diagnostic helpers (`buildVolumePathCandidates`), test screenshot/photo/document uploads from iOS.
 
 ## App Bundle (lakeloom-ai) — Implementation Status
@@ -482,11 +483,36 @@ All server components implemented: crypto lib, migration runner, `paired_session
 **New client file:** `client/src/hooks/useCurrentUser.ts` — fetches `/api/me` on mount, caches for session
 
 **Test 14:** Validates `/api/me` — accepts 200 (identity returned) or 401 (no headers, expected from SPN)
+### iOS Auth Hardening & Device Assignment Backfill: COMPLETE (2026-05-24)
 
-**Remaining Phase 2 work:**
-- Session list per project (sortable by date, filterable by state)
-- Session detail view (metadata header, upload timeline, state transition buttons)
-- Session label editing
+**Problem:** iOS `ProjectService` was sending only Layer 0 M2M Bearer (Xcode SPN) without Layer 2 headers on `/api/v1/projects*` endpoints. `dualAuth` fell through to `browserAuth` which used `X-Forwarded-User` — set to SPN's SCIM ID by the auth sidecar. Result: 55 projects attributed to SPN, projects showing "Unpaired".
+
+**Migrations:**
+- **012:** Remediates user_id on 55 projects (SPN → human SCIM ID)
+- **013:** Backfills `project_device_assignments` from `capture_sessions` (5 rows — picks most recent paired session per project)
+
+**Server hardening:**
+- `browserAuth()` now REQUIRES `X-Forwarded-Email` — rejects bare SPN requests with 401 + actionable message
+- `dualAuth()` detection: (1) Layer 2 headers → iosAuth, (2) email header → browserAuth, (3) neither → 401
+- `project-routes.ts` POST: auto-inserts device assignment when `req.user.sessionId` is present (iOS Layer 2 path)
+
+**Detection matrix (post-fix):**
+
+| Request has | Result |
+|------------|--------|
+| X-Lakeloom-Session-Token + Layer 2 | iosAuth → resolves human from paired_sessions |
+| X-Forwarded-Email (human browser) | browserAuth → uses SCIM ID |
+| Only X-Forwarded-User (SPN) | 401 REJECTED |
+| Nothing | 401 REJECTED |
+
+**Pending:** iOS `ProjectService` must add Layer 2 headers. Will 401 until Isaac ships fix.
+
+
+**Phase 2 Capture Session Browser (COMPLETE 2026-05-24):**
+- PATCH `/api/v1/captures/:id/label` endpoint + `?sort=asc|desc` on list endpoint
+- Inline label editing with pencil icon, Enter/Escape/blur handlers
+- Sort toggle button (Newest/Oldest first)
+- Empty state CTA verified present
 
 ### QR Pairing Host Fix: COMPLETE (2026-05-14)
 * **Bug:** `app.base_url` in QR payload encoded `https://localhost:8000` because Express reads the container's loopback address from `req.headers.host`. iPhone tried to connect to its own loopback → ECONNREFUSED.
