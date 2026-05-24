@@ -59,6 +59,21 @@ public protocol CaptureService: Sendable {
     /// No-op for the in-memory capture state — see the type
     /// docstring on the persistence scope decision.
     func start() async
+
+    /// Subscribe to live transcript segments emitted by the on-device
+    /// speech recognizer during a `.recording` session. Each yield is
+    /// a phrase-level ``TranscriptSegment`` produced by
+    /// ``StreamingSpeechRecognizer`` at utterance boundaries; the same
+    /// segments are batched in parallel to
+    /// ``TranscriptStreamer``/ZeroBus for the durable side, so this
+    /// stream is purely for in-session UX (the recording fullScreenCover
+    /// scrolls them as they arrive).
+    ///
+    /// Each call returns an independent stream; UI typically holds
+    /// one for the life of the recording cover. The stream completes
+    /// when the recognizer finishes (capture stops or cancels), or
+    /// when the subscriber drops it.
+    func transcriptSegmentUpdates() async -> AsyncStream<TranscriptSegment>
 }
 
 /// State machine surfaced to the UI. Each non-`.idle` case carries

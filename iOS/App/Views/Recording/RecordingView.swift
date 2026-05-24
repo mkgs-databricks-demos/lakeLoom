@@ -30,19 +30,29 @@ struct RecordingView: View {
     /// pattern-match against the state's associated context twice.
     let projectName: String
 
+    /// Factory for the live transcript-segment stream. Returns nil
+    /// when no live recognizer is wired (older test paths, permission
+    /// denied, etc.) — the transcript panel then hides entirely. The
+    /// view consumes the stream in a `.task` and accumulates segments
+    /// into `segments` for the scrolling display. The factory should
+    /// return a fresh independent stream per call.
+    let transcriptStream: (() async -> AsyncStream<TranscriptSegment>?)?
+
     @State private var pulseScale: CGFloat = 1.0
+    @State private var segments: [TranscriptSegment] = []
 
     var body: some View {
         ZStack {
             BrandColors.surfacePrimary
                 .ignoresSafeArea()
 
-            VStack(spacing: Spacing.xxl) {
+            VStack(spacing: Spacing.xl) {
                 header
-                Spacer()
+                transcriptPanel
+                Spacer(minLength: Spacing.md)
                 stateIndicator
                 elapsedReadout
-                Spacer()
+                Spacer(minLength: Spacing.md)
                 actionButtons
             }
             .padding(.horizontal, Spacing.xl)
@@ -60,6 +70,70 @@ struct RecordingView: View {
             ) {
                 pulseScale = 1.18
             }
+        }
+        .task { await subscribeToTranscripts() }
+    }
+
+    // MARK: - Live transcript panel
+
+    /// Scrolling panel of phrases as the on-device speech recognizer
+    /// emits them. Surfaces the "rapid prototyping" demo loop —
+    /// users see their own words appearing in real time, which is
+    /// the proof point that the in-session pipeline is alive.
+    ///
+    /// Hidden entirely when no segments have arrived yet (so we
+    /// don't take up space with a blank box during the silent
+    /// pre-speech moments of a session). Auto-scrolls to the newest
+    /// segment on every append.
+    @ViewBuilder
+    private var transcriptPanel: some View {
+        if !segments.isEmpty {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Spacing.sm) {
+                        ForEach(segments, id: \.segmentIndex) { segment in
+                            Text(segment.text)
+                                .font(BrandTypography.body)
+                                .foregroundStyle(BrandColors.textPrimary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .id(segment.segmentIndex)
+                        }
+                    }
+                    .padding(.horizontal, Spacing.md)
+                    .padding(.vertical, Spacing.md)
+                }
+                .frame(maxHeight: 200)
+                .background(
+                    BrandColors.surfaceSecondary,
+                    in: RoundedRectangle(cornerRadius: 12)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(BrandColors.borderDefault, lineWidth: 0.5)
+                )
+                .onChange(of: segments.count) { _, _ in
+                    guard let last = segments.last else { return }
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo(last.segmentIndex, anchor: .bottom)
+                    }
+                }
+            }
+            .transition(.opacity)
+        }
+    }
+
+    /// Pull segments off the captureService's broadcast stream into
+    /// `segments`. Runs for the life of this view's `.task`, which
+    /// is the same as the recording cover (mounts on `.recording`,
+    /// unmounts when the parent dismisses the cover). The stream
+    /// naturally finishes when the recognizer's drain task closes
+    /// every UI subscriber on capture stop/cancel — no manual
+    /// cancellation needed.
+    private func subscribeToTranscripts() async {
+        guard let factory = transcriptStream else { return }
+        guard let stream = await factory() else { return }
+        for await segment in stream {
+            segments.append(segment)
         }
     }
 

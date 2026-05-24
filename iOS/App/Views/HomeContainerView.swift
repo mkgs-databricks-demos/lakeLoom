@@ -65,7 +65,11 @@ struct HomeContainerView: View {
                     state: captureState,
                     onStop: stopCapture,
                     onCancel: cancelCapture,
-                    projectName: projectName.isEmpty ? "Capture" : projectName
+                    projectName: projectName.isEmpty ? "Capture" : projectName,
+                    transcriptStream: { [captureService = coordinator.captureService] in
+                        guard let service = captureService else { return nil }
+                        return await service.transcriptSegmentUpdates()
+                    }
                 )
                 .ignoresSafeArea()
                 // Drop the system back-swipe so the user can't

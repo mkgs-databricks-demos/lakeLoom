@@ -67,6 +67,14 @@ public actor LiveCaptureService: CaptureService {
 
     private var current: CaptureServiceState = .idle
     private var continuations: [UUID: AsyncStream<CaptureServiceState>.Continuation] = [:]
+    /// Fan-out continuations for live transcript segments. The
+    /// recording fullScreenCover subscribes via
+    /// ``transcriptSegmentUpdates()`` so the user sees phrases
+    /// scrolling on screen as the recognizer emits them. Each
+    /// segment is forwarded both to these UI subscribers AND to the
+    /// `TranscriptStreamer` ZeroBus pipeline — neither path blocks
+    /// the other. Cleared on capture stop / cancel.
+    private var transcriptContinuations: [UUID: AsyncStream<TranscriptSegment>.Continuation] = [:]
     private var watcherTask: Task<Void, Never>?
     private var didStart = false
     /// PR 9b: background Task draining the live recognizer's
@@ -159,6 +167,17 @@ public actor LiveCaptureService: CaptureService {
         continuation.onTermination = { [weak self] _ in
             guard let self else { return }
             Task { await self.unsubscribe(id: id) }
+        }
+        return stream
+    }
+
+    public func transcriptSegmentUpdates() async -> AsyncStream<TranscriptSegment> {
+        let (stream, continuation) = AsyncStream<TranscriptSegment>.makeStream()
+        let id = UUID()
+        transcriptContinuations[id] = continuation
+        continuation.onTermination = { [weak self] _ in
+            guard let self else { return }
+            Task { await self.unsubscribeTranscript(id: id) }
         }
         return stream
     }
@@ -566,23 +585,43 @@ public actor LiveCaptureService: CaptureService {
         let workspaceID = context.workspaceID
         let projectID = context.projectID
 
-        // Detached Task — drains segments through the
-        // TranscriptStreamer (batches + retry) into ZeroBus. Stays
-        // alive until the segment stream finishes naturally
-        // (recognizer.endAudio() + final callback) or
-        // cancelCapture cancels it.
-        liveStreamingTask = Task { [logger] in
-            await transcriptStreamer.stream(
+        // Fan-out: the recognizer emits each phrase exactly once, but
+        // we want two consumers — the durable side (TranscriptStreamer
+        // → ZeroBus) and the UI side (recording cover's scrolling
+        // list). Split the recognizer's stream into a mirror that
+        // TranscriptStreamer drains, and broadcast each segment to
+        // any UI subscribers as it passes through. Both arms run
+        // until the recognizer finishes, then we finish both the
+        // mirror continuation and the UI subscriber continuations
+        // so awaiters unblock.
+        let (mirrorStream, mirrorContinuation) = AsyncThrowingStream<TranscriptSegment, Error>.makeStream()
+
+        liveStreamingTask = Task { [logger, weak self] in
+            async let transportDrain: Void = transcriptStreamer.stream(
                 workspaceID: workspaceID,
                 pairedSessionID: pairedSessionID,
                 projectID: projectID,
                 deviceID: deviceID,
                 recordingStartedAt: recordingStartedAt,
-                segments: segments,
+                segments: mirrorStream,
                 source: "on_device_live",
                 model: "sf_speech_streaming_phrased",
                 language: "en-US"
             )
+
+            do {
+                for try await segment in segments {
+                    if Task.isCancelled { break }
+                    await self?.broadcastTranscriptSegment(segment)
+                    mirrorContinuation.yield(segment)
+                }
+                mirrorContinuation.finish()
+            } catch {
+                mirrorContinuation.finish(throwing: error)
+            }
+
+            await transportDrain
+            await self?.finishTranscriptSubscribers()
             await logger.debug("speech.streaming.drain_complete")
         }
     }
@@ -684,6 +723,31 @@ public actor LiveCaptureService: CaptureService {
 
     private func unsubscribe(id: UUID) {
         continuations[id] = nil
+    }
+
+    private func unsubscribeTranscript(id: UUID) {
+        transcriptContinuations[id] = nil
+    }
+
+    /// Yield a segment to every UI subscriber. Called from the
+    /// live-streaming fan-out task between the recognizer and the
+    /// `TranscriptStreamer` so UI + ZeroBus paths see the same
+    /// segment with no extra latency on the transport side.
+    private func broadcastTranscriptSegment(_ segment: TranscriptSegment) {
+        for continuation in transcriptContinuations.values {
+            continuation.yield(segment)
+        }
+    }
+
+    /// Close every live transcript subscriber stream — invoked when
+    /// the recognizer's segment stream finishes (capture stop / cancel
+    /// completes its drain). Subscribers see the stream end and can
+    /// pop the recording cover or freeze the rendered list.
+    private func finishTranscriptSubscribers() {
+        for continuation in transcriptContinuations.values {
+            continuation.finish()
+        }
+        transcriptContinuations.removeAll()
     }
 
     private func rollbackServerSession(
