@@ -4,13 +4,14 @@
  * Route: /projects/:id/captures/:cid
  * Displays capture metadata header + chronological upload timeline.
  * State transitions available for active sessions.
+ * Inline label editing (click pencil icon to rename).
  *
  * Brand: Databricks semantic tokens, DM Sans, motion vars, WCAG AA.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router';
-import { ArrowLeft, Clock } from 'lucide-react';
+import { ArrowLeft, Clock, Pencil, Check, X } from 'lucide-react';
 import { StatusBadge, TimeAgo, Duration, FileIconContainer, EmptyState, ConfirmDialog } from '../../components';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -82,6 +83,19 @@ async function transitionCaptureState(
   if (!res.ok) throw new Error(`State transition failed: ${res.status}`);
 }
 
+async function updateCaptureLabel(
+  captureId: string,
+  label: string,
+): Promise<CaptureDetail> {
+  const res = await fetch(`/api/v1/captures/${captureId}/label`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ label }),
+  });
+  if (!res.ok) throw new Error(`Label update failed: ${res.status}`);
+  return res.json();
+}
+
 // ── Main component ───────────────────────────────────────────────────────────
 
 export function CaptureDetailPage() {
@@ -94,6 +108,12 @@ export function CaptureDetailPage() {
   // Confirm dialog state
   const [confirmAction, setConfirmAction] = useState<'completed' | 'cancelled' | null>(null);
   const [confirmLoading, setConfirmLoading] = useState(false);
+
+  // Inline label editing state
+  const [isEditingLabel, setIsEditingLabel] = useState(false);
+  const [editLabelValue, setEditLabelValue] = useState('');
+  const [labelSaving, setLabelSaving] = useState(false);
+  const labelInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     (async () => {
@@ -123,6 +143,52 @@ export function CaptureDetailPage() {
       setError((err as Error).message);
     } finally {
       setConfirmLoading(false);
+    }
+  };
+
+  // ── Label editing handlers ─────────────────────────────────────────────────
+
+  const startEditingLabel = () => {
+    setEditLabelValue(capture?.label || '');
+    setIsEditingLabel(true);
+    // Focus input after render
+    setTimeout(() => labelInputRef.current?.focus(), 0);
+  };
+
+  const cancelEditingLabel = () => {
+    setIsEditingLabel(false);
+    setEditLabelValue('');
+  };
+
+  const saveLabel = async () => {
+    const trimmed = editLabelValue.trim();
+    if (!trimmed || !captureId) {
+      cancelEditingLabel();
+      return;
+    }
+    // Skip save if unchanged
+    if (trimmed === (capture?.label || '')) {
+      cancelEditingLabel();
+      return;
+    }
+    try {
+      setLabelSaving(true);
+      const updated = await updateCaptureLabel(captureId, trimmed);
+      setCapture((prev) => prev ? { ...prev, label: updated.label } : prev);
+      setIsEditingLabel(false);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLabelSaving(false);
+    }
+  };
+
+  const handleLabelKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      saveLabel();
+    } else if (e.key === 'Escape') {
+      cancelEditingLabel();
     }
   };
 
@@ -164,9 +230,59 @@ export function CaptureDetailPage() {
         <>
           <div className="mb-6">
             <div className="flex items-center gap-3 mb-2">
-              <h1 className="text-xl font-bold text-[var(--text-primary,#1B3139)]">
-                {capture.label || 'Untitled Capture'}
-              </h1>
+              {/* ── Inline label editing ─────────────────────────────────── */}
+              {isEditingLabel ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    ref={labelInputRef}
+                    type="text"
+                    value={editLabelValue}
+                    onChange={(e) => setEditLabelValue(e.target.value)}
+                    onKeyDown={handleLabelKeyDown}
+                    onBlur={saveLabel}
+                    disabled={labelSaving}
+                    maxLength={200}
+                    placeholder="Session name..."
+                    className="text-xl font-bold text-[var(--text-primary,#1B3139)]
+                               bg-[var(--surface-raised,#fff)] border border-[var(--border-focus,#2272B4)]
+                               rounded-lg px-3 py-1 min-w-[200px]
+                               focus:outline-none focus:ring-2 focus:ring-[var(--border-focus,#2272B4)]
+                               disabled:opacity-50"
+                  />
+                  <button
+                    type="button"
+                    onClick={saveLabel}
+                    disabled={labelSaving}
+                    className="p-1.5 rounded-md text-[var(--accent-success,#00A972)]
+                               hover:bg-[var(--accent-success-subtle,#dcfce7)] transition-colors duration-100"
+                    aria-label="Save label"
+                  >
+                    <Check className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelEditingLabel}
+                    disabled={labelSaving}
+                    className="p-1.5 rounded-md text-[var(--text-secondary,#5A6F77)]
+                               hover:bg-[var(--surface-tertiary,#EEEDE9)] transition-colors duration-100"
+                    aria-label="Cancel editing"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={startEditingLabel}
+                  className="group inline-flex items-center gap-2 hover:opacity-80 transition-opacity duration-100"
+                  aria-label="Edit session label"
+                >
+                  <h1 className="text-xl font-bold text-[var(--text-primary,#1B3139)]">
+                    {capture.label || 'Untitled Capture'}
+                  </h1>
+                  <Pencil className="w-4 h-4 text-[var(--text-secondary,#5A6F77)] opacity-0 group-hover:opacity-100 transition-opacity duration-200" />
+                </button>
+              )}
               <StatusBadge state={capture.state} />
             </div>
 
@@ -223,7 +339,7 @@ export function CaptureDetailPage() {
               <EmptyState
                 icon={<Clock className="w-7 h-7" />}
                 title="No uploads yet"
-                description="Files will appear here as they are captured from the paired iPhone."
+                description="Files will appear here as they are captured from the paired device."
               />
             ) : (
               <div className="space-y-1">
