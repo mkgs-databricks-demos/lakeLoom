@@ -137,6 +137,7 @@
 		A0020A01A001A001A001A001 /* AudioRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0010A01A001A001A001A001 /* AudioRecorder.swift */; };
 		A0020A02A002A002A002A002 /* AudioRecordingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0010A02A002A002A002A002 /* AudioRecordingEngine.swift */; };
 		A0020A03A003A003A003A003 /* LiveAudioRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0010A03A003A003A003A003 /* LiveAudioRecorder.swift */; };
+		A0020A04A004A004A004A004 /* EngineAudioRecordingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0010A04A004A004A004A004 /* EngineAudioRecordingEngine.swift */; };
 		A0020A11A011A011A011A011 /* FakeAudioRecordingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0010A11A011A011A011A011 /* FakeAudioRecordingEngine.swift */; };
 		A0020A12A012A012A012A012 /* LiveAudioRecorderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0010A12A012A012A012A012 /* LiveAudioRecorderTests.swift */; };
 		B0020A01B001B001B001B001 /* PendingUpload.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010A01B001B001B001B001 /* PendingUpload.swift */; };
@@ -352,6 +353,7 @@
 		A0010A01A001A001A001A001 /* AudioRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecorder.swift; sourceTree = "<group>"; };
 		A0010A02A002A002A002A002 /* AudioRecordingEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecordingEngine.swift; sourceTree = "<group>"; };
 		A0010A03A003A003A003A003 /* LiveAudioRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveAudioRecorder.swift; sourceTree = "<group>"; };
+		A0010A04A004A004A004A004 /* EngineAudioRecordingEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineAudioRecordingEngine.swift; sourceTree = "<group>"; };
 		A0010A11A011A011A011A011 /* FakeAudioRecordingEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeAudioRecordingEngine.swift; sourceTree = "<group>"; };
 		A0010A12A012A012A012A012 /* LiveAudioRecorderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveAudioRecorderTests.swift; sourceTree = "<group>"; };
 		B0010A01B001B001B001B001 /* PendingUpload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingUpload.swift; sourceTree = "<group>"; };
@@ -750,6 +752,7 @@
 			children = (
 				A0010A01A001A001A001A001 /* AudioRecorder.swift */,
 				A0010A02A002A002A002A002 /* AudioRecordingEngine.swift */,
+				A0010A04A004A004A004A004 /* EngineAudioRecordingEngine.swift */,
 				A0010A03A003A003A003A003 /* LiveAudioRecorder.swift */,
 			);
 			path = Audio;
@@ -1306,6 +1309,7 @@
 				C0020A02C002C002C002C002 /* FileSHA256.swift in Sources */,
 				C0020A03C003C003C003C003 /* LiveCaptureService.swift in Sources */,
 				A0020A03A003A003A003A003 /* LiveAudioRecorder.swift in Sources */,
+				A0020A04A004A004A004A004 /* EngineAudioRecordingEngine.swift in Sources */,
 				E0020A03E003E003E003E003 /* LivePhotoCapture.swift in Sources */,
 				B0020A05B005B005B005B005 /* LiveUploadCoordinator.swift in Sources */,
 				B0020A03B003B003B003B003 /* MultipartFormBuilder.swift in Sources */,

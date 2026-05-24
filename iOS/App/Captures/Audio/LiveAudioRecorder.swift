@@ -32,7 +32,15 @@ public actor LiveAudioRecorder: AudioRecorder {
     public init(
         logger: AppLogger = AppLogger(category: .capture)
     ) {
-        self.engine = LiveAudioRecordingEngine()
+        // PR 9a: swap the default backend from
+        // `LiveAudioRecordingEngine` (AVAudioRecorder) →
+        // `EngineAudioRecordingEngine` (AVAudioEngine + AVAudioFile +
+        // AVAssetExportSession). The state-machine / file-layout
+        // / error-mapping surface here is unchanged — only the
+        // engine impl moves. PR 9b will extend EngineAudioRecordingEngine
+        // with a live-buffer subscription that the speech
+        // recognizer reads from.
+        self.engine = EngineAudioRecordingEngine()
         self.logger = logger
         self.baseDirectoryProvider = Self.defaultApplicationSupportDirectory
         self.nowProvider = Date.init
