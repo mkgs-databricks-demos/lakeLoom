@@ -24,6 +24,12 @@ public actor LiveSpeechTranscriber: SpeechTranscriber {
     /// 0.7s — adjust if a future tuning pass shows a different
     /// optimum.
     private let pauseThresholdSeconds: TimeInterval
+    /// File size above which an empty recognizer result triggers a
+    /// `speech.transcribe.quiet_audio_suspected` warning log. 32 KB
+    /// covers any ~3s+ recording at our AAC bitrate — anything
+    /// smaller could legitimately be silence; anything larger almost
+    /// certainly has audio content the recognizer should have heard.
+    private let quietAudioByteThreshold: Int64
 
     /// In-flight recognition task. Held so a new transcribe call can
     /// cancel any prior recognition cleanly. Production wiring runs
@@ -33,9 +39,11 @@ public actor LiveSpeechTranscriber: SpeechTranscriber {
 
     public init(
         pauseThresholdSeconds: TimeInterval = PhraseGrouper.defaultPauseThresholdSeconds,
+        quietAudioByteThreshold: Int64 = 32_000,
         logger: AppLogger = AppLogger(category: .capture)
     ) {
         self.pauseThresholdSeconds = pauseThresholdSeconds
+        self.quietAudioByteThreshold = quietAudioByteThreshold
         self.logger = logger
     }
 
@@ -73,11 +81,16 @@ public actor LiveSpeechTranscriber: SpeechTranscriber {
             )
         }
 
+        let onDeviceSupported = recognizer.supportsOnDeviceRecognition
+        let fileSizeBytes: Int64 = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int64) ?? 0
+
         await logger.debug(
             "speech.transcribe.attempt",
             metadata: [
                 "url": .string(fileURL.lastPathComponent),
-                "locale": .string(chosenLocale.identifier)
+                "locale": .string(chosenLocale.identifier),
+                "on_device_supported": .string(String(onDeviceSupported)),
+                "file_bytes": .int(fileSizeBytes)
             ]
         )
 
@@ -97,6 +110,7 @@ public actor LiveSpeechTranscriber: SpeechTranscriber {
 
         let actorLogger = logger
         let pauseThresholdSeconds = self.pauseThresholdSeconds
+        let quietAudioByteThreshold = self.quietAudioByteThreshold
         let stream = AsyncThrowingStream<TranscriptSegment, Error> { continuation in
             let task = recognizer.recognitionTask(with: request) { result, error in
                 if let error {
@@ -119,6 +133,8 @@ public actor LiveSpeechTranscriber: SpeechTranscriber {
                 }
                 guard let result else { return }
                 guard result.isFinal else { return }
+                let bestText = result.bestTranscription.formattedString
+                let rawSegmentCount = result.bestTranscription.segments.count
                 let segments = Self.segments(
                     from: result.bestTranscription,
                     pauseThresholdSeconds: pauseThresholdSeconds
@@ -126,13 +142,30 @@ public actor LiveSpeechTranscriber: SpeechTranscriber {
                 for segment in segments {
                     continuation.yield(segment)
                 }
+                let trimmedPreview = bestText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let preview = trimmedPreview.isEmpty
+                    ? "(empty)"
+                    : String(trimmedPreview.prefix(60)) + (trimmedPreview.count > 60 ? "…" : "")
+                let suspectedQuietAudio = trimmedPreview.isEmpty && fileSizeBytes > quietAudioByteThreshold
                 Task {
                     await actorLogger.info(
                         "speech.transcribe.ok",
                         metadata: [
-                            "segments": .int(Int64(segments.count))
+                            "phrases": .int(Int64(segments.count)),
+                            "raw_word_segments": .int(Int64(rawSegmentCount)),
+                            "preview": .string(preview)
                         ]
                     )
+                    if suspectedQuietAudio {
+                        await actorLogger.warning(
+                            "speech.transcribe.quiet_audio_suspected",
+                            metadata: [
+                                "file_bytes": .int(fileSizeBytes),
+                                "raw_word_segments": .int(Int64(rawSegmentCount)),
+                                "hint": .string("on-device VAD likely filtered silence — audio file has real bytes but recognizer produced no text")
+                            ]
+                        )
+                    }
                 }
                 continuation.finish()
             }
