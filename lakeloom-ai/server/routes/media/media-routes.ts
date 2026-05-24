@@ -102,7 +102,7 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
     // Returns upload metadata (no file content).
     app.get('/api/media/:upload_id/metadata', auth, async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const uploadId = req.params.upload_id;
+        const uploadId = req.params.upload_id as string;
 
         const { rows } = await lakebase.query(
           `SELECT id, capture_session_id, kind, mime_type, original_filename,
@@ -139,7 +139,7 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
     // Stream file content from UC Volume. Supports HTTP Range requests.
     app.get('/api/media/:upload_id', auth, async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const uploadId = req.params.upload_id;
+        const uploadId = req.params.upload_id as string;
 
         // 1. Look up upload record
         const { rows } = await lakebase.query(
@@ -285,7 +285,7 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
     // List all uploads for a capture session (used by media panel).
     app.get('/api/media/session/:capture_session_id', auth, async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const captureSessionId = req.params.capture_session_id;
+        const captureSessionId = req.params.capture_session_id as string;
 
         const { rows } = await lakebase.query(
           `SELECT id, kind, mime_type, original_filename, size_bytes, uploaded_at
