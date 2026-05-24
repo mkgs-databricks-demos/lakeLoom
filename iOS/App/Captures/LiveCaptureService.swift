@@ -498,7 +498,14 @@ public actor LiveCaptureService: CaptureService {
                 recordingStartedAt: startedAt,
                 segments: stream,
                 source: "on_device",
-                model: "sf_speech_recognizer",
+                // Bumped from "sf_speech_recognizer" (PR 8b's
+                // word-level emission) to "_phrased" so analytics on
+                // transcript_events_raw can cleanly separate the
+                // 25-events-per-recording word-level history from the
+                // new pause-grouped phrase-level rows. Source stays
+                // "on_device" — same engine, just different output
+                // shape.
+                model: "sf_speech_recognizer_phrased",
                 language: "en-US"
             )
         }
