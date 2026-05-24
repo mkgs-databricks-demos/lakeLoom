@@ -413,6 +413,25 @@ public actor LiveCaptureService: CaptureService {
             createdAt: nowProvider()
         )
 
+        // Subscribe to the upload coordinator's state stream BEFORE
+        // calling `enqueue`. The coordinator's `stateUpdates()` is
+        // not buffered — once `enqueue` fires its initial `.queued`
+        // event (and the worker loop continues straight into
+        // `.uploading` / `.succeeded`), any of those transitions
+        // delivered into an empty subscriber set are gone for good.
+        //
+        // The original v1 ordering subscribed *after* enqueue AND
+        // after `await liveStreamingTask?.value`. For a fast upload
+        // overlapping a slower recognizer drain (~1.5 s sleep), the
+        // upload could land in `.succeeded` before the subscription
+        // existed — the watcher would then wait forever, the server
+        // never got patched to `completed`, the user's "uploading…"
+        // UI never cleared, and the upload stayed in the queue
+        // forever (re-restored every cold launch, eventually
+        // accumulating into the double-digit `upload.queue.restored`
+        // counts we observed on real device).
+        let uploadStream = await uploadCoordinator.stateUpdates()
+
         do {
             try await uploadCoordinator.enqueue(pending)
         } catch let error as UploadCoordinatorError {
@@ -454,17 +473,9 @@ public actor LiveCaptureService: CaptureService {
             )
         }
 
-        // Subscribe to the upload coordinator's state stream
-        // synchronously inside the actor BEFORE returning. That
-        // guarantees the watcher has its subscription registered
-        // by the time `stopCapture()` returns — otherwise the
-        // upload coordinator could emit a `.succeeded` event into
-        // an empty subscriber set and the watcher would wait
-        // forever for a transition that already happened.
-        let stream = await uploadCoordinator.stateUpdates()
         transition(to: .finalizing(context, pendingUploadIDs: [pending.id]))
         await persistFinalizingIfNeeded(context: context, pending: [pending.id])
-        spawnWatcher(stream: stream, for: context, pendingUploadIDs: [pending.id])
+        spawnWatcher(stream: uploadStream, for: context, pendingUploadIDs: [pending.id])
     }
 
     public func cancelCapture() async throws {
