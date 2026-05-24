@@ -48,14 +48,6 @@ const KIND_TO_VOLUME_KEY: Record<string, string> = {
   document: 'documents',
 };
 
-// Maps upload `kind` to the env var holding the volume base path
-const KIND_TO_ENV_VAR: Record<string, string> = {
-  audio: 'LAKELOOM_AUDIO_VOLUME_PATH',
-  screenshot: 'LAKELOOM_SCREENSHOT_VOLUME_PATH',
-  photo: 'LAKELOOM_PHOTO_VOLUME_PATH',
-  document: 'LAKELOOM_DOCUMENT_VOLUME_PATH',
-};
-
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function uploadNotFound(uploadId: string): AppError {
@@ -91,9 +83,7 @@ function parseRangeHeader(rangeHeader: string, fileSize: number): { start: numbe
  * so we strip the first 4 path segments.
  */
 function getRelativePath(volumePath: string): string {
-  // /Volumes/catalog/schema/volume/relative/path/file.ext
   const parts = volumePath.split('/').filter(Boolean);
-  // parts[0] = "Volumes", parts[1] = catalog, parts[2] = schema, parts[3] = volume
   if (parts.length <= 4) {
     throw new Error(`Invalid volume path (too short): ${volumePath}`);
   }
@@ -115,11 +105,11 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
         const uploadId = req.params.upload_id;
 
         const { rows } = await lakebase.query(
-          \`SELECT id, capture_session_id, kind, mime_type, original_filename,
+          `SELECT id, capture_session_id, kind, mime_type, original_filename,
                   volume_path, size_bytes, sha256_hex, device_id, client_type,
                   created_by_paired_session_id, created_by_user_id, uploaded_at
            FROM app.uploads
-           WHERE id = $1\`,
+           WHERE id = $1`,
           [uploadId],
         );
 
@@ -147,23 +137,15 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
 
     // ── GET /api/media/:upload_id ────────────────────────────────────────
     // Stream file content from UC Volume. Supports HTTP Range requests.
-    //
-    // Response headers:
-    //   Content-Type: <mime_type from upload record>
-    //   Content-Length: <size or range length>
-    //   Accept-Ranges: bytes
-    //   Content-Disposition: inline; filename="<original_filename or uploadId.ext>"
-    //   Content-Range: bytes START-END/TOTAL (only for 206)
-    //
     app.get('/api/media/:upload_id', auth, async (req: Request, res: Response, next: NextFunction) => {
       try {
         const uploadId = req.params.upload_id;
 
         // 1. Look up upload record
         const { rows } = await lakebase.query(
-          \`SELECT id, kind, mime_type, original_filename, volume_path, size_bytes
+          `SELECT id, kind, mime_type, original_filename, volume_path, size_bytes
            FROM app.uploads
-           WHERE id = $1\`,
+           WHERE id = $1`,
           [uploadId],
         );
 
@@ -175,7 +157,7 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
         const volumePath = upload.volume_path as string;
         const mimeType = upload.mime_type as string;
         const sizeBytes = upload.size_bytes as number;
-        const originalFilename = (upload.original_filename as string) || `${uploadId}`;
+        const originalFilename = (upload.original_filename as string) || String(uploadId);
         const kind = upload.kind as string;
         const volumeKey = KIND_TO_VOLUME_KEY[kind];
 
@@ -184,7 +166,7 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
             type: ErrorTypes.INTERNAL_ERROR,
             status: 500,
             title: 'Unknown upload kind',
-            detail: \`Upload kind '\${kind}' has no associated volume.\`,
+            detail: `Upload kind '${kind}' has no associated volume.`,
           });
         }
 
@@ -192,8 +174,7 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
         const relativePath = getRelativePath(volumePath);
 
         // 3. Build the internal AppKit files download URL
-        // The AppKit files plugin auto-registers routes at /api/files/:volumeKey/download
-        const downloadUrl = \`/api/files/\${volumeKey}/download?path=\${encodeURIComponent(relativePath)}\`;
+        const downloadUrl = `/api/files/${volumeKey}/download?path=${encodeURIComponent(relativePath)}`;
 
         // 4. Handle Range requests
         const rangeHeader = req.headers.range;
@@ -201,22 +182,22 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
         // Set common headers
         res.setHeader('Accept-Ranges', 'bytes');
         res.setHeader('Content-Type', mimeType);
-        res.setHeader('Content-Disposition', \`inline; filename="\${originalFilename}"\`);
+        res.setHeader('Content-Disposition', `inline; filename="${originalFilename}"`);
         res.setHeader('Cache-Control', 'private, max-age=3600');
 
         if (rangeHeader && sizeBytes > 0) {
           // Parse range
           const range = parseRangeHeader(rangeHeader, sizeBytes);
           if (!range) {
-            res.status(416).setHeader('Content-Range', \`bytes */\${sizeBytes}\`).end();
+            res.status(416).setHeader('Content-Range', `bytes */${sizeBytes}`).end();
             return;
           }
 
+          const port = process.env.PORT || '8000';
           // For range requests, we proxy via internal fetch with Range header
-          const internalResponse = await fetch(\`http://localhost:\${process.env.PORT || 8000}\${downloadUrl}\`, {
+          const internalResponse = await fetch(`http://localhost:${port}${downloadUrl}`, {
             headers: {
-              'Range': \`bytes=\${range.start}-\${range.end}\`,
-              // Forward auth headers for internal request
+              'Range': `bytes=${range.start}-${range.end}`,
               ...(req.headers['x-forwarded-user'] ? { 'x-forwarded-user': req.headers['x-forwarded-user'] as string } : {}),
               ...(req.headers['x-forwarded-email'] ? { 'x-forwarded-email': req.headers['x-forwarded-email'] as string } : {}),
               ...(req.headers.cookie ? { cookie: req.headers.cookie as string } : {}),
@@ -224,13 +205,12 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
           });
 
           if (!internalResponse.ok && internalResponse.status !== 206) {
-            // Fallback: serve full file without range if internal proxy fails
-            console.warn(\`[media] Range proxy failed (\${internalResponse.status}), falling back to full stream\`);
+            console.warn('[media] Range proxy failed (' + internalResponse.status + '), falling back to full stream');
           }
 
           const contentLength = range.end - range.start + 1;
           res.status(206);
-          res.setHeader('Content-Range', \`bytes \${range.start}-\${range.end}/\${sizeBytes}\`);
+          res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${sizeBytes}`);
           res.setHeader('Content-Length', contentLength.toString());
 
           if (internalResponse.body) {
@@ -257,7 +237,8 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
           // Full file — proxy without Range header
           res.setHeader('Content-Length', sizeBytes.toString());
 
-          const internalResponse = await fetch(\`http://localhost:\${process.env.PORT || 8000}\${downloadUrl}\`, {
+          const port = process.env.PORT || '8000';
+          const internalResponse = await fetch(`http://localhost:${port}${downloadUrl}`, {
             headers: {
               ...(req.headers['x-forwarded-user'] ? { 'x-forwarded-user': req.headers['x-forwarded-user'] as string } : {}),
               ...(req.headers['x-forwarded-email'] ? { 'x-forwarded-email': req.headers['x-forwarded-email'] as string } : {}),
@@ -270,7 +251,7 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
               type: ErrorTypes.INTERNAL_ERROR,
               status: 502,
               title: 'Volume read failed',
-              detail: \`Failed to read file from volume (HTTP \${internalResponse.status}).\`,
+              detail: `Failed to read file from volume (HTTP ${internalResponse.status}).`,
             });
           }
 
@@ -307,10 +288,10 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
         const captureSessionId = req.params.capture_session_id;
 
         const { rows } = await lakebase.query(
-          \`SELECT id, kind, mime_type, original_filename, size_bytes, uploaded_at
+          `SELECT id, kind, mime_type, original_filename, size_bytes, uploaded_at
            FROM app.uploads
            WHERE capture_session_id = $1
-           ORDER BY uploaded_at ASC\`,
+           ORDER BY uploaded_at ASC`,
           [captureSessionId],
         );
 
