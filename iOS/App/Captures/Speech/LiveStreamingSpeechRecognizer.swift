@@ -14,19 +14,29 @@ import Foundation
 /// pass handles the authoritative transcript per Genie's AI
 /// pipeline note.
 ///
-/// Emission strategy (v1):
-/// * `shouldReportPartialResults = true` so we get incremental
-///   callbacks as recognition progresses.
-/// * Each callback delivers `bestTranscription` containing all
-///   recognized words so far.
-/// * We run those words through ``PhraseGrouper`` (pause-based +
-///   sentence-punctuation-based) and emit any phrases past what
-///   we've already yielded. On non-final callbacks we hold back
-///   the last phrase (it may still grow); on final we emit
-///   everything.
-/// * Tracking is by phrase count rather than start-time so minor
-///   word-boundary revisions in earlier phrases don't cause
-///   re-emission.
+/// Emission strategy (v2 — 2026-05-24, after the "silent reset" bug):
+/// * `shouldReportPartialResults = true` for diagnostic visibility,
+///   but we only **emit** on utterance boundaries — never on
+///   mid-utterance partials. Stale partials caused content drops in
+///   v1 (see the "silent reset" comment in `processResult`).
+/// * A utterance boundary is detected by **either**:
+///   - `isFinal=true` (Apple's explicit signal), or
+///   - The new callback's first-segment `timestamp` is greater than
+///     the previous callback's first-segment `timestamp` (Apple
+///     silently rolled `bestTranscription` to a new utterance — a
+///     real device behavior we observed where the recognizer
+///     "resets" between utterances WITHOUT firing isFinal).
+/// * On every detected boundary we emit the **complete** previous
+///   utterance through `PhraseGrouper`, so every spoken word lands
+///   in exactly one `TranscriptSegment` event. The trailing utterance
+///   (no successor to trigger a boundary) flushes from `finishStream`
+///   when the buffer drain task closes the stream.
+///
+/// Trade-off: a phrase only emits when the **next** utterance begins
+/// (or the session ends). For a 30 s monologue with no pauses, this
+/// means one big emission at session end — fine for the downstream
+/// document-generation pipeline (correctness > liveness for the FDE
+/// demo), tunable later if in-session UX needs sub-utterance updates.
 public actor LiveStreamingSpeechRecognizer: StreamingSpeechRecognizer {
 
     private let logger: AppLogger
@@ -37,25 +47,25 @@ public actor LiveStreamingSpeechRecognizer: StreamingSpeechRecognizer {
     private var bufferDrainTask: Task<Void, Never>?
     private var segmentContinuation: AsyncThrowingStream<TranscriptSegment, Error>.Continuation?
     private var didStop = false
-    /// Highest phrase start time we've already yielded. Used to
-    /// dedupe across multiple result callbacks. Robust to two Apple
-    /// behaviors we observed:
-    ///   1. `bestTranscription` is cumulative across callbacks
-    ///      (start times increase monotonically — easy case).
-    ///   2. `bestTranscription` resets per utterance with
-    ///      utterance-relative or session-absolute start times
-    ///      — start times still grow monotonically across utterances
-    ///      because the recorder's clock keeps advancing.
-    /// Either way, we only emit a phrase when its start exceeds
-    /// what we've emitted so far.
-    private var maxEmittedStartTime: Double = -.infinity
     /// Monotonic segment_index counter assigned to emitted phrases.
     private var globalSegmentIndex: Int = 0
     /// Count of times the recognizer fired `isFinal=true`. Buffer
     /// mode fires this at every utterance boundary, not just at
-    /// endAudio() — so multiple finals per session is normal.
-    /// Logged for diagnostic visibility.
+    /// endAudio() — but we observed real-device runs where it
+    /// silently resets `bestTranscription` between utterances
+    /// **without** firing isFinal. Logged for diagnostic visibility.
     private var finalCallbackCount: Int = 0
+
+    /// Most-recent `bestTranscription` we've seen (as `WordTiming`s),
+    /// held until the next utterance boundary so we can emit the
+    /// complete utterance once we know it's done. Cleared after
+    /// emission.
+    private var pendingWords: [WordTiming] = []
+    /// First-segment `timestamp` from the most-recent callback. A
+    /// later callback whose first-segment timestamp exceeds this is
+    /// a silent-reset boundary (a new utterance started). Reset to
+    /// `nil` after emission.
+    private var lastUtteranceFirstStart: Double?
 
     public init(logger: AppLogger = AppLogger(category: .capture)) {
         self.logger = logger
@@ -104,9 +114,10 @@ public actor LiveStreamingSpeechRecognizer: StreamingSpeechRecognizer {
         self.request = requestLocal
 
         // Reset per-session state.
-        maxEmittedStartTime = -.infinity
         globalSegmentIndex = 0
         finalCallbackCount = 0
+        pendingWords = []
+        lastUtteranceFirstStart = nil
         didStop = false
 
         let (stream, continuation) = AsyncThrowingStream<TranscriptSegment, Error>.makeStream()
@@ -243,52 +254,79 @@ public actor LiveStreamingSpeechRecognizer: StreamingSpeechRecognizer {
             )
         }
 
-        // Emission strategy: for each phrase from Apple, emit it if
-        // its startTime exceeds the highest we've emitted so far.
-        // This handles BOTH possible Apple behaviors:
-        //   (a) bestTranscription cumulative — start times grow
-        //       monotonically; we just emit new ones.
-        //   (b) bestTranscription per-utterance — each callback
-        //       brings fresh phrases, but timestamps are
-        //       session-absolute (relative to recorder start), so
-        //       new utterances naturally have higher start times.
+        // Utterance-boundary emission. We never emit mid-utterance —
+        // partials get rewritten or silently reset by Apple, which
+        // dropped content in the v1 emission strategy. Two boundary
+        // signals:
+        //   1. **Explicit:** `isFinal=true`.
+        //   2. **Silent reset:** the new callback's first-segment
+        //      `startTimeSeconds` is strictly greater than the
+        //      previous callback's first-segment value. Apple
+        //      rolled `bestTranscription` to a fresh utterance
+        //      without firing isFinal. The previous `pendingWords`
+        //      is the now-completed utterance — flush it.
         //
-        // For non-final callbacks, hold back the LAST phrase unless
-        // it ends with sentence punctuation — it may still grow
-        // and we don't want to emit then re-emit different text.
-        for (i, phrase) in phrases.enumerated() {
-            let isLastPhrase = i == phrases.count - 1
-            let endsInSentencePunct = phrase.text
-                .trimmingCharacters(in: .whitespaces)
-                .last.map { ".!?".contains($0) } ?? false
-            let isStable = isFinal || !isLastPhrase || endsInSentencePunct
-            guard isStable else { continue }
-            guard phrase.startTimeSeconds > maxEmittedStartTime else { continue }
+        // Within an utterance, the first-segment start stays equal
+        // across callbacks (it's anchored to the utterance's audio
+        // start time), so equal-first-start callbacks just refine
+        // `pendingWords` without emitting.
+        if !words.isEmpty {
+            let currentFirstStart = words[0].startTimeSeconds
+            if let lastStart = lastUtteranceFirstStart, currentFirstStart > lastStart {
+                emitUtterance(pendingWords)
+            }
+            lastUtteranceFirstStart = currentFirstStart
+        }
+        pendingWords = words
 
-            let yielded = TranscriptSegment(
+        if isFinal {
+            // Explicit utterance-end. Flush whatever we have, then
+            // clear the boundary watermark so the next utterance
+            // begins fresh.
+            emitUtterance(pendingWords)
+            pendingWords = []
+            lastUtteranceFirstStart = nil
+        }
+
+        // Do NOT finish the segment stream on isFinal=true. Apple's
+        // buffer mode fires isFinal at every utterance boundary, not
+        // just at endAudio; closing on the first one drops every
+        // utterance after (the original PR 9b lifecycle bug). The
+        // buffer drain task closes the stream once the audio source
+        // ends + endAudio is called.
+    }
+
+    /// Run `pendingWords` through `PhraseGrouper` and emit each
+    /// resulting phrase as its own `TranscriptSegment`. No-op for
+    /// empty word lists.
+    private func emitUtterance(_ words: [WordTiming]) {
+        guard !words.isEmpty else { return }
+        let phrases = PhraseGrouper.phrases(from: words)
+        for phrase in phrases {
+            let segment = TranscriptSegment(
                 text: phrase.text,
                 confidence: phrase.confidence,
                 segmentIndex: globalSegmentIndex,
                 durationMs: phrase.durationMs,
                 startTimeSeconds: phrase.startTimeSeconds
             )
-            segmentContinuation?.yield(yielded)
+            segmentContinuation?.yield(segment)
             globalSegmentIndex += 1
-            maxEmittedStartTime = phrase.startTimeSeconds
         }
-
-        // CRITICAL: do NOT finish the segment stream on isFinal=true.
-        // In buffer mode with shouldReportPartialResults=true, Apple
-        // fires isFinal at every utterance boundary, not just at
-        // endAudio. Closing on the first one would drop everything
-        // after — which is exactly the bug we saw in PR 9b's first
-        // device test (only the first utterance landed in
-        // transcript_events_raw). The drain task closes the stream
-        // once the buffer source ends + we've called endAudio.
     }
 
     private func finishStream(error: NSError?) async {
         guard segmentContinuation != nil else { return }
+        // Flush the trailing utterance. If Apple never delivered a
+        // terminal `isFinal=true` after `endAudio()` (e.g., the
+        // drain-task timeout fired first), the last utterance's
+        // words are still sitting in `pendingWords`. Boundary
+        // detection isn't going to fire again — the stream is
+        // closing — so do the emit here so no content is lost.
+        emitUtterance(pendingWords)
+        pendingWords = []
+        lastUtteranceFirstStart = nil
+
         let continuation = segmentContinuation
         segmentContinuation = nil
         task?.cancel()
