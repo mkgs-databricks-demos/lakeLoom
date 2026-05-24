@@ -13,6 +13,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router';
 import { ArrowLeft, Clock, Pencil, Check, X } from 'lucide-react';
 import { StatusBadge, TimeAgo, Duration, FileIconContainer, EmptyState, ConfirmDialog } from '../../components';
+import { MediaPanel } from '../../components/media';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -114,6 +115,9 @@ export function CaptureDetailPage() {
   const [editLabelValue, setEditLabelValue] = useState('');
   const [labelSaving, setLabelSaving] = useState(false);
   const labelInputRef = useRef<HTMLInputElement>(null);
+
+  // Media viewer state
+  const [selectedUpload, setSelectedUpload] = useState<Upload | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -346,8 +350,12 @@ export function CaptureDetailPage() {
                 {uploads.map((upload) => (
                   <div
                     key={upload.id}
-                    className="flex items-center gap-3 px-4 py-3 rounded-lg
-                               hover:bg-[var(--surface-tertiary,#EEEDE9)] transition-colors duration-100"
+                    onClick={() => setSelectedUpload(selectedUpload?.id === upload.id ? null : upload)}
+                    className={`flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer
+                               transition-colors duration-100
+                               ${selectedUpload?.id === upload.id
+                                 ? 'bg-[var(--accent-info-subtle,#dbeafe)] border border-[var(--accent-info,#2272B4)]'
+                                 : 'hover:bg-[var(--surface-tertiary,#EEEDE9)]'}`}
                   >
                     {/* Time offset */}
                     <span className="w-12 text-xs text-[var(--text-secondary,#5A6F77)] font-mono text-right flex-shrink-0">
@@ -373,6 +381,25 @@ export function CaptureDetailPage() {
                     </span>
                   </div>
                 ))}
+              </div>
+            )}
+
+            {/* ── Media viewer panel ──────────────────────────────────────── */}
+            {selectedUpload && (
+              <div className="mt-6 animate-[fadeIn_200ms_var(--ease-out)]">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-medium text-[var(--text-primary,#1B3139)]">
+                    {selectedUpload.original_filename || 'Media Preview'}
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedUpload(null)}
+                    className="text-xs text-[var(--text-secondary,#5A6F77)] hover:text-[var(--text-primary,#1B3139)] transition-colors"
+                  >
+                    Close preview
+                  </button>
+                </div>
+                <MediaPanel upload={selectedUpload} />
               </div>
             )}
           </div>
