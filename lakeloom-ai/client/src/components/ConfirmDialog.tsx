@@ -74,10 +74,10 @@ export function ConfirmDialog({
         if (e.target === dialogRef.current) onClose();
       }}
       className={cn(
-        // Full-viewport overlay with grid centering — reliable across all browsers
-        // showModal() places dialog in top-layer; we override UA positioning with grid.
+        // hidden by default; open:grid activates only when showModal() adds [open] attr.
+        // This prevents the grid display from overriding the native <dialog> display:none.
         'fixed inset-0 z-50 m-0 p-4 w-screen h-screen max-w-none max-h-none',
-        'bg-transparent grid place-items-center',
+        'bg-transparent hidden open:grid place-items-center',
         'backdrop:bg-black/40',
       )}
     >
