@@ -36,14 +36,29 @@ struct LakeloomApp: App {
             deviceIdentity: deviceIdentity
         )
         let endpointResolver = LiveAppEndpointResolver()
+        // PR 9b: route ProjectService through LakeloomAppClient so
+        // `/api/v1/projects*` calls carry the Layer 2 headers the
+        // server's `dualAuth` middleware now requires. Without this,
+        // bare-SPN requests get 401 — see
+        // `architecture/hey_isaac/2026-05-24_ios-layer2-on-project-endpoints.md`.
+        let projectAPI = LiveProjectAPIClient(lakeloomApp: lakeloomApp)
         let projects = ProjectService(
             auth: auth,
-            endpointResolver: endpointResolver
+            endpointResolver: endpointResolver,
+            api: projectAPI
         )
         let captureAPI = LiveCaptureAPIClient(lakeloomApp: lakeloomApp)
         let transcriptEvents = LiveTranscriptEventsClient(lakeloomApp: lakeloomApp)
         let speechTranscriber = LiveSpeechTranscriber()
         let transcriptStreamer = LiveTranscriptStreamer(events: transcriptEvents)
+        // PR 9b: share one EngineAudioRecordingEngine instance —
+        // LiveAudioRecorder uses it as the recording backend, AND
+        // LiveCaptureService subscribes to its live PCM buffer
+        // stream for the streaming speech recognizer. Single mic
+        // owner, two consumers (file writer + recognizer) feeding
+        // off the same input tap.
+        let engineRecordingEngine = EngineAudioRecordingEngine()
+        let streamingRecognizer = LiveStreamingSpeechRecognizer()
 
         // Upload pipeline. Worker loop is started from the App's
         // `.task` modifier below so the queue rehydration happens on
@@ -84,12 +99,14 @@ struct LakeloomApp: App {
             }
             captureService = LiveCaptureService(
                 captureAPI: captureAPI,
-                recorder: LiveAudioRecorder(),
+                recorder: LiveAudioRecorder(engine: engineRecordingEngine),
                 uploadCoordinator: uploadCoordinator,
                 contextStore: contextStore,
                 deviceIdentity: deviceIdentity,
                 speechTranscriber: speechTranscriber,
                 transcriptStreamer: transcriptStreamer,
+                streamingRecognizer: streamingRecognizer,
+                audioBufferSource: engineRecordingEngine,
                 pairedSessionIDProvider: pairedSessionIDProvider
             )
         } else {

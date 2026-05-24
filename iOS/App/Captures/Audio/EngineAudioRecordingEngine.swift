@@ -31,7 +31,7 @@ import Foundation
 ///
 /// File-size note: a 30s recording produces ~5 MB of intermediate
 /// CAF (48 kHz Float32 mono) and ~250 KB of final AAC m4a (~64 kbps).
-actor EngineAudioRecordingEngine: AudioRecordingEngine {
+actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource {
 
     private var engine: AVAudioEngine?
     private var cafWriter: AVAudioFile?
@@ -43,6 +43,11 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine {
     /// Sibling `.caf` URL (same stem, swapped extension) used as the
     /// intermediate PCM file before transcoding.
     private var intermediateURL: URL?
+    /// Live PCM buffer stream. Created on `start()`, finished on
+    /// `stop()` / `cancel()`. The speech recognizer subscribes via
+    /// ``AudioBufferSource/buffers()``. Single-consumer.
+    private var bufferStream: AsyncStream<PCMBufferEnvelope>?
+    private var bufferContinuation: AsyncStream<PCMBufferEnvelope>.Continuation?
 
     init() {}
 
@@ -106,14 +111,21 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine {
         }
 
         let counter = FrameCounter()
+        // PR 9b: also fan out audio buffers to a live stream so the
+        // speech recognizer can consume them in parallel with the
+        // file write. Single tap, two consumers — no parallel-engine
+        // race condition that bit PR 8d.
+        let (stream, streamContinuation) = AsyncStream<PCMBufferEnvelope>.makeStream()
         // The tap closure runs on a real-time audio thread. Capture
         // only Sendable references; the AVAudioFile + FrameCounter
         // are both safe to access from the tap (AVAudioFile.write is
         // documented as thread-safe for serial writes; FrameCounter
-        // wraps an NSLock).
+        // wraps an NSLock; AsyncStream.Continuation.yield is
+        // documented as thread-safe).
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { buffer, _ in
             try? writer.write(from: buffer)
             counter.add(buffer.frameLength)
+            streamContinuation.yield(PCMBufferEnvelope(buffer))
         }
 
         do {
@@ -132,6 +144,14 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine {
         self.startedAt = Date()
         self.finalURL = url
         self.intermediateURL = intermediate
+        self.bufferStream = stream
+        self.bufferContinuation = streamContinuation
+    }
+
+    // MARK: - AudioBufferSource
+
+    func buffers() async -> AsyncStream<PCMBufferEnvelope>? {
+        bufferStream
     }
 
     func stop() async throws -> Double {
@@ -148,6 +168,11 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine {
         // Dropping the AVAudioFile reference flushes + closes the
         // CAF file. AVAudioFile's destructor handles this.
         cafWriter = nil
+        // Finish the buffer stream so any consumer (live speech
+        // recognizer) drains naturally and calls request.endAudio()
+        // on its recognition request.
+        bufferContinuation?.finish()
+        bufferContinuation = nil
 
         let frames = frameCounter?.snapshot() ?? 0
         let measuredDuration = sampleRate > 0 ? Double(frames) / sampleRate : 0
@@ -180,6 +205,8 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine {
         avEngine.inputNode.removeTap(onBus: 0)
         avEngine.stop()
         cafWriter = nil
+        bufferContinuation?.finish()
+        bufferContinuation = nil
         if let intermediate = intermediateURL {
             try? FileManager.default.removeItem(at: intermediate)
         }
@@ -197,6 +224,8 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine {
         startedAt = nil
         finalURL = nil
         intermediateURL = nil
+        bufferStream = nil
+        bufferContinuation = nil
     }
 
     private func transcode(from source: URL, to destination: URL) async throws {
