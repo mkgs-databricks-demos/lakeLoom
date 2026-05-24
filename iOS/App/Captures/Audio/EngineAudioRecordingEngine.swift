@@ -29,12 +29,8 @@ import Foundation
 /// in 1-2 seconds for a 30s recording — well-tested, single API call.
 /// The intermediate CAF is temporary; only the m4a is uploaded.
 ///
-/// File-size note: a 30 s recording produces ~5 MB of intermediate
-/// CAF (48 kHz Float32 mono) and ~240 KB of final AAC m4a — the
-/// transcode below pins the encoder at 64 kbps / 16 kHz / mono,
-/// well-sized for speech and downstream STT (Whisper ingests 16 kHz
-/// mono natively). The PR 9a `AVAssetExportPresetAppleM4A` default
-/// of ~256 kbps gave us ~660 KB for 23 s of audio — 3-4× oversized.
+/// File-size note: a 30s recording produces ~5 MB of intermediate
+/// CAF (48 kHz Float32 mono) and ~250 KB of final AAC m4a (~64 kbps).
 actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource {
 
     private var engine: AVAudioEngine?
@@ -232,155 +228,18 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource {
         bufferContinuation = nil
     }
 
-    /// CAF → AAC m4a transcode with explicit voice-grade bitrate.
-    ///
-    /// Why not `AVAssetExportSession(presetName: AVAssetExportPresetAppleM4A)`:
-    /// that preset defaults to ~256 kbps AAC at the source sample
-    /// rate. For voice it's 3-4× larger than necessary — a 30 s
-    /// session would land ~900 KB instead of ~250 KB. The export
-    /// session API exposes no bitrate knob (the M4A preset is the
-    /// only audio-only preset, and its `fileLengthLimit` works
-    /// retroactively, not as an a-priori bitrate cap).
-    ///
-    /// Switching to `AVAssetReader` + `AVAssetWriter` lets us pin
-    /// the encoder at 64 kbps mono — broadcast-voice quality, well
-    /// above the 32 kbps AM-radio floor, and significantly under
-    /// what Whisper / downstream STT pipelines actually consume
-    /// (16 kHz mono ≈ 256 kbit/s PCM). Sample-rate stays at the
-    /// source rate (typically 48 kHz from the iPhone mic); the AAC
-    /// encoder handles 48 → output internally.
     private func transcode(from source: URL, to destination: URL) async throws {
+        // Ensure no stale file at the destination.
         try? FileManager.default.removeItem(at: destination)
 
         let asset = AVURLAsset(url: source)
-        let audioTrack: AVAssetTrack
-        do {
-            let tracks = try await asset.load(.tracks)
-            guard let track = tracks.first(where: { $0.mediaType == .audio }) else {
-                throw AudioRecorderError.engineFailure(reason: "transcode: no audio track in source")
-            }
-            audioTrack = track
-        } catch let error as AudioRecorderError {
-            throw error
-        } catch {
-            throw AudioRecorderError.engineFailure(reason: "transcode: load tracks: \(error.localizedDescription)")
+        guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
+            throw AudioRecorderError.engineFailure(reason: "could not create AVAssetExportSession")
         }
-
-        let reader: AVAssetReader
-        do {
-            reader = try AVAssetReader(asset: asset)
-        } catch {
-            throw AudioRecorderError.engineFailure(reason: "transcode: reader init: \(error.localizedDescription)")
-        }
-        // Pull raw 16-bit interleaved PCM out of the CAF — what
-        // the AAC encoder wants to ingest.
-        let readerOutput = AVAssetReaderTrackOutput(
-            track: audioTrack,
-            outputSettings: [
-                AVFormatIDKey: Int(kAudioFormatLinearPCM),
-                AVLinearPCMBitDepthKey: 16,
-                AVLinearPCMIsFloatKey: false,
-                AVLinearPCMIsBigEndianKey: false,
-                AVLinearPCMIsNonInterleaved: false
-            ]
-        )
-        guard reader.canAdd(readerOutput) else {
-            throw AudioRecorderError.engineFailure(reason: "transcode: can't add reader output")
-        }
-        reader.add(readerOutput)
-
-        let writer: AVAssetWriter
-        do {
-            writer = try AVAssetWriter(outputURL: destination, fileType: .m4a)
-        } catch {
-            throw AudioRecorderError.engineFailure(reason: "transcode: writer init: \(error.localizedDescription)")
-        }
-        let writerInput = AVAssetWriterInput(
-            mediaType: .audio,
-            outputSettings: [
-                AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-                AVNumberOfChannelsKey: 1,
-                AVSampleRateKey: 16_000,
-                AVEncoderBitRateKey: 64_000
-            ]
-        )
-        writerInput.expectsMediaDataInRealTime = false
-        guard writer.canAdd(writerInput) else {
-            throw AudioRecorderError.engineFailure(reason: "transcode: can't add writer input")
-        }
-        writer.add(writerInput)
-
-        guard writer.startWriting() else {
-            throw AudioRecorderError.engineFailure(
-                reason: "transcode: startWriting: \(writer.error?.localizedDescription ?? "unknown")"
-            )
-        }
-        writer.startSession(atSourceTime: .zero)
-        guard reader.startReading() else {
-            writer.cancelWriting()
-            throw AudioRecorderError.engineFailure(
-                reason: "transcode: startReading: \(reader.error?.localizedDescription ?? "unknown")"
-            )
-        }
-
-        // Pump reader samples into the writer.
-        // `requestMediaDataWhenReady` fires the closure on `queue`
-        // repeatedly while the input can accept more data; we keep
-        // feeding until the reader runs dry, then mark the input
-        // finished and resume from `finishWriting`'s completion.
-        //
-        // `TranscodePump` boxes the non-Sendable AVFoundation
-        // references as @unchecked Sendable so the @Sendable
-        // closure can capture them. Access is naturally serialized
-        // by the single dispatch queue.
-        let queue = DispatchQueue(label: "lakeloom.audio.transcode", qos: .utility)
-        let pump = TranscodePump(
-            reader: reader,
-            readerOutput: readerOutput,
-            writer: writer,
-            writerInput: writerInput
-        )
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            pump.writerInput.requestMediaDataWhenReady(on: queue) {
-                while pump.writerInput.isReadyForMoreMediaData {
-                    if let sample = pump.readerOutput.copyNextSampleBuffer() {
-                        pump.writerInput.append(sample)
-                    } else {
-                        pump.writerInput.markAsFinished()
-                        pump.writer.finishWriting {
-                            continuation.resume()
-                        }
-                        return
-                    }
-                }
-            }
-        }
-
-        if reader.status == .failed {
-            throw AudioRecorderError.engineFailure(
-                reason: "transcode: reader failed: \(reader.error?.localizedDescription ?? "unknown")"
-            )
-        }
-        if writer.status != .completed {
-            throw AudioRecorderError.engineFailure(
-                reason: "transcode: writer status=\(writer.status.rawValue): \(writer.error?.localizedDescription ?? "unknown")"
-            )
-        }
+        // iOS 18+ async API. Throws on failure; replaces the older
+        // completion-handler + status-polling dance.
+        try await exporter.export(to: destination, as: .m4a)
     }
-}
-
-/// `@unchecked Sendable` box for the four AVFoundation handles used
-/// by the CAF → AAC transcode pump. AVAssetReader / Writer /
-/// ReaderTrackOutput / WriterInput aren't marked `Sendable`, but the
-/// transcode pump serializes all access through a single private
-/// dispatch queue, so wrapping them in this box satisfies the
-/// `@Sendable` closure requirement of
-/// `AVAssetWriterInput.requestMediaDataWhenReady(on:_:)`.
-private struct TranscodePump: @unchecked Sendable {
-    let reader: AVAssetReader
-    let readerOutput: AVAssetReaderTrackOutput
-    let writer: AVAssetWriter
-    let writerInput: AVAssetWriterInput
 }
 
 /// Lock-protected frame counter shared between the real-time tap
