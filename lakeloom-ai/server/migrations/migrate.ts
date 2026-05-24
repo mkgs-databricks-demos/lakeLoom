@@ -20,8 +20,9 @@ import { migration009 } from './009_client_type';
 import { migration010 } from './010_username';
 import { migration011 } from './011_replica_identity_assignments';
 import { migration012 } from './012_remediate_ios_project_user_id';
+import { migration013 } from './013_backfill_project_device_assignments';
 
-// ── Migration registry ─────────────────────────────────────────────────────────────
+// ── Migration registry ─────────────────────────────────────────────────────────────────────
 // Add new migrations here in order. The `name` must be unique and stable.
 
 export interface Migration {
@@ -29,15 +30,15 @@ export interface Migration {
   up: string; // SQL to apply
 }
 
-const migrations: Migration[] = [migration001, migration002, migration003, migration004, migration005, migration006, migration007, migration008, migration009, migration010, migration011, migration012];
+const migrations: Migration[] = [migration001, migration002, migration003, migration004, migration005, migration006, migration007, migration008, migration009, migration010, migration011, migration012, migration013];
 
-// ── Lakebase query interface ───────────────────────────────────────────────────────
+// ── Lakebase query interface ─────────────────────────────────────────────────────────────────
 
 interface LakebaseClient {
   query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
 }
 
-// ── Migration runner ─────────────────────────────────────────────────────────────
+// ── Migration runner ───────────────────────────────────────────────────────────────────
 
 const ENSURE_SCHEMA = `CREATE SCHEMA IF NOT EXISTS app`;
 
