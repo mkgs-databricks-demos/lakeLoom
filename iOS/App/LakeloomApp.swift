@@ -6,6 +6,14 @@ struct LakeloomApp: App {
     @State private var coordinator: AppCoordinator
 
     init() {
+        // Register DM Sans + DM Mono with the per-process font
+        // manager before any SwiftUI view that uses
+        // `Font.custom(...)` renders. Done here (synchronously, on
+        // the main thread) so the first frame already has the
+        // brand faces available — otherwise SwiftUI caches a
+        // fallback resolution for the first few labels.
+        BrandFontRegistration.registerAll()
+
         // Construct the live dependency graph at app start. CoreDataStack
         // initialization is async but the coordinator's bootstrap() runs
         // it on first launch — failures route through phase = .error.

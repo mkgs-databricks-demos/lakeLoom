@@ -6,12 +6,17 @@ import SwiftUI
 /// DM Mono for code, three weights (Regular 400 / Medium 500 /
 /// Bold 700), and a fixed type scale.
 ///
-/// **Font choice:** the brand spec accepts either bundled DM Sans /
-/// DM Mono or `.system` with matching weights. Lakeloom v1 ships
-/// with `.system` to avoid the font-bundle + licensing-overhead
-/// path; the iOS HIG also nudges toward SF Pro for native-feeling
-/// chrome. If we later bundle DM Sans, swapping it in is a
-/// single-place change inside the `Font.brand(...)` helpers.
+/// **Font source:** static TTFs vendored under
+/// `App/Resources/Fonts/` and registered via `UIAppFonts`. PostScript
+/// names — `DMSans-Regular`, `DMSans-Medium`, `DMSans-Bold`,
+/// `DMMono-Regular`, `DMMono-Medium` — are resolved by `Font.custom`.
+/// Both families are SIL Open Font License 1.1; see the GoogleFonts
+/// `dm-fonts` + `dm-mono` repos for upstream sources.
+///
+/// `Font.brand(_:weight:)` falls back to `Font.system(...)` when a
+/// requested weight isn't bundled (e.g., a heavier weight added later
+/// to the scale) — the app keeps rendering with the system font for
+/// that one role instead of refusing to draw text.
 ///
 /// Usage:
 /// ```
@@ -76,21 +81,42 @@ public enum BrandTypography {
     public static let titleLarge = Font.brand(.titleLarge, weight: .bold)
 
     /// Monospaced footnote — for code / identifiers / hashes.
-    public static let monospaceCode = Font.system(.footnote, design: .monospaced)
+    /// DM Mono Regular at 12 pt (matches `.footnote`'s point size on
+    /// the default text style table).
+    public static let monospaceCode = Font.custom("DMMono-Regular", size: Size.sm.rawValue)
+
+    /// Monospaced footnote, medium weight — for emphasized
+    /// inline identifiers (active session ID, current sha prefix).
+    public static let monospaceCodeEmphasis = Font.custom("DMMono-Medium", size: Size.sm.rawValue)
 }
 
 extension Font {
 
     /// Construct a brand font for an explicit `Size` + `Weight`.
     ///
-    /// Wraps `Font.system(size:weight:design:)` today; the design
-    /// argument is `.default`, which resolves to SF Pro on iOS. When
-    /// we later bundle DM Sans / DM Mono, this is the one place that
-    /// changes — every `BrandTypography` token flows through here.
+    /// Maps the brand `Weight` to the matching DM Sans PostScript
+    /// face. If the bundled font isn't registered (e.g., test bundle
+    /// running against the unit-test target which doesn't copy
+    /// resources), `Font.custom` falls back to the system font at the
+    /// requested size — the app still renders, just in SF Pro.
     public static func brand(
         _ size: BrandTypography.Size,
         weight: BrandTypography.Weight = .regular
     ) -> Font {
-        Font.system(size: size.rawValue, weight: weight.swiftUI, design: .default)
+        Font.custom(weight.dmSansPostScriptName, size: size.rawValue)
+    }
+}
+
+extension BrandTypography.Weight {
+
+    /// PostScript name of the DM Sans face that backs this weight.
+    /// The TTF files are bundled under `App/Resources/Fonts/` and
+    /// registered through the target's `UIAppFonts` build setting.
+    fileprivate var dmSansPostScriptName: String {
+        switch self {
+        case .regular: return "DMSans-Regular"
+        case .medium:  return "DMSans-Medium"
+        case .bold:    return "DMSans-Bold"
+        }
     }
 }
