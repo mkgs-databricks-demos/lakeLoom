@@ -5,10 +5,12 @@ import SwiftUI
 /// `.task` and `.refreshable`; renders rows that push to
 /// ``CaptureDetailView`` on tap.
 ///
-/// Brand-aware. v1 loads up to 50 sessions and skips cursor-based
-/// pagination — the active project's window for an FDE will rarely
-/// exceed that during a demo, and the follow-on PR can wire
-/// `before:` to load older pages.
+/// Pagination: pages of up to ``Self/pageSize`` sessions, newest
+/// first. When the user scrolls to the last visible row we fire the
+/// next page using `before: <oldest session's startedAt>` — same
+/// cursor shape the server already supports. A response shorter than
+/// the page size flips `reachedEnd`, after which no further pages
+/// fire. Pull-to-refresh resets the cursor and replaces the list.
 struct SessionsListView: View {
 
     let captureAPI: any CaptureAPIClient
@@ -17,7 +19,15 @@ struct SessionsListView: View {
     let projectID: String
     let projectName: String
 
+    /// Page size for both the initial fetch and every paginated
+    /// follow-up. Server caps at 200; 50 is a good demo-time balance
+    /// between snappy load and not requiring scroll to see all
+    /// sessions on a fresh device.
+    private static let pageSize = 50
+
     @State private var loadState: LoadState = .loading
+    @State private var isLoadingMore = false
+    @State private var reachedEnd = false
 
     enum LoadState: Equatable {
         case loading
@@ -107,18 +117,40 @@ struct SessionsListView: View {
     }
 
     private func listView(sessions: [CaptureSession]) -> some View {
-        List(sessions) { session in
-            NavigationLink {
-                CaptureDetailView(
-                    captureAPI: captureAPI,
-                    uploadCoordinator: uploadCoordinator,
-                    workspaceID: workspaceID,
-                    captureSessionID: session.id
-                )
-            } label: {
-                SessionRow(session: session)
+        List {
+            ForEach(sessions) { session in
+                NavigationLink {
+                    CaptureDetailView(
+                        captureAPI: captureAPI,
+                        uploadCoordinator: uploadCoordinator,
+                        workspaceID: workspaceID,
+                        captureSessionID: session.id
+                    )
+                } label: {
+                    SessionRow(session: session)
+                }
+                .listRowBackground(BrandColors.surfacePrimary)
+                .onAppear {
+                    // Trigger the next page when the bottom row
+                    // enters view. The guards in loadNextPage()
+                    // dedupe concurrent calls so a fast scroll
+                    // can't fire multiple in-flight requests.
+                    if session.id == sessions.last?.id {
+                        Task { await loadNextPage(after: sessions) }
+                    }
+                }
             }
-            .listRowBackground(BrandColors.surfacePrimary)
+            if isLoadingMore {
+                HStack {
+                    Spacer()
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(BrandColors.accentPrimary)
+                    Spacer()
+                }
+                .listRowBackground(BrandColors.surfacePrimary)
+                .listRowSeparator(.hidden)
+            }
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
@@ -139,7 +171,7 @@ struct SessionsListView: View {
         let hadData: Bool
         if case .loaded = loadState { hadData = true } else { hadData = false }
         if !hadData { loadState = .loading }
-        await performFetch(preserveOnFailure: hadData)
+        await performInitialFetch(preserveOnFailure: hadData)
     }
 
     /// Pull-to-refresh — keep the current list on screen behind the
@@ -150,18 +182,21 @@ struct SessionsListView: View {
     /// error), let the error surface so the user has a recovery
     /// affordance.
     private func refresh() async {
-        await performFetch(preserveOnFailure: true)
+        await performInitialFetch(preserveOnFailure: true)
     }
 
-    private func performFetch(preserveOnFailure: Bool) async {
+    /// First-page fetch. Replaces the list and resets the cursor
+    /// state so a new round of pagination can begin.
+    private func performInitialFetch(preserveOnFailure: Bool) async {
         do {
             let sessions = try await captureAPI.listProjectCaptureSessions(
                 workspaceID: workspaceID,
                 projectID: projectID,
                 state: nil,
-                limit: 50,
+                limit: Self.pageSize,
                 before: nil
             )
+            reachedEnd = sessions.count < Self.pageSize
             loadState = sessions.isEmpty ? .empty : .loaded(sessions)
         } catch let error as CaptureAPIError {
             if preserveOnFailure, case .loaded = loadState { return }
@@ -169,6 +204,39 @@ struct SessionsListView: View {
         } catch {
             if preserveOnFailure, case .loaded = loadState { return }
             loadState = .error(error.localizedDescription)
+        }
+    }
+
+    /// Paginated fetch — append older sessions using the oldest
+    /// loaded session's `startedAt` as the `before` cursor. No-op
+    /// when we've already reached the end or another page is
+    /// in-flight; both guards make the per-row `.onAppear` trigger
+    /// safe to fire on every scroll tick.
+    ///
+    /// Failures during pagination are intentionally swallowed (just
+    /// the spinner clears). Pull-to-refresh is the recovery path —
+    /// flipping the whole list to an error screen mid-scroll would
+    /// be much worse than the user losing one page they'll get back
+    /// on the next scroll attempt.
+    private func loadNextPage(after current: [CaptureSession]) async {
+        guard !reachedEnd, !isLoadingMore else { return }
+        guard let cursor = current.last?.startedAt else { return }
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+        do {
+            let next = try await captureAPI.listProjectCaptureSessions(
+                workspaceID: workspaceID,
+                projectID: projectID,
+                state: nil,
+                limit: Self.pageSize,
+                before: cursor
+            )
+            reachedEnd = next.count < Self.pageSize
+            guard case .loaded(let existing) = loadState else { return }
+            loadState = .loaded(existing + next)
+        } catch {
+            // Silent failure — see doc above. The user can scroll
+            // again to retry or pull-to-refresh from the top.
         }
     }
 
