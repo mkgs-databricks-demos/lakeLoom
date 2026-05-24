@@ -4,6 +4,8 @@
 
 iOS's `ProjectService` is using only the M2M Bearer token (Layer 0) when calling `/api/v1/projects*` endpoints. This causes all iOS-created projects to be attributed to the Xcode SPN identity instead of the human user. **Fix: send Layer 2 headers on ALL `/api/v1/` calls, same as captures and uploads already do.**
 
+**⚠️ BREAKING: The server now returns 401 for bare SPN requests.** After deploy, iOS project calls without Layer 2 headers will fail immediately with a clear error message. This is intentional — see "Server-Side Enforcement" below.
+
 ---
 
 ## Problem
@@ -11,11 +13,38 @@ iOS's `ProjectService` is using only the M2M Bearer token (Layer 0) when calling
 When iOS calls project endpoints with only M2M (Layer 0):
 1. The auth sidecar resolves the token to the **Xcode SPN's SCIM ID** (`71833269206346@7474657291520070`)
 2. `dualAuth` sees no `X-Lakeloom-Session-Token`, falls through to `browserAuth`
-3. `browserAuth` uses the SPN's `X-Forwarded-User` header as `userId`
-4. Projects are created with `created_by_user_id = SPN` instead of the human
-5. Browser (which resolves to human SCIM ID `1081964970114387@...`) can't see these projects
+3. `browserAuth` rejects — no `X-Forwarded-Email` header (SPNs never get email)
+4. Projects were being created with `created_by_user_id = SPN` instead of the human
+5. Browser (which resolves to human SCIM ID `1081964970114387@...`) couldn't see these projects
 
-**Result:** 55 iOS-created projects are invisible in the browser UI.
+**Result:** 55 iOS-created projects were invisible in the browser UI.
+
+---
+
+## Server-Side Enforcement (deployed)
+
+`browserAuth` now uses `X-Forwarded-Email` as the hard gate for human identity. The sidecar only sets this header for human browser sessions — SPNs only get `X-Forwarded-User`.
+
+**Detection matrix:**
+
+| Request has | Result |
+| --- | --- |
+| `X-Lakeloom-Session-Token` + Layer 2 headers | iosAuth → resolves human from `paired_sessions` ✅ |
+| `X-Forwarded-Email` (human browser) | browserAuth → uses SCIM ID ✅ |
+| Only `X-Forwarded-User` (SPN, no email) | **401 REJECTED** |
+| Nothing | **401 REJECTED** |
+
+**The 401 response body when SPN is detected:**
+```json
+{
+  "type": "https://lakeloom/errors/unauthenticated",
+  "title": "Unauthenticated",
+  "status": 401,
+  "detail": "Service principal identity detected without Layer 2 auth. iOS must send X-Lakeloom-Session-Token."
+}
+```
+
+This means after next deploy, iOS will start getting 401s on any `/api/v1/` or `dualAuth` endpoint where Layer 2 headers are missing. The error message is actionable and tells you exactly what's wrong.
 
 ---
 
@@ -30,7 +59,7 @@ Every iOS request to any of these endpoints MUST include:
 
 This is the same pattern already used by `CaptureService` (POST/PATCH captures) and `UploadService` (audio/screenshots/photos/documents). `ProjectService` needs to follow suit.
 
-### Affected iOS endpoints (all use `dualAuth`):
+### Affected iOS endpoints (all use `dualAuth` — will 401 without Layer 2):
 
 | Method | Path | iOS Usage |
 | --- | --- | --- |
@@ -47,7 +76,7 @@ This is the same pattern already used by `CaptureService` (POST/PATCH captures) 
 | GET | `/api/captures/:id` | Capture detail |
 | GET | `/api/projects/:pid/captures` | List captures for project |
 
-### Endpoints already correct (use `iosAuth` directly):
+### Endpoints already correct (use `iosAuth` directly — no change needed):
 
 | Method | Path | Status |
 | --- | --- | --- |
@@ -64,44 +93,43 @@ This is the same pattern already used by `CaptureService` (POST/PATCH captures) 
 
 ## Why This Happened
 
-`dualAuth` was designed for endpoints callable from BOTH iOS and browser. The assumption was that iOS would always send Layer 2 headers. But `ProjectService` on iOS was implemented to use only the M2M token — likely because project CRUD felt like a "basic" operation that didn't need the full auth chain.
+`dualAuth` is designed for endpoints callable from BOTH iOS and browser. The contract requires:
+- iOS → send Layer 2 headers (session token + timestamp + signature)
+- Browser → sidecar provides human identity headers automatically
 
-The distinction matters because `dualAuth` uses header detection:
-```
-if (X-Lakeloom-Session-Token present) → iosAuth → resolves human from paired_sessions
-else → browserAuth → uses X-Forwarded-User header directly
-```
-
-Without the session token header, the request looks like a "browser" request to `dualAuth`, and `X-Forwarded-User` contains the SPN identity (the M2M token's subject).
+`ProjectService` was implemented with only M2M, likely because project CRUD felt like a "basic" operation. But without Layer 2, the server cannot distinguish the SPN from a human — and now explicitly refuses to try.
 
 ---
 
 ## Data Remediation
 
-Genie will run a one-time Lakebase migration to reassign the 55 affected projects:
+Genie deployed a one-time Lakebase migration (012) to reassign the 55 affected projects:
 ```sql
 UPDATE app.projects
 SET created_by_user_id = '1081964970114387@7474657291520070',
-    created_by_username = 'matthew.giglia@databricks.com'
+    created_by_username = 'matthew.giglia@databricks.com',
+    updated_at = now()
 WHERE created_by_user_id = '71833269206346@7474657291520070';
 ```
 
-This will be applied server-side. No iOS action needed for the data fix.
+Auto-applies on next server restart. No iOS action needed for the data fix.
 
 ---
 
 ## Verification
 
 After the iOS fix ships:
-1. Create a project from iOS
+1. Create a project from iOS — should succeed (no 401)
 2. Check `created_by_user_id` in Lakebase — should be `1081964970114387@...`
 3. Verify project appears in browser UI
 4. Verify `GET /api/v1/projects` from iOS returns all projects (including browser-created ones)
+5. Verify the 401 error message is NOT seen in iOS logs
 
 ---
 
 ## Timeline
 
-- **Blocking:** iOS-created projects are invisible in browser now
-- **Genie:** Data remediation deployed today (migration + verify)
-- **Isaac:** Ship Layer 2 on ProjectService in next iOS build
+- **Deployed (server):** `browserAuth` now rejects bare SPN requests with 401
+- **Deployed (server):** Migration 012 remediates 55 misattributed projects
+- **Blocking Isaac:** iOS project calls will 401 until Layer 2 headers are added to `ProjectService`
+- **Priority:** HIGH — project list/create from iOS is broken until fixed
