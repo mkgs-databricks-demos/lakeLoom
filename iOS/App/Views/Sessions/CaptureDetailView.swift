@@ -5,18 +5,29 @@ import SwiftUI
 /// `.task` and `.refreshable` and renders the resulting session +
 /// its uploads.
 ///
-/// v1 is read-only — the uploads list shows the server's view of
-/// what's been ingested. A follow-on PR will merge in
-/// `UploadCoordinator.currentUploads()` so in-flight client-side
-/// uploads (queued / uploading / failed) surface here too, with
-/// per-row retry / discard.
+/// Uploads list merges two sources:
+/// * **Server-ingested** — `session.uploads` returned by the API.
+///   Terminal-good rows; show a success check.
+/// * **Client-side in-flight** — `UploadCoordinator.currentUploads()`
+///   filtered to this capture. Renders queued / uploading / failed
+///   states with a progress spinner and (on failure) per-row retry +
+///   discard. Dedupe by `sha256Hex`: once the server reflects the
+///   upload, the client row drops out so a successful upload doesn't
+///   render twice.
+///
+/// A `.task` modifier subscribes to `stateUpdates()` so the UI keeps
+/// up live; `.succeeded` transitions also kick a silent refetch of
+/// the server's view so newly-ingested rows replace their client-side
+/// counterparts without the user having to pull-to-refresh.
 struct CaptureDetailView: View {
 
     let captureAPI: any CaptureAPIClient
+    let uploadCoordinator: (any UploadCoordinator)?
     let workspaceID: String
     let captureSessionID: String
 
     @State private var loadState: LoadState = .loading
+    @State private var pendingUploads: [PendingUpload] = []
 
     enum LoadState {
         case loading
@@ -39,6 +50,7 @@ struct CaptureDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .background(BrandColors.surfaceSecondary)
         .task { await initialLoad() }
+        .task { await observePendingUploads() }
         .refreshable { await refresh() }
     }
 
@@ -168,25 +180,80 @@ struct CaptureDetailView: View {
     // MARK: - Uploads
 
     private func uploadsSection(for session: CaptureSession) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.sm) {
+        let server = session.uploads ?? []
+        let serverShas = Set(server.map { $0.sha256Hex })
+        // Hide client-side rows the server has already reflected.
+        // Until then (including .succeeded just-before-server-fetches)
+        // we keep the client row visible so the user always sees the
+        // most up-to-date status for what they recorded.
+        let clientOnly = pendingUploads.filter { !serverShas.contains($0.sha256Hex) }
+
+        return VStack(alignment: .leading, spacing: Spacing.sm) {
             Text("Uploads")
                 .font(BrandTypography.captionMedium)
                 .textCase(.uppercase)
                 .tracking(1)
                 .foregroundStyle(BrandColors.textSecondary)
-            if let uploads = session.uploads, !uploads.isEmpty {
-                VStack(spacing: Spacing.sm) {
-                    ForEach(uploads) { upload in
-                        UploadRow(upload: upload)
-                    }
-                }
-            } else {
+            if clientOnly.isEmpty && server.isEmpty {
                 Text("No files have been ingested for this capture yet.")
                     .font(BrandTypography.caption)
                     .foregroundStyle(BrandColors.textMuted)
                     .padding(.vertical, Spacing.sm)
+            } else {
+                VStack(spacing: Spacing.sm) {
+                    ForEach(clientOnly) { upload in
+                        PendingUploadRow(
+                            upload: upload,
+                            onRetry: { Task { await uploadCoordinator?.retry(uploadID: upload.id) } },
+                            onDiscard: { Task { await discardClientUpload(upload.id) } }
+                        )
+                    }
+                    ForEach(server) { upload in
+                        UploadRow(upload: upload)
+                    }
+                }
             }
         }
+    }
+
+    // MARK: - Pending uploads (client-side)
+
+    /// Mirror `UploadCoordinator.currentUploads()` for this capture
+    /// into `pendingUploads` and keep it live as the queue progresses.
+    /// Each yield from `stateUpdates()` re-snapshots so we catch
+    /// enqueues that arrive while the view is open, plus
+    /// queued → uploading → terminal transitions for rows we already
+    /// know about. On `.succeeded` we also kick a silent server
+    /// refetch so the row swaps from the client to the server side
+    /// without the user having to pull-to-refresh.
+    private func observePendingUploads() async {
+        guard let coordinator = uploadCoordinator else { return }
+        await refreshPending(from: coordinator)
+        let stream = await coordinator.stateUpdates()
+        for await change in stream {
+            await refreshPending(from: coordinator)
+            if case .succeeded = change.state {
+                await silentlyRefetchSession()
+            }
+        }
+    }
+
+    private func refreshPending(from coordinator: any UploadCoordinator) async {
+        let all = await coordinator.currentUploads()
+        pendingUploads = all.filter { $0.captureSessionID == captureSessionID }
+    }
+
+    private func discardClientUpload(_ id: String) async {
+        await uploadCoordinator?.discard(uploadID: id)
+        // Discard doesn't broadcast via stateUpdates(), so refresh
+        // the local snapshot explicitly.
+        if let coordinator = uploadCoordinator {
+            await refreshPending(from: coordinator)
+        }
+    }
+
+    private func silentlyRefetchSession() async {
+        await performFetch(preserveOnFailure: true)
     }
 
     // MARK: - Loading
@@ -299,6 +366,141 @@ private struct UploadRow: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(BrandColors.borderDefault, lineWidth: 0.5)
         )
+    }
+
+    private var kindIcon: String {
+        switch upload.kind {
+        case .audio:      return "waveform"
+        case .screenshot: return "rectangle.dashed"
+        case .photo:      return "camera.fill"
+        case .document:   return "doc.fill"
+        }
+    }
+}
+
+/// One row per client-side in-flight upload. Mirrors the visual
+/// language of ``UploadRow`` (server-ingested rows) but swaps the
+/// trailing success check for a state-aware indicator: a spinner
+/// while queued/uploading, a red retry+discard pair on failure.
+private struct PendingUploadRow: View {
+    let upload: PendingUpload
+    let onRetry: () -> Void
+    let onDiscard: () -> Void
+
+    @State private var confirmingDiscard = false
+
+    var body: some View {
+        HStack(spacing: Spacing.md) {
+            Image(systemName: kindIcon)
+                .font(.title3)
+                .foregroundStyle(BrandColors.accentPrimary)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(upload.originalFilename ?? upload.kind.rawValue.capitalized)
+                    .font(BrandTypography.bodyEmphasis)
+                    .foregroundStyle(BrandColors.textPrimary)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(upload.kind.rawValue.uppercased())
+                        .font(BrandTypography.caption)
+                        .foregroundStyle(BrandColors.textSecondary)
+                    Text("·")
+                        .foregroundStyle(BrandColors.textMuted)
+                    Text(ByteCountFormatter.string(fromByteCount: upload.sizeBytes, countStyle: .file))
+                        .font(BrandTypography.caption)
+                        .foregroundStyle(BrandColors.textSecondary)
+                    Text("·")
+                        .foregroundStyle(BrandColors.textMuted)
+                    Text(statusLabel)
+                        .font(BrandTypography.caption)
+                        .foregroundStyle(statusColor)
+                }
+                if let reason = errorReason {
+                    Text(reason)
+                        .font(BrandTypography.caption)
+                        .foregroundStyle(BrandColors.statusError)
+                        .lineLimit(2)
+                }
+            }
+            Spacer()
+            trailing
+        }
+        .padding(Spacing.md)
+        .background(BrandColors.surfacePrimary, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(BrandColors.borderDefault, lineWidth: 0.5)
+        )
+        .confirmationDialog(
+            "Discard upload?",
+            isPresented: $confirmingDiscard,
+            titleVisibility: .visible
+        ) {
+            Button("Discard", role: .destructive) { onDiscard() }
+            Button("Keep", role: .cancel) {}
+        } message: {
+            Text("The local file will be deleted and the upload won't be retried.")
+        }
+    }
+
+    @ViewBuilder
+    private var trailing: some View {
+        switch upload.state {
+        case .queued, .uploading:
+            ProgressView()
+                .controlSize(.small)
+                .tint(BrandColors.accentPrimary)
+        case .succeeded:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(BrandColors.statusSuccess)
+        case .failed:
+            HStack(spacing: Spacing.sm) {
+                Button(action: onRetry) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(BrandTypography.bodyEmphasis)
+                }
+                .buttonStyle(.borderless)
+                .tint(BrandColors.accentPrimary)
+                .accessibilityLabel("Retry upload")
+                Button {
+                    confirmingDiscard = true
+                } label: {
+                    Image(systemName: "trash")
+                        .font(BrandTypography.bodyEmphasis)
+                }
+                .buttonStyle(.borderless)
+                .tint(BrandColors.statusError)
+                .accessibilityLabel("Discard upload")
+            }
+        }
+    }
+
+    private var statusLabel: String {
+        switch upload.state {
+        case .queued:                   return "Queued"
+        case .uploading:                return "Uploading…"
+        case .succeeded:                return "Uploaded"
+        case .failed(_, let permanent): return permanent ? "Failed" : "Retrying…"
+        }
+    }
+
+    private var statusColor: Color {
+        switch upload.state {
+        case .queued:     return BrandColors.textSecondary
+        case .uploading:  return BrandColors.accentPrimary
+        case .succeeded:  return BrandColors.statusSuccess
+        case .failed:     return BrandColors.statusError
+        }
+    }
+
+    /// Show the last error string under the row, regardless of
+    /// whether we're between retries (state.failed transient) or
+    /// stuck at a permanent failure. `lastError` is cleared by the
+    /// coordinator on the next successful attempt so this stays
+    /// honest as the upload progresses.
+    private var errorReason: String? {
+        if case .failed(let reason, _) = upload.state { return reason }
+        return upload.lastError
     }
 
     private var kindIcon: String {

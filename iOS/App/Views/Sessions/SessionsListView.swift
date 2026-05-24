@@ -12,6 +12,7 @@ import SwiftUI
 struct SessionsListView: View {
 
     let captureAPI: any CaptureAPIClient
+    let uploadCoordinator: (any UploadCoordinator)?
     let workspaceID: String
     let projectID: String
     let projectName: String
@@ -110,6 +111,7 @@ struct SessionsListView: View {
             NavigationLink {
                 CaptureDetailView(
                     captureAPI: captureAPI,
+                    uploadCoordinator: uploadCoordinator,
                     workspaceID: workspaceID,
                     captureSessionID: session.id
                 )

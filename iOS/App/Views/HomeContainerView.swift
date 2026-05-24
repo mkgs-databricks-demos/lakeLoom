@@ -108,6 +108,7 @@ struct HomeContainerView: View {
                 NavigationLink {
                     SessionsListView(
                         captureAPI: api,
+                        uploadCoordinator: coordinator.uploadCoordinator,
                         workspaceID: context.workspace.id,
                         projectID: context.project.id,
                         projectName: context.project.name
