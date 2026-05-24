@@ -184,6 +184,14 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
         res.setHeader('Content-Type', mimeType);
         res.setHeader('Content-Disposition', `inline; filename="${originalFilename}"`);
         res.setHeader('Cache-Control', 'private, max-age=3600');
+        // Needed for HTMLMediaElement + Web Audio API (AnalyserNode) in browsers.
+        // Same-origin requests through auth sidecars/proxies can still require explicit CORS
+        // for the media element to be considered origin-clean.
+        if (req.headers.origin) {
+          res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
+          res.setHeader('Vary', 'Origin');
+        }
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
 
         if (rangeHeader && sizeBytes > 0) {
           // Parse range

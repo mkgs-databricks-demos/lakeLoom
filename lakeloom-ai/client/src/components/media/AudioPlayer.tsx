@@ -42,10 +42,13 @@ export function AudioPlayer({ uploadId, title, sizeBytes, durationHint }: AudioP
   const [isMuted, setIsMuted] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [waveformReady, setWaveformReady] = useState(false);
 
   const streamUrl = `/api/media/${uploadId}`;
 
   // ── Audio context & analyser setup (for waveform) ─────────────────────
+  // Deferred: only called AFTER audio is confirmed playing to avoid
+  // Chrome's MediaElementSource CORS-taint silencing through the auth proxy.
   const initAudioContext = useCallback(() => {
     if (audioCtxRef.current || !audioRef.current) return;
     try {
@@ -59,6 +62,7 @@ export function AudioPlayer({ uploadId, title, sizeBytes, durationHint }: AudioP
       audioCtxRef.current = ctx;
       analyserRef.current = analyser;
       sourceRef.current = source;
+      setWaveformReady(true);
     } catch {
       // Web Audio not available — waveform won't render, audio still works
     }
@@ -112,7 +116,7 @@ export function AudioPlayer({ uploadId, title, sizeBytes, durationHint }: AudioP
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    initAudioContext();
+    // Resume suspended audio context (if waveform already connected)
     if (audioCtxRef.current?.state === 'suspended') {
       audioCtxRef.current.resume();
     }
@@ -121,7 +125,7 @@ export function AudioPlayer({ uploadId, title, sizeBytes, durationHint }: AudioP
     } else {
       audio.play().catch(() => setError('Playback failed'));
     }
-  }, [isPlaying, initAudioContext]);
+  }, [isPlaying]);
 
   const cycleSpeed = useCallback(() => {
     const nextIdx = (speedIdx + 1) % SPEEDS.length;
@@ -154,7 +158,15 @@ export function AudioPlayer({ uploadId, title, sizeBytes, durationHint }: AudioP
   }, [isPlaying]);
 
   // ── Audio element event handlers ──────────────────────────────────────
-  const handleTimeUpdate = () => setCurrentTime(audioRef.current?.currentTime ?? 0);
+  const handleTimeUpdate = () => {
+    setCurrentTime(audioRef.current?.currentTime ?? 0);
+    // Deferred Web Audio init: connect AFTER audio is confirmed playing.
+    // This avoids Chrome's MediaElementSource CORS-taint silencing that
+    // occurs when connecting before playback through auth proxy setups.
+    if (!audioCtxRef.current && isPlaying) {
+      initAudioContext();
+    }
+  };
   const handleLoadedMetadata = () => {
     setDuration(audioRef.current?.duration ?? 0);
     setIsLoading(false);
@@ -168,10 +180,11 @@ export function AudioPlayer({ uploadId, title, sizeBytes, durationHint }: AudioP
 
   return (
     <div className="bg-[var(--surface-raised)] border border-[var(--border-default)] rounded-xl overflow-hidden">
-      {/* Hidden audio element */}
+      {/* Hidden audio element — crossOrigin needed for Web Audio AnalyserNode through auth proxy */}
       <audio
         ref={audioRef}
         src={streamUrl}
+        crossOrigin="anonymous"
         preload="metadata"
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
@@ -194,6 +207,11 @@ export function AudioPlayer({ uploadId, title, sizeBytes, durationHint }: AudioP
           className="absolute inset-y-0 left-0 bg-[var(--accent-primary)] opacity-5 pointer-events-none transition-all duration-100"
           style={{ width: `${progress}%` }}
         />
+        {!waveformReady && isPlaying && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="text-xs text-[var(--text-tertiary)]">Connecting waveform…</span>
+          </div>
+        )}
       </div>
 
       {/* Controls */}
@@ -240,8 +258,8 @@ export function AudioPlayer({ uploadId, title, sizeBytes, durationHint }: AudioP
         {/* Speed */}
         <button
           onClick={cycleSpeed}
-          className="px-2 py-1 text-xs font-medium rounded-md text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-tertiary)] transition-colors duration-[var(--motion-fast)] min-w-[40px]"
-          title="Playback speed"
+          className="px-2 py-1 text-xs font-medium rounded-md text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-tertiary)] transition-colors duration-[var(--motion-fast)] tabular-nums"
+          aria-label="Playback speed"
         >
           {SPEEDS[speedIdx]}x
         </button>
@@ -252,27 +270,29 @@ export function AudioPlayer({ uploadId, title, sizeBytes, durationHint }: AudioP
           className="w-7 h-7 flex items-center justify-center rounded-md text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-tertiary)] transition-colors duration-[var(--motion-fast)]"
           aria-label={isMuted ? 'Unmute' : 'Mute'}
         >
-          {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+          {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
         </button>
 
         {/* Download */}
         <a
           href={streamUrl}
-          download={title ?? `${uploadId}`}
+          download={title}
           className="w-7 h-7 flex items-center justify-center rounded-md text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-tertiary)] transition-colors duration-[var(--motion-fast)]"
           aria-label="Download"
         >
-          <Download className="w-4 h-4" />
+          <Download className="w-3.5 h-3.5" />
         </a>
       </div>
 
-      {/* Footer info */}
+      {/* Footer: title + file size */}
       <div className="px-4 pb-3 flex items-center justify-between">
-        {title && (
-          <span className="text-xs text-[var(--text-secondary)] truncate max-w-[60%]">{title}</span>
-        )}
+        <span className="text-xs text-[var(--text-secondary)] truncate max-w-[60%]">
+          {title ?? 'Audio recording'}
+        </span>
         {sizeBytes && (
-          <span className="text-xs text-[var(--text-tertiary)]">{formatFileSize(sizeBytes)}</span>
+          <span className="text-xs text-[var(--text-tertiary)]">
+            {formatFileSize(sizeBytes)}
+          </span>
         )}
       </div>
 
