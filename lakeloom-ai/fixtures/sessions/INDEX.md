@@ -1,5 +1,7 @@
 # Session Index
 
+* [2026-05-24] iOS Auth Hardening & Device Assignment Backfill — `2026-05-24_ios-auth-hardening-device-backfill.md`
+* [2026-05-24] Phase 2 Capture Session Browser Complete — `2026-05-24_phase2-capture-session-complete.md`
 * [2026-05-23] Shared PairingTestClient, Migrations 009/010, Lakehouse Sync Schema Fix — `2026-05-23_shared-pairing-client-and-schema-sync.md`
 * [2026-05-23] Device Identity Contract Implementation — `2026-05-23_device-identity-contract.md`
 * [2026-05-21] ZeroBus Ingest Root Cause Fix & Full Validation — `2026-05-21_zerobus-ingest-root-cause-and-validation.md`
@@ -11,6 +13,8 @@
 
 | Date | Summary | File |
 |------|---------|------|
+| 2026-05-24 | iOS auth hardened (SPN rejection), migrations 012 (user_id remediation) + 013 (device assignment backfill), auto-assign on iOS create | [ios-auth-hardening-device-backfill](./2026-05-24_ios-auth-hardening-device-backfill.md) |
+| 2026-05-24 | Phase 2 Capture Session Browser — sort toggle, inline label editing, empty state CTA | [phase2-capture-session-complete](./2026-05-24_phase2-capture-session-complete.md) |
 | 2026-05-23 | Shared PairingTestClient module, migrations 009 (client_type) + 010 (username), Lakehouse Sync Delta schema fix | [shared-pairing-client-and-schema-sync](./2026-05-23_shared-pairing-client-and-schema-sync.md) |
 | 2026-05-23 | Full device_id contract: migration 008, route handlers, test notebooks, column mapping fix, E2E validated | [device-identity-contract](./2026-05-23_device-identity-contract.md) |
 | 2026-05-21 | Root cause: object vs string passing to ZeroBus SDK; fix validated with 100-event load test, auto-scale to 3 streams, CI/CD teardown | [zerobus-ingest-root-cause-and-validation](./2026-05-21_zerobus-ingest-root-cause-and-validation.md) |

@@ -13,10 +13,10 @@
  * with the iOS iosAuth middleware. Browser requests do NOT carry the
  * X-Lakeloom-* headers — that's how the router distinguishes iOS from browser.
  *
- * Detection logic:
- *   - If X-Lakeloom-Session-Token is present → iOS (use iosAuth instead)
- *   - If X-Forwarded-Email is present → browser (this middleware)
- *   - If neither → 401 Unauthorized
+ * Identity signal:
+ *   The auth sidecar sets X-Forwarded-Email ONLY for human browser sessions.
+ *   SPN/M2M tokens only populate X-Forwarded-User (their SCIM ID), never email.
+ *   This is the reliable discriminator between a human and an SPN.
  */
 
 import type { Request, Response, NextFunction } from 'express';
@@ -29,7 +29,8 @@ export type { AuthenticatedUser };
  * Browser auth middleware.
  *
  * Extracts user identity from Databricks Apps platform headers.
- * Attach to any route that should accept browser (on-behalf-of-user) requests.
+ * REQUIRES X-Forwarded-Email — rejects requests that only have X-Forwarded-User
+ * (which indicates an SPN, not a human).
  *
  * Usage:
  *   app.get('/api/v1/projects', browserAuth(), handler);
@@ -39,21 +40,24 @@ export function browserAuth() {
     const email = req.headers['x-forwarded-email'] as string | undefined;
     const userId = req.headers['x-forwarded-user'] as string | undefined;
 
-    if (!email && !userId) {
-      // No identity headers — the platform sidecar should have rejected this
-      // request before it reached us, but guard anyway
+    if (!email) {
+      // No email header means this is NOT a human browser session.
+      // Either: (a) no identity at all, or (b) SPN-only (X-Forwarded-User
+      // without email). Both are rejected — SPNs cannot use human endpoints.
       res.status(401).json({
         type: 'https://lakeloom/errors/unauthenticated',
         title: 'Unauthenticated',
         status: 401,
-        detail: 'No user identity found. Please sign in via the Databricks App.',
+        detail: userId
+          ? 'Service principal identity detected without Layer 2 auth. iOS must send X-Lakeloom-Session-Token.'
+          : 'No user identity found. Please sign in via the Databricks App.',
       });
       return;
     }
 
-    // Attach user context (same shape as iosAuth for handler compatibility)
+    // Human browser session — email present, userId is the SCIM compound ID
     req.user = {
-      userId: userId ?? email ?? 'unknown',
+      userId: userId ?? email,
       workspaceId: (req.headers['x-databricks-workspace-id'] as string) ?? '',
       sessionId: '', // Browser requests don't have a paired_session_id
     };
@@ -63,23 +67,31 @@ export function browserAuth() {
 }
 
 /**
- * Dual-auth middleware: accepts EITHER iOS Layer 2 OR browser on-behalf-of-user.
+ * Dual-auth middleware: accepts EITHER iOS Layer 2 OR human browser session.
  *
- * Detects which auth method is present and delegates accordingly.
- * Use on endpoints that both iOS and browser clients call (e.g., project CRUD).
+ * Detection logic (strict — no SPN fallthrough):
+ *   1. X-Lakeloom-Session-Token present → iOS auth (full Layer 2 verification)
+ *   2. X-Forwarded-Email present → human browser session (browserAuth)
+ *   3. Neither → 401 Unauthorized
+ *
+ * An SPN with only X-Forwarded-User and no Layer 2 headers is REJECTED.
+ * iOS MUST always send Layer 2 headers to resolve the human identity via
+ * paired_sessions. This prevents SPN-attributed writes.
  */
 export function dualAuth(opts: { lakebase: { query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }> } }) {
   const { iosAuth } = require('./ios-auth') as typeof import('./ios-auth');
   const iosMiddleware = iosAuth({ lakebase: opts.lakebase });
 
   return (req: Request, res: Response, next: NextFunction): void => {
-    // If iOS-specific headers are present, use iOS auth
+    // Path 1: iOS — Layer 2 headers present, full cryptographic verification
     if (req.headers['x-lakeloom-session-token']) {
       iosMiddleware(req, res, next);
       return;
     }
 
-    // Otherwise, use browser auth
+    // Path 2: Human browser — email header confirms human identity
+    // Path 3 (implicit): No session token AND no email → browserAuth rejects
+    // as SPN-only. This blocks bare M2M from accessing user-attributed endpoints.
     browserAuth()(req, res, next);
   };
 }

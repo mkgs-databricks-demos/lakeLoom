@@ -3,9 +3,9 @@
  *
  * Route: /projects/:id
  * Displays project metadata header + paginated list of capture sessions
- * with state filtering and browser-side state transitions.
+ * with state filtering, sort toggle, and browser-side state transitions.
  *
- * The "Pair iPhone" CTA opens a modal (PairDeviceModal) instead of navigating
+ * The "Pair Device" CTA opens a modal (PairDeviceModal) instead of navigating
  * away, keeping the user in project context.
  *
  * Brand: Databricks semantic tokens, DM Sans, motion vars, WCAG AA.
@@ -13,7 +13,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router';
-import { ArrowLeft, Smartphone, Loader2, ChevronDown } from 'lucide-react';
+import { ArrowLeft, Smartphone, Loader2, ChevronDown, ArrowUpDown } from 'lucide-react';
 import { StatusBadge, TimeAgo, Duration, EmptyState, ConfirmDialog, PairDeviceModal } from '../../components';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -47,6 +47,7 @@ interface CapturesResponse {
 }
 
 type StateFilter = 'all' | 'active' | 'completed' | 'cancelled';
+type SortDir = 'desc' | 'asc';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -69,11 +70,13 @@ async function fetchProject(id: string): Promise<Project> {
 async function fetchCaptures(
   projectId: string,
   state?: StateFilter,
+  sort: SortDir = 'desc',
   before?: string | null,
   limit = 25,
 ): Promise<CapturesResponse> {
   const params = new URLSearchParams();
   if (state && state !== 'all') params.set('state', state);
+  if (sort !== 'desc') params.set('sort', sort);
   if (before) params.set('before', before);
   params.set('limit', String(limit));
   const res = await fetch(`/api/projects/${projectId}/captures?${params}`);
@@ -105,6 +108,7 @@ export function ProjectDetailPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stateFilter, setStateFilter] = useState<StateFilter>('all');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [hasMore, setHasMore] = useState(false);
 
   // Confirm dialog state
@@ -127,7 +131,7 @@ export function ProjectDetailPage() {
       setError(null);
       const [proj, caps, devicesRes] = await Promise.all([
         fetchProject(projectId),
-        fetchCaptures(projectId, stateFilter),
+        fetchCaptures(projectId, stateFilter, sortDir),
         fetch(`/api/v1/projects/${projectId}/devices`).then(r => r.ok ? r.json() : { devices: [] }),
       ]);
       setProject(proj);
@@ -143,7 +147,7 @@ export function ProjectDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [projectId, stateFilter]);
+  }, [projectId, stateFilter, sortDir]);
 
   useEffect(() => {
     loadData();
@@ -155,7 +159,7 @@ export function ProjectDetailPage() {
     const lastCapture = captures[captures.length - 1];
     try {
       setLoadingMore(true);
-      const data = await fetchCaptures(projectId, stateFilter, lastCapture.started_at);
+      const data = await fetchCaptures(projectId, stateFilter, sortDir, lastCapture.started_at);
       setCaptures((prev) => [...prev, ...data.captures]);
       setHasMore(data.captures.length >= 25);
     } catch (err) {
@@ -213,7 +217,7 @@ export function ProjectDetailPage() {
         Back to Projects
       </Link>
 
-      {/* ── Project header ──────────────────────────────────────────────────── */}
+      {/* ── Project header ────────────────────────────────────────────────── */}
       {project && (
         <div className="mb-8">
           <h1 className="text-2xl font-bold text-[var(--text-primary,#1B3139)]">
@@ -232,7 +236,7 @@ export function ProjectDetailPage() {
         </div>
       )}
 
-      {/* ── Section header + filter ───────────────────────────────────────── */}
+      {/* ── Section header + filter + sort ───────────────────────────────── */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
           <h2 className="text-base font-semibold text-[var(--text-primary,#1B3139)]">
@@ -265,22 +269,39 @@ export function ProjectDetailPage() {
             </button>
           )}
         </div>
-        <div className="relative">
-          <select
-            value={stateFilter}
-            onChange={(e) => setStateFilter(e.target.value as StateFilter)}
-            className="appearance-none pl-3 pr-8 py-1.5 rounded-lg border text-sm
+        <div className="flex items-center gap-2">
+          {/* Sort toggle */}
+          <button
+            type="button"
+            onClick={() => setSortDir((prev) => (prev === 'desc' ? 'asc' : 'desc'))}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm
                        bg-[var(--surface-raised,#fff)] border-[var(--border-default,#DCE0E2)]
                        text-[var(--text-primary,#1B3139)]
-                       focus:ring-2 focus:ring-[var(--border-focus,#2272B4)] focus:border-transparent
-                       transition-shadow duration-100 cursor-pointer"
+                       hover:bg-[var(--surface-tertiary,#EEEDE9)]
+                       transition-colors duration-100 cursor-pointer"
+            aria-label={`Sort by date ${sortDir === 'desc' ? 'ascending' : 'descending'}`}
           >
-            <option value="all">All states</option>
-            <option value="active">Active</option>
-            <option value="completed">Completed</option>
-            <option value="cancelled">Cancelled</option>
-          </select>
-          <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-secondary,#5A6F77)] pointer-events-none" />
+            <ArrowUpDown className="w-3.5 h-3.5" />
+            <span className="text-xs">{sortDir === 'desc' ? 'Newest' : 'Oldest'}</span>
+          </button>
+          {/* State filter */}
+          <div className="relative">
+            <select
+              value={stateFilter}
+              onChange={(e) => setStateFilter(e.target.value as StateFilter)}
+              className="appearance-none pl-3 pr-8 py-1.5 rounded-lg border text-sm
+                         bg-[var(--surface-raised,#fff)] border-[var(--border-default,#DCE0E2)]
+                         text-[var(--text-primary,#1B3139)]
+                         focus:ring-2 focus:ring-[var(--border-focus,#2272B4)] focus:border-transparent
+                         transition-shadow duration-100 cursor-pointer"
+            >
+              <option value="all">All states</option>
+              <option value="active">Active</option>
+              <option value="completed">Completed</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-secondary,#5A6F77)] pointer-events-none" />
+          </div>
         </div>
       </div>
 
@@ -449,7 +470,7 @@ export function ProjectDetailPage() {
         variant={confirmAction?.state === 'cancelled' ? 'danger' : 'default'}
       />
 
-      {/* ── Pair device modal ──────────────────────────────────────────────── */}
+      {/* ── Pair device modal ────────────────────────────────────────────── */}
       <PairDeviceModal
         open={showPairModal}
         onClose={() => setShowPairModal(false)}

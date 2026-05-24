@@ -9,6 +9,7 @@
  *   POST   /api/projects/:project_id/captures       — Create a new capture session (iOS only)
  *   PATCH  /api/captures/:capture_session_id        — Transition state (iOS only)
  *   PATCH  /api/v1/captures/:capture_session_id/state — Transition state (browser + iOS)
+ *   PATCH  /api/v1/captures/:capture_session_id/label — Update session label (browser + iOS)
  *   GET    /api/captures/:capture_session_id        — Get capture details (+uploads) (browser + iOS)
  *   GET    /api/projects/:project_id/captures       — List captures for a project (browser + iOS)
  *
@@ -47,6 +48,10 @@ const CreateCaptureBody = z.object({
 const PatchCaptureBody = z.object({
   state: z.enum(['completed', 'cancelled']),
   ended_at: z.string().datetime().optional(),
+});
+
+const PatchLabelBody = z.object({
+  label: z.string().min(1).max(200),
 });
 
 // ── Route setup ──────────────────────────────────────────────────────────────
@@ -206,6 +211,44 @@ export async function setupCaptureRoutes(appkit: AppKitContext): Promise<void> {
       }
     });
 
+    // ── PATCH /api/v1/captures/:capture_session_id/label ──────────────────
+    // Browser + iOS (dualAuth). Updates the session label (descriptive name).
+    // Editable in any state — labels are metadata, not lifecycle.
+    app.patch('/api/v1/captures/:capture_session_id/label', dual, async (req, res, next) => {
+      try {
+        const parsed = PatchLabelBody.safeParse(req.body);
+        if (!parsed.success) {
+          throw validationError(parsed.error.issues.map((i) => i.message).join('; '));
+        }
+
+        const { label } = parsed.data;
+        const captureId = req.params.capture_session_id;
+
+        // Verify capture exists
+        const { rows: existing } = await lakebase.query(
+          `SELECT id FROM app.capture_sessions
+           WHERE id = $1 AND revoked_at IS NULL`,
+          [captureId],
+        );
+
+        if (existing.length === 0) {
+          throw validationError('Capture session not found.');
+        }
+
+        const { rows: updated } = await lakebase.query(
+          `UPDATE app.capture_sessions
+           SET label = $1, updated_at = NOW()
+           WHERE id = $2
+           RETURNING id, project_id, state, label, started_at, ended_at`,
+          [label, captureId],
+        );
+
+        res.json(updated[0]);
+      } catch (err) {
+        next(err);
+      }
+    });
+
     // ── GET /api/captures/:capture_session_id ──────────────────────────────
     // Browser + iOS (dualAuth). Returns capture metadata. Supports ?include=uploads.
     app.get('/api/captures/:capture_session_id', dual, async (req, res, next) => {
@@ -252,13 +295,14 @@ export async function setupCaptureRoutes(appkit: AppKitContext): Promise<void> {
 
     // ── GET /api/projects/:project_id/captures ─────────────────────────────
     // Browser + iOS (dualAuth). Lists captures for a project with upload summary.
-    // Query params: ?state=active|completed|cancelled, ?limit=N, ?before=<ISO>
+    // Query params: ?state=active|completed|cancelled, ?limit=N, ?before=<ISO>, ?sort=asc|desc
     app.get('/api/projects/:project_id/captures', dual, async (req, res, next) => {
       try {
         const projectId = req.params.project_id;
         const stateFilter = req.query.state as string | undefined;
         const limit = Math.min(parseInt(req.query.limit as string, 10) || 50, 200);
         const before = req.query.before as string | undefined;
+        const sortDir = req.query.sort === 'asc' ? 'ASC' : 'DESC';
 
         // Build dynamic WHERE clauses
         const conditions: string[] = ['cs.project_id = $1', 'cs.revoked_at IS NULL'];
@@ -272,7 +316,8 @@ export async function setupCaptureRoutes(appkit: AppKitContext): Promise<void> {
         }
 
         if (before) {
-          conditions.push(`cs.started_at < $${paramIdx}`);
+          const comparator = sortDir === 'ASC' ? '>' : '<';
+          conditions.push(`cs.started_at ${comparator} $${paramIdx}`);
           params.push(before);
           paramIdx++;
         }
@@ -291,7 +336,7 @@ export async function setupCaptureRoutes(appkit: AppKitContext): Promise<void> {
             WHERE capture_session_id = cs.id AND revoked_at IS NULL
           ) u ON true
           WHERE ${conditions.join(' AND ')}
-          ORDER BY cs.started_at DESC
+          ORDER BY cs.started_at ${sortDir}
           LIMIT $${paramIdx}
         `;
         params.push(limit);

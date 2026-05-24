@@ -1,7 +1,7 @@
 # Databricks App UI — Feature Plan & Implementation Order
 
-**Date:** 2026-05-14 (created) | **Last updated:** 2026-05-16
-**Status:** Phase 1 COMPLETE. Phase 2 IN PROGRESS (device assignment, user identity shipped). Phase 3–7 planned.
+**Date:** 2026-05-14 (created) | **Last updated:** 2026-05-24
+**Status:** Phase 1 COMPLETE. Phase 2 COMPLETE (2026-05-24). Phase 3–7 planned.
 **Principle:** The Databricks App does everything the iOS app does EXCEPT record audio.
 
 ---
@@ -100,9 +100,9 @@ Review and manage capture sessions created from iOS.
 - ✅ Device chip in "Capture Sessions" section header (green when assigned, gray "Connect device" when not)
 - ✅ Project card device indicators — green pill (device label) or gray pill ("Unpaired") on every card
 - ✅ Device-agnostic text — "Pair Device" instead of "Pair iPhone" (future Watch/iPad support)
-- ⬜ Session list per project (sortable by date, filterable by state)
-- ⬜ Session detail view (metadata header, upload timeline, state transition buttons)
-- ⬜ Session label editing
+- ✅ Session list per project (sortable by date, filterable by state)
+- ✅ Session detail view (metadata header, upload timeline, state transition buttons)
+- ✅ Session label editing (inline PATCH /api/v1/captures/:id/label, 2026-05-24)
 
 ---
 
@@ -284,7 +284,7 @@ The ordering optimizes for: (a) unblocking iOS Module 06, (b) delivering reviewa
 | Phase | Feature | Status | Est. Effort |
 |-------|---------|--------|-------------|
 | **Phase 1** | Project Management | ✅ COMPLETE (2026-05-14) | — |
-| **Phase 2** | Capture Session Browser | ⏳ IN PROGRESS (device assignment + UI shipped 2026-05-16) | 2 days |
+| **Phase 2** | Capture Session Browser | ✅ COMPLETE (2026-05-24) | — |
 | **Phase 3** | Media Viewer & Audio Playback | Ready (depends on Phase 2) | 3–4 days |
 | **Phase 4** | Browser-Side Uploads | Ready (depends on Phase 2+3) | 1–2 days |
 | **Phase 5** | Device & Admin Panel | Ready (independent) | 1–2 days |

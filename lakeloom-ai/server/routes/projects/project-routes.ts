@@ -273,6 +273,24 @@ export async function setupProjectRoutes(appkit: AppKitContext): Promise<void> {
           [name, description ?? null, workspace_id, userId, username, client_generated_id ?? null],
         );
 
+        // ── Auto-assign device when created from iOS ─────────────────
+        // If this request came through iosAuth (Layer 2), req.user.sessionId
+        // is the paired_session_id. Auto-insert the device assignment so the
+        // project shows the correct device badge in the UI.
+        const sessionId = req.user!.sessionId;
+        if (sessionId) {
+          await lakebase.query(
+            `INSERT INTO app.project_device_assignments
+               (project_id, paired_session_id, assigned_by_user_id)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (project_id, paired_session_id) DO NOTHING`,
+            [rows[0].id, sessionId, userId],
+          ).catch((err: unknown) => {
+            // Non-fatal — log but don't fail the project creation
+            console.warn('[project-routes] Auto-device-assign failed:', err);
+          });
+        }
+
         res.status(201).json(formatProject(rows[0]));
       } catch (err) {
         next(err);
