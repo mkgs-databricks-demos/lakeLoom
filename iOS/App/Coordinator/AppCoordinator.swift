@@ -81,6 +81,12 @@ public final class AppCoordinator {
     /// Tests omit it; the docs sheet renders the error state if the
     /// closure isn't wired.
     public let mediaContent: (any MediaContentService)?
+    /// Optional reachability observer. Production wiring constructs
+    /// a ``ReachabilityMonitor`` (NWPathMonitor-backed); tests omit
+    /// it. Surfaced so view layers can read
+    /// `coordinator.reachability?.state` and gate / decorate
+    /// affordances accordingly.
+    public let reachability: ReachabilityMonitor?
     let logger: AppLogger
     let nowProvider: @Sendable () -> Date
 
@@ -102,6 +108,7 @@ public final class AppCoordinator {
         transcriptEvents: (any TranscriptEventsClient)? = nil,
         deviceIdentity: (any DeviceIdentityStore)? = nil,
         mediaContent: (any MediaContentService)? = nil,
+        reachability: ReachabilityMonitor? = nil,
         logger: AppLogger = AppLogger(category: .coordinator),
         nowProvider: @Sendable @escaping () -> Date = Date.init
     ) {
@@ -116,6 +123,7 @@ public final class AppCoordinator {
         self.transcriptEvents = transcriptEvents
         self.deviceIdentity = deviceIdentity
         self.mediaContent = mediaContent
+        self.reachability = reachability
         self.logger = logger
         self.nowProvider = nowProvider
     }

@@ -50,10 +50,18 @@ struct LakeloomApp: App {
         // bare-SPN requests get 401 — see
         // `architecture/hey_isaac/2026-05-24_ios-layer2-on-project-endpoints.md`.
         let projectAPI = LiveProjectAPIClient(lakeloomApp: lakeloomApp)
+        // PR #16 Phase 1: disk-persistent project list so a cold
+        // launch without network still renders the user's last-seen
+        // projects. Construction can throw on a broken filesystem;
+        // fall back to nil so the rest of the wiring still proceeds
+        // (the service degrades to in-memory-cache-only, which is
+        // the pre-PR behavior).
+        let projectListStore = try? ProjectListStore.makeDefault()
         let projects = ProjectService(
             auth: auth,
             endpointResolver: endpointResolver,
-            api: projectAPI
+            api: projectAPI,
+            listStore: projectListStore
         )
         let captureAPI = LiveCaptureAPIClient(lakeloomApp: lakeloomApp)
         let transcriptEvents = LiveTranscriptEventsClient(lakeloomApp: lakeloomApp)
@@ -87,6 +95,14 @@ struct LakeloomApp: App {
 
         let photoCapture = LivePhotoCapture()
         let mediaContent = LiveMediaContentService(lakeloomApp: lakeloomApp)
+
+        // PR #16 Phase 1: reachability monitor for the offline
+        // banner. Started immediately so the first frame already
+        // has an accurate state — NWPathMonitor delivers its first
+        // callback within a few ms, but we don't want any UI
+        // flicker during the boot window.
+        let reachability = ReachabilityMonitor()
+        reachability.start()
 
         // Capture orchestrator. Bundles captureAPI + a shared
         // AudioRecorder + the upload coordinator + the
@@ -138,7 +154,8 @@ struct LakeloomApp: App {
                 captureService: captureService,
                 transcriptEvents: transcriptEvents,
                 deviceIdentity: deviceIdentity,
-                mediaContent: mediaContent
+                mediaContent: mediaContent,
+                reachability: reachability
             )
         )
     }

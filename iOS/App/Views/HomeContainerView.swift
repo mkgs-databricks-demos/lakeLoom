@@ -55,6 +55,7 @@ struct HomeContainerView: View {
                 userName: userName,
                 lastResult: lastResult,
                 isStartingCapture: isStartingCapture,
+                isOnline: coordinator.reachability?.isOnline ?? true,
                 onRecord: startCapture,
                 onClearResult: { lastResult = .none },
                 onResultAction: performResultAction
