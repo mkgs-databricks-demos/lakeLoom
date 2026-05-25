@@ -1,14 +1,15 @@
 /**
- * Binary upload routes — iOS-authenticated, App-proxied to UC Volumes.
+ * Binary upload routes — iOS + browser authenticated, App-proxied to UC Volumes.
  *
  * Per ADR-001, all binary uploads route through the App:
  *   iOS → App endpoint (Layer 0+1 auth) → App backend → UC Volume write (App SPN)
+ *   Browser → App endpoint (on-behalf-of-user auth) → App backend → UC Volume write (App SPN)
  *
  * Endpoints:
- *   POST /api/captures/:capture_session_id/audio        — Session audio recordings
- *   POST /api/captures/:capture_session_id/screenshots  — Session screen captures
- *   POST /api/captures/:capture_session_id/photos       — Camera photos (whiteboards, artifacts)
- *   POST /api/projects/:project_id/documents            — Project reference documents
+ *   POST /api/captures/:capture_session_id/audio        — Session audio recordings (iOS ONLY)
+ *   POST /api/captures/:capture_session_id/screenshots  — Session screen captures (iOS + browser)
+ *   POST /api/captures/:capture_session_id/photos       — Camera photos (iOS + browser)
+ *   POST /api/projects/:project_id/documents            — Project reference documents (iOS + browser)
  *
  * Path layout (project-anchored, UUIDv7 filenames):
  *   audio:       /Volumes/.../session_audio/{project_id}/{capture_session_id}/{uuidv7}.{ext}
@@ -17,15 +18,25 @@
  *   documents:   /Volumes/.../documents/{project_id}/{uuidv7}.{ext}
  *
  * Upload flow (per Isaac's 9-step spec):
- *   1. iosAuth middleware resolves paired_session_id + user_id
- *   2. Validate URL params (capture exists + state='active', or project exists)
+ *   1. Auth middleware resolves user_id (+ paired_session_id for iOS, empty for browser)
+ *   2. Validate URL params (capture exists + valid state, or project exists)
  *   3. Parse multipart body (busboy). Reject if file field missing/empty.
  *   4. Generate UUIDv7 → upload_id (also the filename root)
  *   5. Validate MIME against per-endpoint allowlist, derive extension
  *   6. Upload file to UC Volume via AppKit files plugin, compute SHA-256 from buffer
- *   7. If iOS sent sha256_hex, compare. Mismatch → 400 + delete file.
+ *   7. If client sent sha256_hex, compare. Mismatch → 400 + delete file.
  *   8. INSERT INTO app.uploads
  *   9. Return 201 { id, kind, volume_path, size_bytes, sha256_hex, uploaded_at }
+ *
+ * Auth:
+ *   - Audio: iosAuth only (recording is iOS-exclusive)
+ *   - Screenshots/Photos/Documents: dualAuth (iOS Layer 2 OR browser on-behalf-of-user)
+ *   - clientType is server-determined from auth context (x-lakeloom-session-token → ios, else → web)
+ *
+ * State rules:
+ *   - iOS: can only upload to active capture sessions
+ *   - Browser: can upload to active OR completed sessions (post-hoc annotation)
+ *   - Neither: cancelled sessions reject uploads
  *
  * Volume I/O:
  *   All file operations use the AppKit files() plugin, which manages SDK auth,
@@ -39,6 +50,7 @@ import type { Application, Request, Response, NextFunction } from 'express';
 import Busboy from 'busboy';
 import { v7 as uuidv7 } from 'uuid';
 import { iosAuth } from '../../middleware/ios-auth';
+import { dualAuth } from '../../middleware/browser-auth';
 import { AppError, ErrorTypes } from '../../lib/errors';
 
 // ── Interfaces ───────────────────────────────────────────────────────────────────
@@ -82,6 +94,15 @@ const MIME_TO_EXT: Record<string, string> = {
 
 /** Upload source discriminator — server-determined from auth context */
 export type ClientType = 'ios' | 'web';
+
+/**
+ * Detect client type from request auth context.
+ * Presence of X-Lakeloom-Session-Token header indicates iOS Layer 2 auth.
+ * Absence (with browser identity headers) indicates web/browser.
+ */
+function detectClientType(req: Request): ClientType {
+  return req.headers['x-lakeloom-session-token'] ? 'ios' : 'web';
+}
 
 // ── Volume path helpers ──────────────────────────────────────────────────────────
 
@@ -223,7 +244,7 @@ type UploadDiagnostics = {
   clientType: ClientType;
   projectId: string;
   captureSessionId: string | null;
-  pairedSessionId: string;
+  pairedSessionId: string | null;
   userId: string;
   fileMimeType: string;
   clientFilename?: string;
@@ -363,7 +384,10 @@ function parseMultipart(req: Request): Promise<ParsedUpload> {
 
 // ── Route context lookups ────────────────────────────────────────────────────────
 
-async function resolveCaptureContext(req: Request, lakebase: LakebaseClient): Promise<{ projectId: string; captureSessionId: string }> {
+/**
+ * Resolve capture context for iOS uploads — active sessions only.
+ */
+async function resolveCaptureContextIos(req: Request, lakebase: LakebaseClient): Promise<{ projectId: string; captureSessionId: string }> {
   const captureSessionId = requireSingleRouteParam(req.params.capture_session_id, 'capture_session_id');
   const result = await lakebase.query(
     `SELECT project_id FROM app.capture_sessions WHERE id = $1::uuid AND state = 'active' LIMIT 1`,
@@ -372,6 +396,35 @@ async function resolveCaptureContext(req: Request, lakebase: LakebaseClient): Pr
   const row = result.rows[0];
   if (!row) {
     throw buildUploadAppError(404, 'Capture session not found', `No active capture session '${captureSessionId}' was found.`, { error_code: 'UPLOAD_CAPTURE_NOT_FOUND', capture_session_id: captureSessionId });
+  }
+  return { projectId: String(row.project_id), captureSessionId };
+}
+
+/**
+ * Resolve capture context for dual-auth uploads — accepts active OR completed sessions.
+ * Browser users often upload reference material after ending a session.
+ * iOS retains the stricter check via resolveCaptureContextIos.
+ * Cancelled sessions still reject uploads from both clients.
+ */
+async function resolveCaptureContextDual(req: Request, lakebase: LakebaseClient): Promise<{ projectId: string; captureSessionId: string }> {
+  const captureSessionId = requireSingleRouteParam(req.params.capture_session_id, 'capture_session_id');
+  const clientType = detectClientType(req);
+
+  // iOS: active only. Browser: active or completed.
+  const stateClause = clientType === 'ios'
+    ? `state = 'active'`
+    : `state IN ('active', 'completed')`;
+
+  const result = await lakebase.query(
+    `SELECT project_id FROM app.capture_sessions WHERE id = $1::uuid AND ${stateClause} LIMIT 1`,
+    [captureSessionId],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    const stateHint = clientType === 'ios' ? 'active' : 'active or completed';
+    throw buildUploadAppError(404, 'Capture session not found',
+      `No ${stateHint} capture session '${captureSessionId}' was found.`,
+      { error_code: 'UPLOAD_CAPTURE_NOT_FOUND', capture_session_id: captureSessionId, client_type: clientType, allowed_states: stateHint });
   }
   return { projectId: String(row.project_id), captureSessionId };
 }
@@ -390,7 +443,6 @@ async function resolveProjectContext(req: Request, lakebase: LakebaseClient): Pr
 
 interface UploadHandlerOpts {
   kind: UploadKind;
-  clientType: ClientType;
   volumeKey: string;
   volumeEnvVar: string;
   allowedMimes?: string[];
@@ -401,12 +453,14 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     let volumeFilePath: string | undefined;
     let relativePath: string | undefined;
-    let diagnostics: Partial<UploadDiagnostics> = { kind: opts.kind, clientType: opts.clientType };
+    const clientType = detectClientType(req);
+    let diagnostics: Partial<UploadDiagnostics> = { kind: opts.kind, clientType };
 
     try {
-      // ── Step 1: Auth already resolved by iosAuth middleware ─────────────
+      // ── Step 1: Auth already resolved by iosAuth or dualAuth middleware ──
       const userId = req.user!.userId;
-      const pairedSessionId = req.user!.sessionId;
+      // Browser sessions have empty sessionId — normalize to null for DB
+      const pairedSessionId = req.user!.sessionId || null;
 
       // ── Step 2: Resolve context (project + capture) ──────────────────
       const { projectId, captureSessionId } = await opts.resolveContext(req, lakebase);
@@ -426,7 +480,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
       const normalizedTimestamp = normalizeClientTimestamp(parsed.clientTs);
 
       diagnostics = {
-        uploadId, kind: opts.kind, clientType: opts.clientType, projectId, captureSessionId, pairedSessionId, userId,
+        uploadId, kind: opts.kind, clientType, projectId, captureSessionId, pairedSessionId, userId,
         fileMimeType: parsed.fileMimeType, clientFilename: parsed.clientFilename,
         providedClientTs: parsed.clientTs, normalizedClientTs: normalizedTimestamp.isoTimestamp,
         timestampSource: normalizedTimestamp.source, timestampFallbackReason: normalizedTimestamp.fallbackReason,
@@ -523,7 +577,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13::uuid, $14)`,
           [uploadId, opts.kind, projectId, captureSessionId, pairedSessionId, userId,
            volumeFilePath, parsed.fileMimeType, parsed.fileBuffer.length, sha256Hash,
-           parsed.clientFilename ?? null, normalizedTimestamp.isoTimestamp, parsed.deviceId ?? null, opts.clientType],
+           parsed.clientFilename ?? null, normalizedTimestamp.isoTimestamp, parsed.deviceId ?? null, clientType],
         );
         logUploadEvent('[upload] metadata.insert_succeeded', diagnostics, { insert_target: 'app.uploads', insert_volume_path: volumeFilePath });
       } catch (insertErr) {
@@ -541,7 +595,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
 
       // ── Step 9: 201 response ──────────────────────────────────────
       res.status(201).json({
-        id: uploadId, kind: opts.kind, client_type: opts.clientType, project_id: projectId, capture_session_id: captureSessionId,
+        id: uploadId, kind: opts.kind, client_type: clientType, project_id: projectId, capture_session_id: captureSessionId,
         volume_path: volumeFilePath, mime_type: parsed.fileMimeType, size_bytes: parsed.fileBuffer.length,
         sha256_hex: sha256Hash, client_ts: normalizedTimestamp.isoTimestamp,
         client_ts_source: normalizedTimestamp.source, uploaded_at: new Date().toISOString(),
@@ -563,38 +617,42 @@ export default function registerUploads(ctx: AppKitContext): void {
   const { lakebase } = ctx;
 
   ctx.server.extend((app) => {
+    // ── Audio: iOS only (recording is device-exclusive) ─────────────────
     app.post(
       '/api/captures/:capture_session_id/audio',
       iosAuth({ lakebase }),
       createUploadHandler(
-        { kind: 'audio', clientType: 'ios', volumeKey: 'session_audio', volumeEnvVar: 'LAKELOOM_AUDIO_VOLUME_PATH', allowedMimes: ['audio/wav', 'audio/m4a', 'audio/mp4'], resolveContext: resolveCaptureContext },
+        { kind: 'audio', volumeKey: 'session_audio', volumeEnvVar: 'LAKELOOM_AUDIO_VOLUME_PATH', allowedMimes: ['audio/wav', 'audio/m4a', 'audio/mp4'], resolveContext: resolveCaptureContextIos },
         lakebase, appkitFiles,
       ),
     );
 
+    // ── Screenshots: iOS + browser (dualAuth) ───────────────────────────
     app.post(
       '/api/captures/:capture_session_id/screenshots',
-      iosAuth({ lakebase }),
+      dualAuth({ lakebase }),
       createUploadHandler(
-        { kind: 'screenshot', clientType: 'ios', volumeKey: 'screenshots', volumeEnvVar: 'LAKELOOM_SCREENSHOT_VOLUME_PATH', allowedMimes: ['image/png', 'image/jpeg'], resolveContext: resolveCaptureContext },
+        { kind: 'screenshot', volumeKey: 'screenshots', volumeEnvVar: 'LAKELOOM_SCREENSHOT_VOLUME_PATH', allowedMimes: ['image/png', 'image/jpeg'], resolveContext: resolveCaptureContextDual },
         lakebase, appkitFiles,
       ),
     );
 
+    // ── Photos: iOS + browser (dualAuth) ────────────────────────────────
     app.post(
       '/api/captures/:capture_session_id/photos',
-      iosAuth({ lakebase }),
+      dualAuth({ lakebase }),
       createUploadHandler(
-        { kind: 'photo', clientType: 'ios', volumeKey: 'screenshots', volumeEnvVar: 'LAKELOOM_PHOTO_VOLUME_PATH', allowedMimes: ['image/png', 'image/jpeg'], resolveContext: resolveCaptureContext },
+        { kind: 'photo', volumeKey: 'screenshots', volumeEnvVar: 'LAKELOOM_PHOTO_VOLUME_PATH', allowedMimes: ['image/png', 'image/jpeg'], resolveContext: resolveCaptureContextDual },
         lakebase, appkitFiles,
       ),
     );
 
+    // ── Documents: iOS + browser (dualAuth) ─────────────────────────────
     app.post(
       '/api/projects/:project_id/documents',
-      iosAuth({ lakebase }),
+      dualAuth({ lakebase }),
       createUploadHandler(
-        { kind: 'document', clientType: 'ios', volumeKey: 'documents', volumeEnvVar: 'LAKELOOM_DOCUMENT_VOLUME_PATH', allowedMimes: ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'], resolveContext: resolveProjectContext },
+        { kind: 'document', volumeKey: 'documents', volumeEnvVar: 'LAKELOOM_DOCUMENT_VOLUME_PATH', allowedMimes: ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'], resolveContext: resolveProjectContext },
         lakebase, appkitFiles,
       ),
     );
