@@ -108,6 +108,14 @@ public actor FakeCaptureAPIClient: CaptureAPIClient {
         return []
     }
 
+    public func updateCaptureLabel(
+        workspaceID: String,
+        captureSessionID: String,
+        label: String
+    ) async throws -> CaptureSession {
+        throw CaptureAPIError.unexpectedResponse(reason: "updateCaptureLabel not stubbed")
+    }
+
     public func listProjectDocuments(
         workspaceID: String,
         projectID: String
