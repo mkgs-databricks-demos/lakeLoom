@@ -164,6 +164,30 @@ public struct ProjectDocument: Sendable, Equatable, Hashable, Codable, Identifia
     }
 }
 
+extension ProjectDocument {
+    /// Adapt a session-scoped ``CaptureUpload`` into the leaner
+    /// ``ProjectDocument`` shape so the same `DocumentViewerView`
+    /// (and the `MediaContentService` it consumes) can preview
+    /// audio + photos attached to a capture, not just project-level
+    /// documents. Both shapes carry the fields the viewer needs —
+    /// `id`, `kind`, `mime_type`, `original_filename`, `size_bytes`,
+    /// `uploaded_at` — and the media proxy at
+    /// `GET /api/media/:upload_id` doesn't care which side the
+    /// upload originally landed on (capture-scoped vs project-scoped
+    /// is purely a `capture_session_id IS NULL` filter on the list
+    /// endpoints).
+    public init(from upload: CaptureUpload) {
+        self.init(
+            id: upload.id,
+            kind: upload.kind,
+            mimeType: upload.mimeType,
+            originalFilename: upload.originalFilename,
+            sizeBytes: upload.sizeBytes,
+            uploadedAt: upload.uploadedAt
+        )
+    }
+}
+
 extension CaptureSession {
     /// Terminal states a capture can transition INTO. The
     /// `.active` state can't be a transition target (the server

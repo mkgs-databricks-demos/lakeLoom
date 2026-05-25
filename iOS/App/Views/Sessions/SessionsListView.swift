@@ -15,6 +15,10 @@ struct SessionsListView: View {
 
     let captureAPI: any CaptureAPIClient
     let uploadCoordinator: (any UploadCoordinator)?
+    /// Optional content downloader. When provided, `CaptureDetailView`
+    /// rows for ingested uploads (audio, photos, screenshots) become
+    /// tappable and push the QuickLook viewer.
+    let mediaContent: (any MediaContentService)?
     let workspaceID: String
     let projectID: String
     let projectName: String
@@ -123,6 +127,7 @@ struct SessionsListView: View {
                     CaptureDetailView(
                         captureAPI: captureAPI,
                         uploadCoordinator: uploadCoordinator,
+                        mediaContent: mediaContent,
                         workspaceID: workspaceID,
                         captureSessionID: session.id
                     )

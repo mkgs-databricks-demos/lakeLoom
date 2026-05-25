@@ -194,6 +194,7 @@ struct HomeContainerView: View {
                     SessionsListView(
                         captureAPI: api,
                         uploadCoordinator: coordinator.uploadCoordinator,
+                        mediaContent: coordinator.mediaContent,
                         workspaceID: context.workspace.id,
                         projectID: context.project.id,
                         projectName: context.project.name
