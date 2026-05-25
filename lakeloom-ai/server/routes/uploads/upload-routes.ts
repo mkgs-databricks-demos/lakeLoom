@@ -371,6 +371,8 @@ function parseMultipart(req: Request): Promise<ParsedUpload> {
 
     busboy.on('file', (_fieldname, stream, info) => {
       fileMimeType = info.mimeType;
+      // Capture the filename from Content-Disposition (browser sends this automatically)
+      if (info.filename && !clientFilename) clientFilename = info.filename;
       fileReceived = true;
       stream.on('data', (chunk: Buffer) => chunks.push(chunk));
       stream.on('error', (streamErr) => {
@@ -477,6 +479,8 @@ async function parseMultipartStreaming(
 
       fileReceived = true;
       fileMimeType = info.mimeType;
+      // Capture the filename from Content-Disposition (browser sends this automatically)
+      if (info.filename && !clientFilename) clientFilename = info.filename;
 
       if (opts.allowedMimes && !opts.allowedMimes.includes(fileMimeType)) {
         stream.resume();

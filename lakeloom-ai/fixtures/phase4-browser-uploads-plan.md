@@ -441,7 +441,7 @@ startNext();
 
 **Manual testing checklist:**
 - [x] Drag PDF onto project detail → uploads successfully (verified via OTel, 201 response)
-- [ ] Drag PNG onto capture detail → uploads successfully
+- [x] Drag PNG onto project detail → uploads successfully (lakeloom-ios-icon.png, 1.7 MB)
 - [ ] Drag JPEG onto capture detail → uploads successfully
 - [ ] Drag DOCX onto project detail → uploads successfully
 - [ ] Drag MP3 onto capture detail → rejected with friendly error
@@ -449,11 +449,16 @@ startNext();
 - [ ] Cancel mid-upload → upload aborts, file removed from queue
 - [ ] Upload to cancelled session → drop zone hidden
 - [ ] Upload to completed session → succeeds (browser-only behavior)
-- [ ] Multiple files dropped → parallel upload with concurrent progress bars
-- [ ] 5+ files dropped → 3 active + 2 queued, queue drains as slots open
+- [x] Multiple files dropped → parallel upload with concurrent progress bars (6 .md files concurrent)
+- [x] 5+ files dropped → 3 active + 2 queued, queue drains as slots open (6 files, all succeeded)
 - [ ] Network error mid-upload → error state with retry button
 - [ ] Uploaded file appears in MediaModal when clicked
 - [ ] Large file (500 MB+) → progress bar updates smoothly, server doesn't OOM
+- [x] Delete document → removed from list (confirmed via UI)
+- [x] Markdown uploads → accepted and typed correctly (MARKDOWN label shown)
+
+**Known UX issue (follow-up):**
+- Document cards show generic "Document" title instead of original filename (e.g., "01-PRD.md"). The `original_filename` is stored in the DB but not displayed in the ProjectDetailPage document list.
 
 ---
 
@@ -461,16 +466,20 @@ startNext();
 
 | File | Action | Purpose |
 |------|--------|---------|
-| `server/routes/uploads/upload-routes.ts` | Modified | Switch screenshot/photo/document routes to `dualAuth`, derive `clientType` dynamically, add streaming path |
+| `server/routes/uploads/upload-routes.ts` | Modified | Switch screenshot/photo/document routes to `dualAuth`, derive `clientType` dynamically, add streaming path, expand MIME whitelist |
+| `server/routes/media/media-routes.ts` | Modified | Add `DELETE /api/media/:id` (soft-delete) and `PUT /api/media/:id/content` (markdown editing) |
 | `server/migrations/014_nullable_paired_session_id.ts` | Created | Allow NULL `paired_session_id` for browser uploads |
 | `server/migrations/migrate.ts` | Modified | Register migration 014 |
-| `client/src/components/DragDropZone.tsx` | Created | Reusable drag-and-drop upload zone |
+| `client/src/components/DragDropZone.tsx` | Created | Reusable drag-and-drop upload zone (PDF, DOCX, PPTX, Markdown, PNG, JPEG) |
 | `client/src/components/UploadProgressItem.tsx` | Created | Per-file upload progress display |
+| `client/src/components/MarkdownDocument.tsx` | Created | Rendered markdown viewer with inline edit mode |
 | `client/src/hooks/useUpload.ts` | Created | Upload queue management hook with concurrency pool |
-| `client/src/components/index.ts` | Modified | Export new components |
+| `client/src/components/index.ts` | Modified | Export new components (DragDropZone, UploadProgressItem, MarkdownDocument) |
+| `client/src/components/media/DocumentViewer.tsx` | Modified | Route markdown to MarkdownDocument, images to inline viewer, add PPTX type label |
 | `client/src/pages/projects/CaptureDetailPage.tsx` | Modified | Add DragDropZone below timeline |
-| `client/src/pages/projects/ProjectDetailPage.tsx` | Modified | Add DragDropZone in documents section |
+| `client/src/pages/projects/ProjectDetailPage.tsx` | Modified | Add DragDropZone (expanded types), delete button per document |
 | `client/src/App.tsx` | Modified | Remove example Analytics/Files pages + nav links |
+| `package.json` | Modified | Add react-markdown + remark-gfm dependencies |
 | `config/queries/hello_world.sql` | Deleted | Removed example query (caused deploy failures) |
 | `config/queries/mocked_sales.sql` | Deleted | Removed example query (caused deploy failures) |
 | `client/src/pages/analytics/AnalyticsPage.tsx` | Deleted | Removed example page |
@@ -486,6 +495,8 @@ startNext();
 | `cc63c8e` | Task 2: streaming uploads |
 | `d583148` | Tasks 3–7: browser upload UI + page integrations + example cleanup |
 | `78c653f` | Fix: nullable paired_session_id (migration 014) |
+| `00d4571` | Expand documents: PPTX/PNG/JPEG/Markdown types, delete, markdown editing |
+| `3aec2c7` | Fix: media-routes.ts TS compile error (misplaced route handlers) |
 
 ---
 
@@ -499,7 +510,9 @@ startNext();
 5. ProjectDetailPage integration (Task 7)  ✅ commit d583148
 6. Validation polish (Task 8–9)            ✅ included in Task 3
 7. Migration fix (discovered at runtime)   ✅ commit 78c653f
-8. Testing (Task 10)                       ⏳ deferred (manual PDF verified)
+8. Expanded types + delete + md editing    ✅ commit 00d4571
+9. TS compile fix (media-routes)           ✅ commit 3aec2c7
+10. Testing (Task 10)                      ⏳ deferred (manual PDF verified)
 ```
 
 ---
@@ -516,3 +529,4 @@ startNext();
 | Memory pressure from parallel 5 GB uploads | Medium | Server streams (no buffer). Client limited to 3 concurrent. Monitor container memory. | ⚠️ Untested |
 | UC Volume write timeout for very large files | Low | AppKit plugin handles chunked writes internally; verify no SDK-level timeout | ⚠️ Untested |
 | NULL paired_session_id constraint on uploads table | **Hit** | Migration 014 drops NOT NULL | ✅ Fixed |
+| Route handler code injected into wrong scope during edit | **Hit** | Re-verified file structure after string-replace edits | ✅ Fixed |

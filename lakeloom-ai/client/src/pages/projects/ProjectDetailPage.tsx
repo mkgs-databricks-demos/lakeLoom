@@ -16,7 +16,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router';
-import { ArrowLeft, Smartphone, Loader2, ChevronDown, ArrowUpDown, Mic2, Camera, FileText, Download, Trash2 } from 'lucide-react';
+import { ArrowLeft, Smartphone, Loader2, ChevronDown, ArrowUpDown, Mic2, Camera, FileText, Image, FileCode, Trash2 } from 'lucide-react';
 import { StatusBadge, TimeAgo, Duration, EmptyState, ConfirmDialog, PairDeviceModal, DragDropZone } from '../../components';
 import { MediaModal } from '../../components/media';
 
@@ -72,6 +72,23 @@ function formatBytes(bytes: number): string {
   const value = bytes / Math.pow(1024, i);
   return `${value.toFixed(i > 1 ? 1 : 0)} ${units[i]}`;
 }
+// ── Document type icon resolver ───────────────────────────────────────────────
+
+function getDocumentMeta(mimeType: string): { icon: typeof FileText; color: string; label: string } {
+  if (mimeType.startsWith('image/')) {
+    return { icon: Image, color: 'text-[var(--accent-info,#2272B4)]', label: 'Image' };
+  }
+  if (mimeType === 'text/markdown' || mimeType === 'text/x-markdown') {
+    return { icon: FileCode, color: 'text-[var(--accent-primary,#FF3621)]', label: 'Markdown' };
+  }
+  if (mimeType === 'application/pdf') {
+    return { icon: FileText, color: 'text-[var(--accent-error,#BD2B26)]', label: 'PDF' };
+  }
+  // DOCX, PPTX, and other documents
+  return { icon: FileText, color: 'text-[var(--accent-warning,#D97706)]', label: 'Document' };
+}
+
+
 
 // ── Media kind icons ──────────────────────────────────────────────────────────
 
@@ -338,10 +355,10 @@ export function ProjectDetailPage() {
                            transition-all duration-200 group cursor-pointer"
               >
                 <div className="flex-1 flex items-center gap-3 min-w-0" onClick={() => setSelectedDocument(upload)}>
-                  <FileText className="w-5 h-5 text-[var(--accent-warning,#D97706)] shrink-0" />
+                  {(() => { const meta = getDocumentMeta(upload.mime_type); const Icon = meta.icon; return <Icon className={`w-5 h-5 ${meta.color} shrink-0`} />; })()}
                   <div className="flex-1 min-w-0">
                     <span className="text-sm font-medium text-[var(--text-primary,#1B3139)] truncate block">
-                      {upload.original_filename ?? `Document`}
+                      {upload.original_filename ?? getDocumentMeta(upload.mime_type).label}
                     </span>
                     <span className="text-xs text-[var(--text-secondary,#5A6F77)]">
                       {formatBytes(upload.size_bytes)} · {upload.mime_type.split('/').pop()?.toUpperCase()}
