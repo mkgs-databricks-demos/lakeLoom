@@ -456,9 +456,15 @@ startNext();
 - [ ] Large file (500 MB+) → progress bar updates smoothly, server doesn't OOM
 - [x] Delete document → removed from list (confirmed via UI)
 - [x] Markdown uploads → accepted and typed correctly (MARKDOWN label shown)
+- [x] Filename displayed in document card (confirmed: "i dream of genie sticker.png")
+- [x] MIME-aware icons render correctly (Image=blue, Markdown=lava, PDF=red)
 
-**Known UX issue (follow-up):**
-- Document cards show generic "Document" title instead of original filename (e.g., "01-PRD.md"). The `original_filename` is stored in the DB but not displayed in the ProjectDetailPage document list.
+**Known UX issue (RESOLVED):**
+- ~~Document cards show generic "Document" title instead of original filename.~~ Fixed in commit `6299507`:
+  - Server now captures `info.filename` from Busboy file event (both parsers)
+  - Client renders `original_filename` with type-fallback label
+  - MIME-aware icons: Image (blue), Markdown (lava), PDF (red), Document (amber)
+  - Pre-fix uploads backfilled via migration 015 (commit `66ce4df`)
 
 ---
 
@@ -480,6 +486,7 @@ startNext();
 | `client/src/pages/projects/ProjectDetailPage.tsx` | Modified | Add DragDropZone (expanded types), delete button per document |
 | `client/src/App.tsx` | Modified | Remove example Analytics/Files pages + nav links |
 | `package.json` | Modified | Add react-markdown + remark-gfm dependencies |
+| `server/migrations/015_backfill_upload_filenames.ts` | Created | Backfill original_filename for 9 pre-fix browser uploads |
 | `config/queries/hello_world.sql` | Deleted | Removed example query (caused deploy failures) |
 | `config/queries/mocked_sales.sql` | Deleted | Removed example query (caused deploy failures) |
 | `client/src/pages/analytics/AnalyticsPage.tsx` | Deleted | Removed example page |
@@ -497,6 +504,8 @@ startNext();
 | `78c653f` | Fix: nullable paired_session_id (migration 014) |
 | `00d4571` | Expand documents: PPTX/PNG/JPEG/Markdown types, delete, markdown editing |
 | `3aec2c7` | Fix: media-routes.ts TS compile error (misplaced route handlers) |
+| `6299507` | Fix: MIME-aware document icons/labels + capture original filename from browser uploads |
+| `66ce4df` | Fix: backfill original_filename for 9 pre-fix browser uploads (migration 015) |
 
 ---
 
@@ -512,7 +521,9 @@ startNext();
 7. Migration fix (discovered at runtime)   ✅ commit 78c653f
 8. Expanded types + delete + md editing    ✅ commit 00d4571
 9. TS compile fix (media-routes)           ✅ commit 3aec2c7
-10. Testing (Task 10)                      ⏳ deferred (manual PDF verified)
+10. MIME-aware icons + filename capture     ✅ commit 6299507
+11. Backfill filenames (migration 015)     ✅ commit 66ce4df
+12. Testing (Task 10)                      ⏳ deferred (manual PDF verified)
 ```
 
 ---
