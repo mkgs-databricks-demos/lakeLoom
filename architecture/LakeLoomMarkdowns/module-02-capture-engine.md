@@ -1377,9 +1377,9 @@ The live stream is best-effort during the session — it's for in-session UX and
 
 ```
 iOS/App/Captures/
-├── CaptureAPIClient.swift         # protocol + LiveCaptureAPIClient
+├── CaptureAPIClient.swift         # protocol + LiveCaptureAPIClient + ProjectDocument
 ├── CaptureAPIError.swift          # typed errors
-├── CaptureSession.swift           # value type + State/EndState
+├── CaptureSession.swift           # value type + State/EndState + uploadKinds
 ├── CaptureService.swift           # protocol + state + errors
 ├── LiveCaptureService.swift       # orchestrating actor
 ├── FileSHA256.swift               # streaming hasher
@@ -1390,13 +1390,25 @@ iOS/App/Captures/
 │   ├── AudioBufferSource.swift        # PR 9b: protocol + PCMBufferEnvelope
 │   ├── EngineAudioRecordingEngine.swift # PR 9a/9b: AVAudioEngine + AVAudioFile + AAC writer
 │   └── LiveAudioRecorder.swift        # actor implementation
+├── Camera/
+│   ├── PhotoCapture.swift             # protocol + CapturedPhoto + errors
+│   ├── PhotoCaptureEngine.swift       # AVFoundation seam
+│   └── LivePhotoCapture.swift         # actor implementation
+├── Media/
+│   └── MediaContentService.swift      # PR #65: GET /api/media/:id downloader
 ├── Speech/
 │   ├── StreamingSpeechRecognizer.swift     # PR 9b: protocol
 │   └── LiveStreamingSpeechRecognizer.swift # PR 9b: SFSpeechRecognizer buffer-mode actor
+├── Transcripts/
+│   ├── TranscriptStreamer.swift           # protocol
+│   ├── LiveTranscriptStreamer.swift       # batch + retry to /api/sessions/:id/events
+│   ├── TranscriptEventsClient.swift       # protocol
+│   ├── LiveTranscriptEventsClient.swift   # POST wire transport
+│   └── DeviceIdentityStore.swift          # per-device UUID (used by event payloads)
 └── Upload/
     ├── PendingUpload.swift            # value type + state machine
     ├── UploadCoordinator.swift        # protocol + errors
-    ├── LiveUploadCoordinator.swift    # actor + worker loop + retry policy
+    ├── LiveUploadCoordinator.swift    # actor + worker loop + retry policy + auto-retire on success
     ├── UploadQueueStore.swift         # disk persistence
     └── MultipartFormBuilder.swift     # multipart/form-data builder
 
@@ -1404,3 +1416,72 @@ iOS/AppTests/Captures/  — 322 unit tests across LakeloomAppTests
 ```
 
 Full suite (LakeloomApp + LakeloomAppTests) passes in ~1.2 s on iPhone 17 simulator. The SwiftUI views (`SessionsListView` with infinite-scroll pagination, `CaptureDetailView` with in-flight upload merge, `RecordingView`, etc.) aren't covered by unit tests today — Module 08's UI test plan covers those at the AppUITests level.
+
+---
+
+## 24. As-Built Addenda (2026-05-25)
+
+Folds the post-PR-9b deltas into the spec without re-flowing the existing
+prose. These all shipped between PR #60 and PR #67 and supersede earlier
+"design only" markers where they overlap.
+
+### 24.1 `CaptureService` protocol surface (current)
+
+```swift
+public protocol CaptureService: Sendable {
+    func startCapture(workspaceID: String, projectID: String, label: String?) async throws
+    func stopCapture() async throws
+    func cancelCapture() async throws
+    var state: CaptureServiceState { get async }
+    func stateUpdates() async -> AsyncStream<CaptureServiceState>
+    func start() async
+
+    // PR #62 (live transcript fan-out)
+    func transcriptSegmentUpdates() async -> AsyncStream<TranscriptSegment>
+
+    // PR #62 (in-session camera)
+    func capturePhoto() async throws
+}
+```
+
+`CaptureServiceState` enum: `idle | recording(Context) | finalizing(Context, pendingUploadIDs: Set<String>) | completed(Context) | cancelled(Context) | failed(reason: String)`. Multiple subscribers can take independent streams via `stateUpdates()`/`transcriptSegmentUpdates()` — both backed by per-subscriber `AsyncStream.Continuation` maps inside `LiveCaptureService`.
+
+### 24.2 `CaptureAPIClient` additions
+
+* `updateCaptureLabel(workspaceID:captureSessionID:label:) -> CaptureSession` — PATCH `/api/v1/captures/:id/label`. (Server-side 500 on dev as of 2026-05-25; see `architecture/hi_genie/2026-05-25_capture-label-patch-500.md`.)
+* `listProjectDocuments(workspaceID:projectID:) -> [ProjectDocument]` — GET `/api/media/project/:id` (Genie's PR #61 contract).
+* `CaptureSession.uploadKinds: [CaptureUpload.Kind]?` decoded from the `upload_kinds` `array_agg` field — drives the session-row chip badges (Module 08).
+
+`ProjectDocument` is a leaner sibling of `CaptureUpload` that matches the media-routes list response shape. `ProjectDocument(from: CaptureUpload)` adapts the capture-attached shape down for the QuickLook viewer.
+
+### 24.3 stopCapture watcher
+
+After enqueuing the audio, `stopCapture` snapshots `uploadCoordinator.currentUploads()` filtered to this `captureSessionID` and non-terminal. The set captures the audio + any photos enqueued mid-recording that haven't drained.
+
+**Fast path:** when the snapshot is empty (every upload already auto-retired during the recognizer drain), `stopCapture` patches the server to `state=completed` directly and skips spawning a watcher. Without this, an empty `pendingUploadIDs` set would leave the watcher iterating a stream whose events all get filtered out (`pending.contains(...)` is always false), stranding the UI at "Uploading 0 files…".
+
+**Watcher path:** when the snapshot is non-empty, transitions to `.finalizing(Context, pendingUploadIDs: …)` and spawns a watcher on `uploadCoordinator.stateUpdates()`. Each `.succeeded` event removes the upload from the local pending set; once empty, watcher PATCHes server + transitions to `.completed`.
+
+### 24.4 Upload coordinator auto-retire (PR #60, ref `78731b0`)
+
+`LiveUploadCoordinator.workerLoop` removes each `.succeeded` upload from both the in-memory dict and `order[]`, persists the shrunken queue, then broadcasts `.succeeded` last. Subscribers that call `currentUploads()` in response see the entry already gone — correct, since a `.succeeded` upload has no remaining work. Failed-permanent uploads still retain their entry + file for retry/discard via the UI. This is the root cause fix for the orphan accumulation we saw in 9b real-device testing.
+
+### 24.5 In-session photo capture lifecycle
+
+`LiveCaptureService.capturePhoto()`:
+1. Guards `case .recording = current`; throws `notRecording` otherwise.
+2. Awaits `photoCapture.capturePhoto(captureSessionID:)` → `CapturedPhoto` (presents AVCaptureSession UI as a side effect).
+3. Hashes file → constructs `PendingUpload(kind: .photo, captureSessionID: <active>, …)`.
+4. `uploadCoordinator.enqueue(...)` — worker starts uploading immediately, parallel with the still-running audio recorder and speech recognizer.
+5. Returns to caller (UI re-enables the button).
+
+Mid-recording photos can either succeed (auto-retire from queue during recording) or still be in flight at `stopCapture` time (captured by the watcher snapshot in §24.3). Either way, the photo is attached to the active capture's server-side `captureSessionID`.
+
+### 24.6 Module 02 vs Module 03 boundary
+
+The "IngestService" originally specified in Module 03 is realized in this module as two concrete pipelines, both shipped:
+
+* **Transcript events** → `LiveTranscriptStreamer` + `LiveTranscriptEventsClient` (POST batches to `/api/sessions/:id/events`).
+* **Media files** → `LiveUploadCoordinator` + `MultipartFormBuilder` (POST multipart to `/api/captures/:id/{audio|photos|screenshots}` + `/api/projects/:id/documents`).
+
+No standalone "outbox" actor — the two pipelines persist their own state independently (`UploadQueueStore` on disk; `TranscriptStreamer` keeps its batch buffer in memory for the session and best-effort drains to ZeroBus). Module 03's spec stays valid as a design but the as-built layout lives here.

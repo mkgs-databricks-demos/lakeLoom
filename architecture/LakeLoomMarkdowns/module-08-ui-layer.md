@@ -715,18 +715,21 @@ System-defined where possible:
 
 ### 9.2 Typography
 
-System-defined Dynamic Type styles throughout. No custom fonts in v1.
+**As-built (2026-05-24):** v1 ships with **DM Sans + DM Mono** vendored under `App/Resources/Fonts/`, registered with the per-process font manager at app launch via `BrandFontRegistration.registerAll()` (a small `CTFontManagerRegisterFontsForURL` helper). `Font.brand(_:weight:)` resolves via `Font.custom(...)` keyed on the PostScript names — `DMSans-Regular`, `DMSans-Medium`, `DMSans-Bold`, `DMMono-Regular`, `DMMono-Medium`. `BrandTypography` exposes a fixed scale (`xs` 10pt … `displayLarge` 56pt) plus role tokens (`caption`, `body`, `bodyEmphasis`, `bodyLarge`, `titleSmall`, `titleMedium`, `titleLarge`, `monospaceCode`).
+
+`Font.custom` falls back to `Font.system(...)` when a face isn't registered (e.g., test bundles that don't copy resources), so the app keeps rendering with SF Pro for that role rather than refusing to draw text. SIL OFL 1.1 license; sources are GoogleFonts `dm-fonts` + `dm-mono`.
 
 | Use | Style |
 |---|---|
-| Screen title | `.largeTitle.bold()` or `.title.bold()` |
-| Section header | `.headline` |
-| Body | `.body` |
-| Secondary text | `.subheadline` `.foregroundStyle(.secondary)` |
-| Caption | `.caption` |
-| Live transcript | `.title2` (large for readability while held away from face) |
-| Capture button glyph | SF Symbol at 44pt |
-| Timer in capture overlay | `.system(size: 48, weight: .semibold, design: .monospaced)` |
+| Screen title | `BrandTypography.titleMedium` (32pt DM Sans Bold) |
+| Section header | `BrandTypography.captionMedium` uppercased + 1pt tracking |
+| Body | `BrandTypography.body` (16pt DM Sans Regular) |
+| Body emphasis | `BrandTypography.bodyEmphasis` (16pt DM Sans Medium) |
+| Caption | `BrandTypography.caption` (14pt DM Sans Regular) |
+| Mono caption | `BrandTypography.caption.monospaced()` — falls back to system mono; DM Mono used via `monospaceCode` for explicit DM Mono |
+| Live transcript phrases | `BrandTypography.body` (in the recording-view scrolling card) |
+| Capture button glyph | SF Symbol at 56pt |
+| Timer in recording view | `.system(size: 48, weight: .semibold, design: .monospaced)` (mono SF Pro for ligatured digit width) |
 
 ### 9.3 Spacing
 
@@ -956,3 +959,117 @@ App/Views/
 ```
 
 Tests mirror this layout under `AppTests/Views/`.
+
+---
+
+## As-Built UI Surface (2026-05-25)
+
+The view families that have actually shipped, organized by the navigation surface that opens them. This addendum supersedes the file-tree layout above for everything in the **Home**, **Sessions**, and **Onboarding** clusters.
+
+### Home shell (`HomeContainerView`)
+
+`HomeView` (presentational):
+* `PROJECT` header at top with the active project's name
+* Result banner (capture saved / cancelled / failed / mic-denied / offline)
+* Hero **Record** button (144pt circle, Lava 600, pulse animation while recording — via `RecordButtonPressStyle`)
+* `WORKSPACE` footer block at bottom: friendly name + URL host (DM Mono caption) + username
+
+Toolbar `⋯` menu:
+* **Account** → `AccountSettingsView` (sheet)
+* **Switch project** → `ProjectSwitcherView` (sheet)
+* **Documents** → `ProjectDocumentsView` (sheet)
+* **Pending uploads** → `PendingUploadsView` (sheet)
+* `#if DEBUG`: **Endpoint smoke test** → `EndpointSmokeTestView`
+* **Sign out** (destructive)
+
+Top-trailing toolbar item shows a **pending-upload badge** (tray-and-arrow icon + Lava 600 count chip) whenever `uploadCoordinator.currentUploads().count > 0`. Disappears at rest. Tap opens the same `PendingUploadsView` sheet as the menu item.
+
+Top-leading toolbar item is a **Sessions** push (`SessionsListView`).
+
+### Recording (`fullScreenCover` from home)
+
+`RecordingView` mounted while the capture service is in `.recording` or `.finalizing`:
+* Header: active project name + state pill ("Recording" / "Finalizing")
+* **Live transcript card** — scrolling list of phrases emitted by `LiveStreamingSpeechRecognizer`, fed via `CaptureService.transcriptSegmentUpdates()`. Auto-scrolls to newest. Hidden until the first phrase arrives.
+* State indicator: pulsing Lava 600 dot (recording) or progress spinner + "Uploading N files…" (finalizing)
+* Elapsed timer (mono SF Pro)
+* Action stack: **Take photo** (only during `.recording`), primary **Stop** (disabled during `.finalizing`), destructive **Cancel** (also `discard uploads` in finalizing)
+
+`.interactiveDismissDisabled()` — only state transitions dismiss the cover.
+
+### Project switcher + detail (sheet stack)
+
+`ProjectSwitcherView`:
+* List of workspace projects with the active one checkmarked
+* Per-row ⓘ info button → `ProjectDetailView` (push, not new sheet — preserves the back-stack context)
+* Persistent footer: **+ New project** → push `ProjectCreateFormView` (inline form for name + description)
+* Pull-to-refresh
+
+`ProjectDetailView`:
+* Default view mode: name, description (em-dash when empty), metadata (Created / Last updated / Created by / Project ID in DM Mono)
+* Toolbar **Edit** → in-place edit mode: TextFields for name + description, Save PATCHes via `ProjectServicing.update`. Inline error banner on failure.
+
+`ProjectCreateFormView`:
+* Two TextFields (name + optional description)
+* On submit, `AppCoordinator.createAndSwitchToProject(name:description:)` creates the project on the server, sets default, replaces `activeContext`, and the whole sheet dismisses back to home with the new project already active.
+
+### Sessions (push from home toolbar)
+
+`SessionsListView`:
+* List of `CaptureSession` rows. Each row: label (or "Untitled capture") + `CaptureStateBadge` + relative time + a row of **upload-kinds chips** (audio / photo / screenshot / document icons sourced from `session.uploadKinds` populated by Genie's `array_agg` in PR #61).
+* Infinite-scroll pagination via `before=<oldestSeen.startedAt>` query param (server already supported the cursor). Last row's `.onAppear` fires `loadNextPage(...)`, guarded by `!reachedEnd && !isLoadingMore` so a fast scroll can't double-trigger.
+* Tap row → push `CaptureDetailView`.
+* Pull-to-refresh resets the cursor.
+
+`CaptureDetailView`:
+* Header: state badge + short ID + label + **pencil button** → label-edit sheet (PATCH `/api/v1/captures/:id/label`).
+* Metadata: started / ended / device label.
+* **Uploads** section merges two sources:
+  * **Client-side** in-flight rows via `UploadCoordinator.currentUploads()` filtered to this `captureSessionID`. Render with state-tinted status text and a spinner / retry-discard pair on failure.
+  * **Server-ingested** rows from `getCaptureSession(includeUploads: true)`. Each is wrapped in a `NavigationLink` that pushes `DocumentViewerView` — tap an audio row to play (QuickLook scrubber), tap a photo to view (QuickLook image with pinch-to-zoom).
+  * De-dupes by `sha256Hex` so a `.succeeded` client row drops out the moment the server reflects it.
+
+### Documents (sheet from home menu)
+
+`ProjectDocumentsView`:
+* `GET /api/media/project/:id` lists project-level uploads (`capture_session_id IS NULL`) — AI-pipeline outputs (Whisper transcript, requirements doc, architecture diagram, session plan) + reference materials uploaded server-side.
+* Each row: kind icon, filename, MIME type (DM Mono), byte size, relative `uploaded_at`.
+* Tap row → push `DocumentViewerView`.
+* Pull-to-refresh.
+
+`DocumentViewerView`:
+* `.task` downloads bytes via `MediaContentService.downloadMedia(...)` → temp file with extension derived from MIME via `UTType`.
+* Swaps to `QLPreviewController` (wrapped in `UIViewControllerRepresentable`) once on disk. Handles PDF, JPEG/PNG, audio (m4a/wav), video, plain text natively.
+* Typed error states with Try Again.
+
+### Pending uploads (sheet from home menu + toolbar badge)
+
+`PendingUploadsView`:
+* Lists every upload tracked by the coordinator (any capture session), with state-tinted status text, spinner / check / retry-discard trailing.
+* Header summary: counts of In flight / Uploaded / Failed.
+* Per-row Retry / Discard.
+* Top-trailing **Retry & clear** action: re-queues every non-`.succeeded` upload, waits for terminal state via polling, then discards each `.succeeded` AND PATCHes its parent capture session to `state=completed` on the server. Both halves use `UploadCoordinator.retry/discard` + `CaptureAPIClient.updateCaptureSession`. Doesn't tear down `.failed permanent` entries — those stay for manual handling.
+
+### Account (sheet from home menu)
+
+`AccountSettingsView` — read-only summary screen. Five sections:
+* Account: username + display name + email
+* Workspace: name + host (DM Mono) + cloud + region + signed-in
+* Device: device UUID (lazy-loaded via `DeviceIdentityStore`) + paired-session ID prefix + session expiry
+* App: version + build (`Info.plist`)
+* Sign out (destructive)
+
+`.textSelection(.enabled)` on every value row so long-press copy works without per-row buttons.
+
+### Brand styling
+
+`Style/`:
+* `BrandColors` — Databricks palette (lava / navy / oat) + semantic tokens (`accentPrimary`, `surfacePrimary/Secondary/Raised`, `textPrimary/Secondary/Muted`, status colors) using `Color(light: ..., dark: ...)`.
+* `BrandTypography` — DM Sans / DM Mono scale + role tokens (see §9.2 above).
+* `BrandFontRegistration` — CTFontManager registration helper called once from `LakeloomApp.init`.
+* `BrandMotion` — reduce-motion-aware spring / easing curves.
+* `Spacing` — `xs` 4pt … `xxl` 48pt.
+
+### Tests
+
+322 unit tests in `LakeloomAppTests`. SwiftUI views are not under unit test today — coverage is intended at the `LakeloomAppUITests` level (a `LaunchTests.swift` smoke test runs on every PR; richer UI tests live as a follow-up).
