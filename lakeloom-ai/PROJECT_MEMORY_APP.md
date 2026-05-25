@@ -62,7 +62,7 @@ lakeLoom/
 │   │   ├── server.ts              # Entry: secrets → migrations → routes → serve
 │   │   ├── lib/                   # crypto.ts, errors.ts (RFC 9457)
 │   │   ├── middleware/            # ios-auth.ts, browser-auth.ts + dualAuth()
-│   │   ├── migrations/            # 001–016 (paired_sessions → uploads updated_at)
+│   │   ├── migrations/            # 001–018 (paired_sessions → client_generated_id)
 │   │   ├── services/              # secrets, sse, zerobus stream pool
 │   │   └── routes/                # pairing, captures, uploads, events, projects, media, zerobus
 │   ├── client/                     # React frontend (Vite + Tailwind v4)
@@ -128,6 +128,10 @@ lakeLoom/
   * **Critical audio lesson:** never wrap a 200 upstream media response as synthetic 206. Strictly proxy 206 only when upstream is actually 206, or browsers reject playback.
   * **Critical dialog lesson:** native `<dialog>` + Tailwind `grid` requires `hidden open:grid` or the element becomes always visible because `display: grid` overrides UA `display:none`.
   * Branch is clean to merge to `main`; no overlapping files with Isaac's PR #60 (all iOS-side).
+
+* **2026-05-25: CDF enabled on ALL Lakebase sync tables.** `lb_capture_sessions_history`, `lb_paired_sessions_history`, `lb_projects_history` now join `lb_uploads_history` and `transcript_events_raw`. Enables streaming pipeline triggers for Phase 5 AI processing.
+* **2026-05-25: Offline capture contract DEPLOYED.** Migration 018 (`client_generated_id` UUID + partial unique index), handler idempotency (200 re-submit / 201 new), Option A (client ID = primary key). Both migrations 017+018 verified in OTel. Reply sent to Isaac. Branch: `mg-isaac-genie-interaction`.
+* **2026-05-25: Capture-completion pipeline designed.** CDF on `lb_capture_sessions_history` triggers bronze→silver→gold SDP pipeline. Gold produces 4 AI deliverables per capture: Whisper transcript, requirements doc, architecture diagram, Genie Code session plan. Latency budget: ~3–7 min. Design doc: `fixtures/phase5-document-edit-cdf-pipeline.md`.
 
 ## Resolved Target Variables (dev)
 
