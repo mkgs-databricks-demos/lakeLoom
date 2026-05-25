@@ -38,6 +38,7 @@ struct HomeContainerView: View {
     @State private var showingPendingUploads = false
     @State private var showingProjectSwitcher = false
     @State private var showingDocuments = false
+    @State private var showingAccount = false
 
     /// Live count of `UploadCoordinator.currentUploads()`. Drives a
     /// badge on the toolbar so the user can tell at a glance when
@@ -113,6 +114,21 @@ struct HomeContainerView: View {
             }
         }
         .task { await observePendingUploadCount() }
+        .sheet(isPresented: $showingAccount) {
+            if let context = coordinator.activeContext {
+                AccountSettingsView(
+                    context: context,
+                    deviceIdentity: coordinator.deviceIdentity,
+                    onSignOut: {
+                        showingAccount = false
+                        Task {
+                            try? await coordinator.signOut(workspaceID: context.workspace.id)
+                        }
+                    },
+                    onDismiss: { showingAccount = false }
+                )
+            }
+        }
         .sheet(isPresented: $showingDocuments) {
             if let api = coordinator.captureAPI,
                let context = coordinator.activeContext {
@@ -227,6 +243,11 @@ struct HomeContainerView: View {
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 if coordinator.activeContext != nil {
+                    Button {
+                        showingAccount = true
+                    } label: {
+                        Label("Account", systemImage: "person.crop.circle")
+                    }
                     Button {
                         showingProjectSwitcher = true
                     } label: {
