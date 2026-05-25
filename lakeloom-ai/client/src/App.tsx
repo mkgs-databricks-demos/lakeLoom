@@ -15,8 +15,6 @@ import { useCurrentUser } from './hooks/useCurrentUser';
 const ProjectsPage = lazy(() => import('./pages/projects/ProjectsPage').then(m => ({ default: m.ProjectsPage })));
 const ProjectDetailPage = lazy(() => import('./pages/projects/ProjectDetailPage').then(m => ({ default: m.ProjectDetailPage })));
 const CaptureDetailPage = lazy(() => import('./pages/projects/CaptureDetailPage').then(m => ({ default: m.CaptureDetailPage })));
-const AnalyticsPage = lazy(() => import('./pages/analytics/AnalyticsPage').then(m => ({ default: m.AnalyticsPage })));
-const FilesPage = lazy(() => import('./pages/files/FilesPage').then(m => ({ default: m.FilesPage })));
 const PairingPage = lazy(() => import('./pages/pairing/PairingPage').then(m => ({ default: m.PairingPage })));
 
 function PageLoader() {
@@ -58,12 +56,6 @@ function Layout() {
           </NavLink>
           <NavLink to="/pairing" className={navLinkClass}>
             Pair iPhone
-          </NavLink>
-          <NavLink to="/files" className={navLinkClass}>
-            Files
-          </NavLink>
-          <NavLink to="/analytics" className={navLinkClass}>
-            Analytics
           </NavLink>
         </nav>
 
@@ -155,8 +147,6 @@ const router = createBrowserRouter([
       { path: '/projects/:id', element: <ProjectDetailPage /> },
       { path: '/projects/:id/captures/:cid', element: <CaptureDetailPage /> },
       { path: '/pairing', element: <PairingPage /> },
-      { path: '/analytics', element: <AnalyticsPage /> },
-      { path: '/files', element: <FilesPage /> },
     ],
   },
 ]);

@@ -17,7 +17,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router';
 import { ArrowLeft, Smartphone, Loader2, ChevronDown, ArrowUpDown, Mic2, Camera, FileText, Download } from 'lucide-react';
-import { StatusBadge, TimeAgo, Duration, EmptyState, ConfirmDialog, PairDeviceModal } from '../../components';
+import { StatusBadge, TimeAgo, Duration, EmptyState, ConfirmDialog, PairDeviceModal, DragDropZone } from '../../components';
 import { MediaModal } from '../../components/media';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -307,12 +307,12 @@ export function ProjectDetailPage() {
       )}
 
       {/* ── Project-level documents ──────────────────────────────────────────── */}
-      {projectUploads.length > 0 && (
-        <div className="mb-8">
-          <h2 className="text-base font-semibold text-[var(--text-primary,#1B3139)] mb-3">
-            Project Documents
-          </h2>
-          <div className="grid gap-2">
+      <div className="mb-8">
+        <h2 className="text-base font-semibold text-[var(--text-primary,#1B3139)] mb-3">
+          Project Documents
+        </h2>
+        {projectUploads.length > 0 && (
+          <div className="grid gap-2 mb-4">
             {projectUploads.map((upload) => (
               <div
                 key={upload.id}
@@ -335,8 +335,23 @@ export function ProjectDetailPage() {
               </div>
             ))}
           </div>
-        </div>
-      )}
+        )}
+
+        {/* Browser document upload zone */}
+        <DragDropZone
+          accept={['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']}
+          maxSizeBytes={5 * 1024 * 1024 * 1024}
+          multiple
+          compact
+          concurrency={3}
+          uploadUrl={`/api/projects/${projectId}/documents`}
+          onUploadComplete={() => {
+            // Refresh documents after successful upload
+            fetchProjectUploads(projectId).then(setProjectUploads).catch(() => {});
+          }}
+          label="Drop PDF or DOCX documents here"
+        />
+      </div>
 
       {/* ── Section header + filter + sort ───────────────────────────────────── */}
       <div className="flex items-center justify-between mb-4">
