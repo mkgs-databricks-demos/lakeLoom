@@ -51,8 +51,8 @@ export function MediaPanel({ upload }: MediaPanelProps) {
     );
   }
 
-  // Document types (PDF, DOCX)
-  if (mime_type === 'application/pdf' || mime_type.includes('officedocument')) {
+  // Document types (PDF, DOCX, Markdown)
+  if (mime_type === 'application/pdf' || mime_type.includes('officedocument') || mime_type === 'text/markdown') {
     return (
       <DocumentViewer
         uploadId={id}

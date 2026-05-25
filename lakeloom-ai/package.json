@@ -52,7 +52,9 @@
     "uuid": "^11.1.0",
     "zod": "4.1.13",
     "recharts": "2.15.3",
-    "qrcode.react": "^4.2.0"
+    "qrcode.react": "^4.2.0",
+    "react-markdown": "^9.0.3",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@ast-grep/napi": "0.37.0",

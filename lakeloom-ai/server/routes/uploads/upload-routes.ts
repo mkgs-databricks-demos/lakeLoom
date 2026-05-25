@@ -1,14 +1,15 @@
 /**
- * Binary upload routes — iOS-authenticated, App-proxied to UC Volumes.
+ * Binary upload routes — iOS + browser authenticated, App-proxied to UC Volumes.
  *
  * Per ADR-001, all binary uploads route through the App:
  *   iOS → App endpoint (Layer 0+1 auth) → App backend → UC Volume write (App SPN)
+ *   Browser → App endpoint (on-behalf-of-user auth) → App backend → UC Volume write (App SPN)
  *
  * Endpoints:
- *   POST /api/captures/:capture_session_id/audio        — Session audio recordings
- *   POST /api/captures/:capture_session_id/screenshots  — Session screen captures
- *   POST /api/captures/:capture_session_id/photos       — Camera photos (whiteboards, artifacts)
- *   POST /api/projects/:project_id/documents            — Project reference documents
+ *   POST /api/captures/:capture_session_id/audio        — Session audio recordings (iOS ONLY)
+ *   POST /api/captures/:capture_session_id/screenshots  — Session screen captures (iOS + browser)
+ *   POST /api/captures/:capture_session_id/photos       — Camera photos (iOS + browser)
+ *   POST /api/projects/:project_id/documents            — Project reference documents (iOS + browser)
  *
  * Path layout (project-anchored, UUIDv7 filenames):
  *   audio:       /Volumes/.../session_audio/{project_id}/{capture_session_id}/{uuidv7}.{ext}
@@ -17,28 +18,44 @@
  *   documents:   /Volumes/.../documents/{project_id}/{uuidv7}.{ext}
  *
  * Upload flow (per Isaac's 9-step spec):
- *   1. iosAuth middleware resolves paired_session_id + user_id
- *   2. Validate URL params (capture exists + state='active', or project exists)
- *   3. Parse multipart body (busboy). Reject if file field missing/empty.
- *   4. Generate UUIDv7 → upload_id (also the filename root)
+ *   1. Auth middleware resolves user_id (+ paired_session_id for iOS, empty for browser)
+ *   2. Validate URL params (capture exists + valid state, or project exists)
+ *   3. Generate UUIDv7 → upload_id (also the filename root)
+ *   4. Parse multipart body (busboy). Reject if file field missing/empty.
  *   5. Validate MIME against per-endpoint allowlist, derive extension
- *   6. Upload file to UC Volume via AppKit files plugin, compute SHA-256 from buffer
- *   7. If iOS sent sha256_hex, compare. Mismatch → 400 + delete file.
+ *   6. Upload file to UC Volume via AppKit files plugin, compute SHA-256 from buffer or stream
+ *   7. If client sent sha256_hex, compare. Mismatch → 400 + delete file.
  *   8. INSERT INTO app.uploads
  *   9. Return 201 { id, kind, volume_path, size_bytes, sha256_hex, uploaded_at }
+ *
+ * Auth:
+ *   - Audio: iosAuth only (recording is iOS-exclusive)
+ *   - Screenshots/Photos/Documents: dualAuth (iOS Layer 2 OR browser on-behalf-of-user)
+ *   - clientType is server-determined from auth context (x-lakeloom-session-token → ios, else → web)
+ *
+ * State rules:
+ *   - iOS: can only upload to active capture sessions
+ *   - Browser: can upload to active OR completed sessions (post-hoc annotation)
+ *   - Neither: cancelled sessions reject uploads
  *
  * Volume I/O:
  *   All file operations use the AppKit files() plugin, which manages SDK auth,
  *   directory creation, and upload serialization correctly. Volume keys match
  *   the app.yaml valueFrom identifiers: session-audio, screenshots, documents.
+ *
+ * Large-file behavior:
+ *   - iOS retains the proven buffer-based path (small files, simpler)
+ *   - Browser uses a streaming path for 5 GB uploads: Busboy → PassThrough → UC Volume
+ *     while SHA-256 is computed incrementally and size is enforced without buffering
  */
 
 import { createHash } from 'node:crypto';
-import { Readable } from 'node:stream';
+import { Readable, PassThrough } from 'node:stream';
 import type { Application, Request, Response, NextFunction } from 'express';
 import Busboy from 'busboy';
 import { v7 as uuidv7 } from 'uuid';
 import { iosAuth } from '../../middleware/ios-auth';
+import { dualAuth } from '../../middleware/browser-auth';
 import { AppError, ErrorTypes } from '../../lib/errors';
 
 // ── Interfaces ───────────────────────────────────────────────────────────────────
@@ -76,12 +93,26 @@ const MIME_TO_EXT: Record<string, string> = {
   'image/jpeg': 'jpg',
   'application/pdf': 'pdf',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+  'text/markdown': 'md',
 };
 
 // ── Client type constants ────────────────────────────────────────────────────────
 
 /** Upload source discriminator — server-determined from auth context */
 export type ClientType = 'ios' | 'web';
+
+/** 5 GB maximum upload size for browser uploads. */
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024;
+
+/**
+ * Detect client type from request auth context.
+ * Presence of X-Lakeloom-Session-Token header indicates iOS Layer 2 auth.
+ * Absence (with browser identity headers) indicates web/browser.
+ */
+function detectClientType(req: Request): ClientType {
+  return req.headers['x-lakeloom-session-token'] ? 'ios' : 'web';
+}
 
 // ── Volume path helpers ──────────────────────────────────────────────────────────
 
@@ -223,7 +254,7 @@ type UploadDiagnostics = {
   clientType: ClientType;
   projectId: string;
   captureSessionId: string | null;
-  pairedSessionId: string;
+  pairedSessionId: string | null;
   userId: string;
   fileMimeType: string;
   clientFilename?: string;
@@ -302,6 +333,19 @@ interface ParsedUpload {
   deviceId?: string;
 }
 
+interface ParsedStreamingUpload {
+  fileMimeType: string;
+  clientTs?: string;
+  clientFilename?: string;
+  clientSha256?: string;
+  deviceId?: string;
+  sizeBytes: number;
+  sha256Hex: string;
+  relativePath: string;
+  canonicalPath: string;
+  fileName: string;
+}
+
 function getBufferedRequestBody(req: Request): Buffer | null {
   const rawBody = (req as Request & { _rawBody?: unknown })._rawBody;
   return Buffer.isBuffer(rawBody) ? rawBody : null;
@@ -327,6 +371,8 @@ function parseMultipart(req: Request): Promise<ParsedUpload> {
 
     busboy.on('file', (_fieldname, stream, info) => {
       fileMimeType = info.mimeType;
+      // Capture the filename from Content-Disposition (browser sends this automatically)
+      if (info.filename && !clientFilename) clientFilename = info.filename;
       fileReceived = true;
       stream.on('data', (chunk: Buffer) => chunks.push(chunk));
       stream.on('error', (streamErr) => {
@@ -361,9 +407,253 @@ function parseMultipart(req: Request): Promise<ParsedUpload> {
   });
 }
 
+async function parseMultipartStreaming(
+  req: Request,
+  opts: {
+    allowedMimes?: string[];
+    volumeKey: string;
+    volumeBasePath: string;
+    projectId: string;
+    captureSessionId: string | null;
+    uploadId: string;
+    appkitFiles: AppKitFiles;
+  },
+): Promise<ParsedStreamingUpload> {
+  return new Promise((resolve, reject) => {
+    const contentType = req.headers['content-type'] ?? '';
+    if (!contentType.toLowerCase().includes('multipart/form-data')) {
+      reject(buildUploadAppError(400, 'Invalid upload payload', 'Expected a multipart/form-data request body.', { error_code: 'UPLOAD_MULTIPART_REQUIRED' }));
+      return;
+    }
+
+    const busboy = Busboy({ headers: req.headers });
+    const bufferedBody = getBufferedRequestBody(req);
+    const hash = createHash('sha256');
+
+    let fileMimeType = '';
+    let clientTs: string | undefined;
+    let clientFilename: string | undefined;
+    let clientSha256: string | undefined;
+    let deviceId: string | undefined;
+
+    let fileReceived = false;
+    let sizeBytes = 0;
+    let relativePath: string | undefined;
+    let canonicalPath: string | undefined;
+    let fileName: string | undefined;
+    let uploadPromise: Promise<void> | null = null;
+    let uploadStarted = false;
+    let settled = false;
+
+    const rejectWithCleanup = (error: AppError) => {
+      if (settled) return;
+      settled = true;
+
+      void (async () => {
+        if (uploadStarted && relativePath) {
+          try {
+            await opts.appkitFiles(opts.volumeKey).delete(relativePath);
+          } catch (deleteErr) {
+            console.error('[upload] delete_partial_streaming_upload_failed', {
+              relative_path: relativePath,
+              volume_key: opts.volumeKey,
+              ...normalizeError(deleteErr),
+            });
+          }
+        }
+        reject(error);
+      })();
+    };
+
+    busboy.on('file', (_fieldname, stream, info) => {
+      if (fileReceived) {
+        stream.resume();
+        rejectWithCleanup(buildUploadAppError(
+          400,
+          'Invalid upload payload',
+          'Exactly one file field is required per upload request.',
+          { error_code: 'UPLOAD_MULTIPLE_FILES_NOT_SUPPORTED' },
+        ));
+        return;
+      }
+
+      fileReceived = true;
+      fileMimeType = info.mimeType;
+      // Capture the filename from Content-Disposition (browser sends this automatically)
+      if (info.filename && !clientFilename) clientFilename = info.filename;
+
+      if (opts.allowedMimes && !opts.allowedMimes.includes(fileMimeType)) {
+        stream.resume();
+        rejectWithCleanup(buildUploadAppError(
+          415,
+          'Unsupported Media Type',
+          `MIME type '${fileMimeType}' is not accepted by this endpoint. Allowed: ${opts.allowedMimes.join(', ')}.`,
+          { error_code: 'UPLOAD_UNSUPPORTED_MIME', file_mime_type: fileMimeType },
+        ));
+        return;
+      }
+
+      const ext = MIME_TO_EXT[fileMimeType];
+      if (!ext) {
+        stream.resume();
+        rejectWithCleanup(buildUploadAppError(
+          415,
+          'Unsupported Media Type',
+          `MIME type '${fileMimeType}' is not supported.`,
+          { error_code: 'UPLOAD_UNSUPPORTED_MIME', file_mime_type: fileMimeType },
+        ));
+        return;
+      }
+
+      const paths = buildUploadPaths({
+        volumeBasePath: opts.volumeBasePath,
+        projectId: opts.projectId,
+        captureSessionId: opts.captureSessionId,
+        uploadId: opts.uploadId,
+        extension: ext,
+      });
+
+      relativePath = paths.relativePath;
+      canonicalPath = paths.canonicalPath;
+      fileName = paths.fileName;
+
+      const passThrough = new PassThrough();
+      uploadStarted = true;
+      uploadPromise = opts.appkitFiles(opts.volumeKey).upload(
+        relativePath,
+        Readable.toWeb(passThrough) as unknown as ReadableStream,
+        { overwrite: false },
+      );
+      void uploadPromise.catch(() => undefined);
+
+      stream.on('data', (chunk: Buffer) => {
+        if (settled) return;
+        sizeBytes += chunk.length;
+        if (sizeBytes > MAX_UPLOAD_BYTES) {
+          const tooLargeError = buildUploadAppError(
+            413,
+            'Upload too large',
+            'The uploaded file exceeds the maximum allowed size of 5 GB.',
+            {
+              error_code: 'UPLOAD_FILE_TOO_LARGE',
+              max_size_bytes: MAX_UPLOAD_BYTES,
+              observed_size_bytes: sizeBytes,
+            },
+          );
+          stream.unpipe(passThrough);
+          passThrough.destroy(tooLargeError);
+          stream.destroy(tooLargeError);
+          rejectWithCleanup(tooLargeError);
+          return;
+        }
+        hash.update(chunk);
+      });
+
+      stream.on('error', (streamErr) => {
+        if (settled) return;
+        passThrough.destroy(streamErr instanceof Error ? streamErr : new Error(getErrorMessage(streamErr)));
+        rejectWithCleanup(buildUploadAppError(
+          400,
+          'Invalid upload stream',
+          'The uploaded file stream could not be read.',
+          { error_code: 'UPLOAD_STREAM_READ_FAILED', error_message: getErrorMessage(streamErr) },
+        ));
+      });
+
+      stream.pipe(passThrough);
+    });
+
+    busboy.on('field', (fieldname, value) => {
+      if (fieldname === 'client_ts') clientTs = value;
+      if (fieldname === 'client_filename') clientFilename = value;
+      if (fieldname === 'sha256_hex') clientSha256 = value;
+      if (fieldname === 'device_id') deviceId = value;
+    });
+
+    busboy.on('error', (parseErr) => {
+      if (settled) return;
+      rejectWithCleanup(buildUploadAppError(
+        400,
+        'Invalid multipart body',
+        'The multipart request body could not be parsed.',
+        { error_code: 'UPLOAD_MULTIPART_PARSE_FAILED', error_message: getErrorMessage(parseErr) },
+      ));
+    });
+
+    busboy.on('finish', () => {
+      if (settled) return;
+
+      void (async () => {
+        if (!fileReceived || !uploadPromise || !relativePath || !canonicalPath || !fileName) {
+          rejectWithCleanup(buildUploadAppError(
+            400,
+            'Missing upload file',
+            'A non-empty file field is required.',
+            { error_code: 'UPLOAD_FILE_REQUIRED' },
+          ));
+          return;
+        }
+
+        if (sizeBytes === 0) {
+          rejectWithCleanup(buildUploadAppError(
+            400,
+            'Missing upload file',
+            'A non-empty file field is required.',
+            { error_code: 'UPLOAD_FILE_REQUIRED' },
+          ));
+          return;
+        }
+
+        try {
+          await uploadPromise;
+        } catch (uploadErr) {
+          rejectWithCleanup(buildUploadAppError(
+            500,
+            'Upload storage failed',
+            'The uploaded file could not be written to the configured storage volume.',
+            {
+              error_code: 'UPLOAD_VOLUME_WRITE_FAILED',
+              canonical_volume_path: canonicalPath,
+              relative_path: relativePath,
+              volume_key: opts.volumeKey,
+              upload_size_bytes: sizeBytes,
+              ...normalizeError(uploadErr),
+            },
+          ));
+          return;
+        }
+
+        if (settled) return;
+        settled = true;
+        resolve({
+          fileMimeType,
+          clientTs,
+          clientFilename,
+          clientSha256,
+          deviceId,
+          sizeBytes,
+          sha256Hex: hash.digest('hex'),
+          relativePath,
+          canonicalPath,
+          fileName,
+        });
+      })();
+    });
+
+    if (bufferedBody) {
+      Readable.from(bufferedBody).pipe(busboy);
+      return;
+    }
+    req.pipe(busboy);
+  });
+}
+
 // ── Route context lookups ────────────────────────────────────────────────────────
 
-async function resolveCaptureContext(req: Request, lakebase: LakebaseClient): Promise<{ projectId: string; captureSessionId: string }> {
+/**
+ * Resolve capture context for iOS uploads — active sessions only.
+ */
+async function resolveCaptureContextIos(req: Request, lakebase: LakebaseClient): Promise<{ projectId: string; captureSessionId: string }> {
   const captureSessionId = requireSingleRouteParam(req.params.capture_session_id, 'capture_session_id');
   const result = await lakebase.query(
     `SELECT project_id FROM app.capture_sessions WHERE id = $1::uuid AND state = 'active' LIMIT 1`,
@@ -372,6 +662,35 @@ async function resolveCaptureContext(req: Request, lakebase: LakebaseClient): Pr
   const row = result.rows[0];
   if (!row) {
     throw buildUploadAppError(404, 'Capture session not found', `No active capture session '${captureSessionId}' was found.`, { error_code: 'UPLOAD_CAPTURE_NOT_FOUND', capture_session_id: captureSessionId });
+  }
+  return { projectId: String(row.project_id), captureSessionId };
+}
+
+/**
+ * Resolve capture context for dual-auth uploads — accepts active OR completed sessions.
+ * Browser users often upload reference material after ending a session.
+ * iOS retains the stricter check via resolveCaptureContextIos.
+ * Cancelled sessions still reject uploads from both clients.
+ */
+async function resolveCaptureContextDual(req: Request, lakebase: LakebaseClient): Promise<{ projectId: string; captureSessionId: string }> {
+  const captureSessionId = requireSingleRouteParam(req.params.capture_session_id, 'capture_session_id');
+  const clientType = detectClientType(req);
+
+  // iOS: active only. Browser: active or completed.
+  const stateClause = clientType === 'ios'
+    ? `state = 'active'`
+    : `state IN ('active', 'completed')`;
+
+  const result = await lakebase.query(
+    `SELECT project_id FROM app.capture_sessions WHERE id = $1::uuid AND ${stateClause} LIMIT 1`,
+    [captureSessionId],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    const stateHint = clientType === 'ios' ? 'active' : 'active or completed';
+    throw buildUploadAppError(404, 'Capture session not found',
+      `No ${stateHint} capture session '${captureSessionId}' was found.`,
+      { error_code: 'UPLOAD_CAPTURE_NOT_FOUND', capture_session_id: captureSessionId, client_type: clientType, allowed_states: stateHint });
   }
   return { projectId: String(row.project_id), captureSessionId };
 }
@@ -390,7 +709,6 @@ async function resolveProjectContext(req: Request, lakebase: LakebaseClient): Pr
 
 interface UploadHandlerOpts {
   kind: UploadKind;
-  clientType: ClientType;
   volumeKey: string;
   volumeEnvVar: string;
   allowedMimes?: string[];
@@ -401,117 +719,190 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     let volumeFilePath: string | undefined;
     let relativePath: string | undefined;
-    let diagnostics: Partial<UploadDiagnostics> = { kind: opts.kind, clientType: opts.clientType };
+    const clientType = detectClientType(req);
+    let diagnostics: Partial<UploadDiagnostics> = { kind: opts.kind, clientType };
 
     try {
-      // ── Step 1: Auth already resolved by iosAuth middleware ─────────────
+      // ── Step 1: Auth already resolved by iosAuth or dualAuth middleware ──
       const userId = req.user!.userId;
-      const pairedSessionId = req.user!.sessionId;
+      // Browser sessions have empty sessionId — normalize to null for DB
+      const pairedSessionId = req.user!.sessionId || null;
 
       // ── Step 2: Resolve context (project + capture) ──────────────────
       const { projectId, captureSessionId } = await opts.resolveContext(req, lakebase);
       diagnostics = { ...diagnostics, projectId, captureSessionId, pairedSessionId, userId };
 
       logUploadEvent('[upload] request.accepted', diagnostics, {
-        request_path: req.path, request_method: req.method,
+        request_path: req.path,
+        request_method: req.method,
         content_length: req.headers['content-length'] ?? null,
         content_type: req.headers['content-type'] ?? null,
       });
 
-      // ── Step 3: Parse multipart body ─────────────────────────────
-      const parsed = await parseMultipart(req);
-
-      // ── Step 4: Generate UUIDv7 ──────────────────────────────────
+      // ── Step 3: Generate UUIDv7 ──────────────────────────────────
       const uploadId = uuidv7();
-      const normalizedTimestamp = normalizeClientTimestamp(parsed.clientTs);
+      const volumeBasePath = getVolumeBasePath(opts.volumeEnvVar);
 
+      // ── Step 4: Parse multipart body (buffer for iOS, stream for browser) ─────
+      let fileMimeType: string;
+      let clientFilename: string | undefined;
+      let clientSha256: string | undefined;
+      let deviceId: string | undefined;
+      let clientTs: string | undefined;
+      let sizeBytes: number;
+      let sha256Hash: string;
+      let fileName: string | undefined;
+
+      if (clientType === 'web') {
+        const parsed = await parseMultipartStreaming(req, {
+          allowedMimes: opts.allowedMimes,
+          volumeKey: opts.volumeKey,
+          volumeBasePath,
+          projectId,
+          captureSessionId,
+          uploadId,
+          appkitFiles,
+        });
+
+        fileMimeType = parsed.fileMimeType;
+        clientFilename = parsed.clientFilename;
+        clientSha256 = parsed.clientSha256;
+        deviceId = parsed.deviceId;
+        clientTs = parsed.clientTs;
+        sizeBytes = parsed.sizeBytes;
+        sha256Hash = parsed.sha256Hex;
+        relativePath = parsed.relativePath;
+        volumeFilePath = parsed.canonicalPath;
+        fileName = parsed.fileName;
+      } else {
+        const parsed = await parseMultipart(req);
+
+        if (opts.allowedMimes && !opts.allowedMimes.includes(parsed.fileMimeType)) {
+          throw buildUploadAppError(
+            415,
+            'Unsupported Media Type',
+            `MIME type '${parsed.fileMimeType}' is not accepted by this endpoint. Allowed: ${opts.allowedMimes.join(', ')}.`,
+            buildUploadContext(diagnostics, { error_code: 'UPLOAD_UNSUPPORTED_MIME' }),
+          );
+        }
+
+        const ext = MIME_TO_EXT[parsed.fileMimeType];
+        if (!ext) {
+          throw buildUploadAppError(
+            415,
+            'Unsupported Media Type',
+            `MIME type '${parsed.fileMimeType}' is not supported.`,
+            buildUploadContext(diagnostics, { error_code: 'UPLOAD_UNSUPPORTED_MIME' }),
+          );
+        }
+
+        const paths = buildUploadPaths({ volumeBasePath, projectId, captureSessionId, uploadId, extension: ext });
+        relativePath = paths.relativePath;
+        volumeFilePath = paths.canonicalPath;
+        fileName = paths.fileName;
+
+        fileMimeType = parsed.fileMimeType;
+        clientFilename = parsed.clientFilename;
+        clientSha256 = parsed.clientSha256;
+        deviceId = parsed.deviceId;
+        clientTs = parsed.clientTs;
+        sizeBytes = parsed.fileBuffer.length;
+        sha256Hash = createHash('sha256').update(parsed.fileBuffer).digest('hex');
+
+        logUploadEvent('[upload] volume.write_attempt', diagnostics, {
+          canonical_volume_path: volumeFilePath,
+          relative_path: relativePath,
+          volume_key: opts.volumeKey,
+          upload_content_type: 'appkit_files_plugin',
+          upload_size_bytes: sizeBytes,
+          file_name: fileName,
+        });
+
+        try {
+          await appkitFiles(opts.volumeKey).upload(relativePath, parsed.fileBuffer, { overwrite: false });
+        } catch (volumeErr) {
+          throw buildUploadAppError(
+            500,
+            'Upload storage failed',
+            'The uploaded file could not be written to the configured storage volume.',
+            buildUploadContext(diagnostics, {
+              error_code: 'UPLOAD_VOLUME_WRITE_FAILED',
+              canonical_volume_path: volumeFilePath,
+              relative_path: relativePath,
+              volume_key: opts.volumeKey,
+              upload_size_bytes: sizeBytes,
+              ...normalizeError(volumeErr),
+            }),
+          );
+        }
+      }
+
+      // ── Step 5: Finalize diagnostics after parse/write ────────────────────────
+      const normalizedTimestamp = normalizeClientTimestamp(clientTs);
       diagnostics = {
-        uploadId, kind: opts.kind, clientType: opts.clientType, projectId, captureSessionId, pairedSessionId, userId,
-        fileMimeType: parsed.fileMimeType, clientFilename: parsed.clientFilename,
-        providedClientTs: parsed.clientTs, normalizedClientTs: normalizedTimestamp.isoTimestamp,
-        timestampSource: normalizedTimestamp.source, timestampFallbackReason: normalizedTimestamp.fallbackReason,
-        sizeBytes: parsed.fileBuffer.length,
+        uploadId,
+        kind: opts.kind,
+        clientType,
+        projectId,
+        captureSessionId,
+        pairedSessionId,
+        userId,
+        fileMimeType,
+        clientFilename,
+        providedClientTs: clientTs,
+        normalizedClientTs: normalizedTimestamp.isoTimestamp,
+        timestampSource: normalizedTimestamp.source,
+        timestampFallbackReason: normalizedTimestamp.fallbackReason,
+        sizeBytes,
+        volumeFilePath,
+        sha256Hex: sha256Hash,
       };
 
-      logUploadEvent('[upload] request.received', diagnostics, { request_path: req.path, request_method: req.method });
-
-      // ── Step 5: Validate MIME + derive extension ─────────────────────
-      if (opts.allowedMimes && !opts.allowedMimes.includes(parsed.fileMimeType)) {
-        throw buildUploadAppError(415, 'Unsupported Media Type',
-          `MIME type '${parsed.fileMimeType}' is not accepted by this endpoint. Allowed: ${opts.allowedMimes.join(', ')}.`,
-          buildUploadContext(diagnostics, { error_code: 'UPLOAD_UNSUPPORTED_MIME' }));
-      }
-
-      const ext = MIME_TO_EXT[parsed.fileMimeType];
-      if (!ext) {
-        throw buildUploadAppError(415, 'Unsupported Media Type', `MIME type '${parsed.fileMimeType}' is not supported.`,
-          buildUploadContext(diagnostics, { error_code: 'UPLOAD_UNSUPPORTED_MIME' }));
-      }
-
-      // Compute SHA-256
-      const sha256Hash = createHash('sha256').update(parsed.fileBuffer).digest('hex');
-      diagnostics.sha256Hex = sha256Hash;
-
-      // ── Step 6: Build paths and upload via AppKit files plugin ──────────
-      const volumeBasePath = getVolumeBasePath(opts.volumeEnvVar);
-      const paths = buildUploadPaths({ volumeBasePath, projectId, captureSessionId, uploadId, extension: ext });
-      relativePath = paths.relativePath;
-      volumeFilePath = paths.canonicalPath;
-      diagnostics.volumeFilePath = volumeFilePath;
+      logUploadEvent('[upload] request.received', diagnostics, {
+        request_path: req.path,
+        request_method: req.method,
+      });
 
       logUploadEvent('[upload] volume.path_resolved', diagnostics, {
         canonical_volume_path: volumeFilePath,
         relative_path: relativePath,
         volume_key: opts.volumeKey,
-        file_name: paths.fileName,
+        file_name: fileName,
       });
-
-      logUploadEvent('[upload] volume.write_attempt', diagnostics, {
-        canonical_volume_path: volumeFilePath,
-        upload_content_type: 'appkit_files_plugin',
-        upload_size_bytes: parsed.fileBuffer.length,
-        file_name: paths.fileName,
-      });
-
-      try {
-        await appkitFiles(opts.volumeKey).upload(relativePath, parsed.fileBuffer, { overwrite: false });
-      } catch (volumeErr) {
-        throw buildUploadAppError(500, 'Upload storage failed',
-          'The uploaded file could not be written to the configured storage volume.',
-          buildUploadContext(diagnostics, {
-            error_code: 'UPLOAD_VOLUME_WRITE_FAILED',
-            canonical_volume_path: volumeFilePath,
-            relative_path: relativePath,
-            volume_key: opts.volumeKey,
-            upload_size_bytes: parsed.fileBuffer.length,
-            ...normalizeError(volumeErr),
-          }));
-      }
 
       logUploadEvent('[upload] volume.write_succeeded', diagnostics, {
         canonical_volume_path: volumeFilePath,
+        relative_path: relativePath,
+        volume_key: opts.volumeKey,
         upload_content_type: 'appkit_files_plugin',
-        upload_size_bytes: parsed.fileBuffer.length,
-        file_name: paths.fileName,
+        upload_size_bytes: sizeBytes,
+        file_name: fileName,
       });
 
-      // ── Step 7: SHA-256 verification ─────────────────────────────
-      if (parsed.clientSha256 && parsed.clientSha256 !== sha256Hash) {
+      // ── Step 6: SHA-256 verification ─────────────────────────────
+      if (clientSha256 && clientSha256 !== sha256Hash) {
         try {
-          await appkitFiles(opts.volumeKey).delete(relativePath);
-          logUploadEvent('[upload] volume.deleted_after_sha_mismatch', diagnostics, { client_sha256: parsed.clientSha256 });
+          if (relativePath) {
+            await appkitFiles(opts.volumeKey).delete(relativePath);
+          }
+          logUploadEvent('[upload] volume.deleted_after_sha_mismatch', diagnostics, { client_sha256: clientSha256 });
         } catch (delErr) {
           logUploadError('[upload] delete_after_sha_mismatch_failed', diagnostics, delErr, { volumeFilePath });
         }
-        throw buildUploadAppError(400, 'SHA-256 Mismatch',
-          `Client SHA-256 (${parsed.clientSha256}) does not match computed (${sha256Hash}). File deleted.`,
-          buildUploadContext(diagnostics, { error_code: 'UPLOAD_SHA256_MISMATCH', client_sha256: parsed.clientSha256, computed_sha256: sha256Hash }));
+        throw buildUploadAppError(
+          400,
+          'SHA-256 Mismatch',
+          `Client SHA-256 (${clientSha256}) does not match computed (${sha256Hash}). File deleted.`,
+          buildUploadContext(diagnostics, { error_code: 'UPLOAD_SHA256_MISMATCH', client_sha256: clientSha256, computed_sha256: sha256Hash }),
+        );
       }
 
-      // ── Step 8: INSERT INTO app.uploads ──────────────────────────
+      // ── Step 7: INSERT INTO app.uploads ──────────────────────────
       logUploadEvent('[upload] metadata.insert_attempt', diagnostics, {
-        insert_target: 'app.uploads', insert_kind: opts.kind,
-        insert_volume_path: volumeFilePath, insert_size_bytes: parsed.fileBuffer.length,
+        insert_target: 'app.uploads',
+        insert_kind: opts.kind,
+        insert_volume_path: volumeFilePath,
+        insert_size_bytes: sizeBytes,
         insert_client_ts: normalizedTimestamp.isoTimestamp,
       });
 
@@ -521,30 +912,56 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
              (id, kind, project_id, capture_session_id, paired_session_id, user_id,
               volume_path, mime_type, size_bytes, sha256_hex, original_filename, client_ts, device_id, client_type)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13::uuid, $14)`,
-          [uploadId, opts.kind, projectId, captureSessionId, pairedSessionId, userId,
-           volumeFilePath, parsed.fileMimeType, parsed.fileBuffer.length, sha256Hash,
-           parsed.clientFilename ?? null, normalizedTimestamp.isoTimestamp, parsed.deviceId ?? null, opts.clientType],
+          [
+            uploadId,
+            opts.kind,
+            projectId,
+            captureSessionId,
+            pairedSessionId,
+            userId,
+            volumeFilePath,
+            fileMimeType,
+            sizeBytes,
+            sha256Hash,
+            clientFilename ?? null,
+            normalizedTimestamp.isoTimestamp,
+            deviceId ?? null,
+            clientType,
+          ],
         );
         logUploadEvent('[upload] metadata.insert_succeeded', diagnostics, { insert_target: 'app.uploads', insert_volume_path: volumeFilePath });
       } catch (insertErr) {
         logUploadError('[upload] metadata.insert_failed', diagnostics, insertErr);
         try {
-          await appkitFiles(opts.volumeKey).delete(relativePath);
+          if (relativePath) {
+            await appkitFiles(opts.volumeKey).delete(relativePath);
+          }
           logUploadEvent('[upload] volume.deleted_after_metadata_failure', diagnostics);
         } catch (delErr) {
           logUploadError('[upload] delete_after_metadata_failure_failed', diagnostics, delErr, { volumeFilePath });
         }
-        throw buildUploadAppError(500, 'Upload metadata persistence failed',
+        throw buildUploadAppError(
+          500,
+          'Upload metadata persistence failed',
           'The file was stored, but upload metadata could not be persisted.',
-          buildUploadContext(diagnostics, { error_code: 'UPLOAD_METADATA_INSERT_FAILED', error_message: getErrorMessage(insertErr) }));
+          buildUploadContext(diagnostics, { error_code: 'UPLOAD_METADATA_INSERT_FAILED', error_message: getErrorMessage(insertErr) }),
+        );
       }
 
-      // ── Step 9: 201 response ──────────────────────────────────────
+      // ── Step 8: 201 response ──────────────────────────────────────
       res.status(201).json({
-        id: uploadId, kind: opts.kind, client_type: opts.clientType, project_id: projectId, capture_session_id: captureSessionId,
-        volume_path: volumeFilePath, mime_type: parsed.fileMimeType, size_bytes: parsed.fileBuffer.length,
-        sha256_hex: sha256Hash, client_ts: normalizedTimestamp.isoTimestamp,
-        client_ts_source: normalizedTimestamp.source, uploaded_at: new Date().toISOString(),
+        id: uploadId,
+        kind: opts.kind,
+        client_type: clientType,
+        project_id: projectId,
+        capture_session_id: captureSessionId,
+        volume_path: volumeFilePath,
+        mime_type: fileMimeType,
+        size_bytes: sizeBytes,
+        sha256_hex: sha256Hash,
+        client_ts: normalizedTimestamp.isoTimestamp,
+        client_ts_source: normalizedTimestamp.source,
+        uploaded_at: new Date().toISOString(),
       });
     } catch (error) {
       const appError = toUploadAppError(error, req, diagnostics);
@@ -563,38 +980,42 @@ export default function registerUploads(ctx: AppKitContext): void {
   const { lakebase } = ctx;
 
   ctx.server.extend((app) => {
+    // ── Audio: iOS only (recording is device-exclusive) ─────────────────
     app.post(
       '/api/captures/:capture_session_id/audio',
       iosAuth({ lakebase }),
       createUploadHandler(
-        { kind: 'audio', clientType: 'ios', volumeKey: 'session_audio', volumeEnvVar: 'LAKELOOM_AUDIO_VOLUME_PATH', allowedMimes: ['audio/wav', 'audio/m4a', 'audio/mp4'], resolveContext: resolveCaptureContext },
+        { kind: 'audio', volumeKey: 'session_audio', volumeEnvVar: 'LAKELOOM_AUDIO_VOLUME_PATH', allowedMimes: ['audio/wav', 'audio/m4a', 'audio/mp4'], resolveContext: resolveCaptureContextIos },
         lakebase, appkitFiles,
       ),
     );
 
+    // ── Screenshots: iOS + browser (dualAuth) ───────────────────────────
     app.post(
       '/api/captures/:capture_session_id/screenshots',
-      iosAuth({ lakebase }),
+      dualAuth({ lakebase }),
       createUploadHandler(
-        { kind: 'screenshot', clientType: 'ios', volumeKey: 'screenshots', volumeEnvVar: 'LAKELOOM_SCREENSHOT_VOLUME_PATH', allowedMimes: ['image/png', 'image/jpeg'], resolveContext: resolveCaptureContext },
+        { kind: 'screenshot', volumeKey: 'screenshots', volumeEnvVar: 'LAKELOOM_SCREENSHOT_VOLUME_PATH', allowedMimes: ['image/png', 'image/jpeg'], resolveContext: resolveCaptureContextDual },
         lakebase, appkitFiles,
       ),
     );
 
+    // ── Photos: iOS + browser (dualAuth) ────────────────────────────────
     app.post(
       '/api/captures/:capture_session_id/photos',
-      iosAuth({ lakebase }),
+      dualAuth({ lakebase }),
       createUploadHandler(
-        { kind: 'photo', clientType: 'ios', volumeKey: 'screenshots', volumeEnvVar: 'LAKELOOM_PHOTO_VOLUME_PATH', allowedMimes: ['image/png', 'image/jpeg'], resolveContext: resolveCaptureContext },
+        { kind: 'photo', volumeKey: 'screenshots', volumeEnvVar: 'LAKELOOM_PHOTO_VOLUME_PATH', allowedMimes: ['image/png', 'image/jpeg'], resolveContext: resolveCaptureContextDual },
         lakebase, appkitFiles,
       ),
     );
 
+    // ── Documents: iOS + browser (dualAuth) ─────────────────────────────
     app.post(
       '/api/projects/:project_id/documents',
-      iosAuth({ lakebase }),
+      dualAuth({ lakebase }),
       createUploadHandler(
-        { kind: 'document', clientType: 'ios', volumeKey: 'documents', volumeEnvVar: 'LAKELOOM_DOCUMENT_VOLUME_PATH', allowedMimes: ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'], resolveContext: resolveProjectContext },
+        { kind: 'document', volumeKey: 'documents', volumeEnvVar: 'LAKELOOM_DOCUMENT_VOLUME_PATH', allowedMimes: ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.openxmlformats-officedocument.presentationml.presentation', 'text/markdown', 'image/png', 'image/jpeg'], resolveContext: resolveProjectContext },
         lakebase, appkitFiles,
       ),
     );

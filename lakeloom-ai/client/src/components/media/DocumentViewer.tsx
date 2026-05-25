@@ -1,4 +1,5 @@
 import { Download, ExternalLink, FileText } from 'lucide-react';
+import { MarkdownDocument } from '../MarkdownDocument';
 
 interface DocumentViewerProps {
   /** Upload ID — used to build the stream URL */
@@ -25,6 +26,10 @@ function getDocumentTypeLabel(mimeType?: string): string {
   switch (mimeType) {
     case 'application/pdf': return 'PDF Document';
     case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': return 'Word Document';
+    case 'application/vnd.openxmlformats-officedocument.presentationml.presentation': return 'PowerPoint';
+    case 'text/markdown': return 'Markdown';
+    case 'image/png': return 'PNG Image';
+    case 'image/jpeg': return 'JPEG Image';
     default: return 'Document';
   }
 }
@@ -33,6 +38,10 @@ function getFileExtension(mimeType?: string): string {
   switch (mimeType) {
     case 'application/pdf': return '.pdf';
     case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': return '.docx';
+    case 'application/vnd.openxmlformats-officedocument.presentationml.presentation': return '.pptx';
+    case 'text/markdown': return '.md';
+    case 'image/png': return '.png';
+    case 'image/jpeg': return '.jpg';
     default: return '';
   }
 }
@@ -40,6 +49,8 @@ function getFileExtension(mimeType?: string): string {
 export function DocumentViewer({ uploadId, title, mimeType, sizeBytes, uploadedAt, sha256Hex }: DocumentViewerProps) {
   const streamUrl = `/api/media/${uploadId}`;
   const isPdf = mimeType === 'application/pdf';
+  const isMarkdown = mimeType === 'text/markdown';
+  const isImage = mimeType?.startsWith('image/');
   const typeLabel = getDocumentTypeLabel(mimeType);
   const ext = getFileExtension(mimeType);
 
@@ -56,8 +67,27 @@ export function DocumentViewer({ uploadId, title, mimeType, sizeBytes, uploadedA
         </div>
       )}
 
-      {/* Non-PDF fallback (DOCX etc.) — show info card with download */}
-      {!isPdf && (
+      {/* Markdown viewer/editor */}
+      {isMarkdown && (
+        <MarkdownDocument
+          uploadId={uploadId}
+          filename={title ?? 'document.md'}
+        />
+      )}
+
+      {/* Image inline viewer */}
+      {isImage && (
+        <div className="flex items-center justify-center p-4 bg-[var(--surface-secondary)]">
+          <img
+            src={streamUrl}
+            alt={title ?? 'Image'}
+            className="max-w-full max-h-[500px] rounded-lg object-contain"
+          />
+        </div>
+      )}
+
+      {/* Fallback for non-viewable types (DOCX, PPTX etc.) — download card */}
+      {!isPdf && !isMarkdown && !isImage && (
         <div className="flex flex-col items-center justify-center py-12 px-6">
           <div className="w-16 h-16 rounded-2xl bg-[var(--surface-tertiary)] flex items-center justify-center mb-4">
             <FileText className="w-8 h-8 text-[var(--text-secondary)]" />

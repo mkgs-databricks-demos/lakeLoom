@@ -13,7 +13,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, Link } from 'react-router';
 import { ArrowLeft, Clock, Pencil, Check, X } from 'lucide-react';
-import { StatusBadge, TimeAgo, Duration, FileIconContainer, EmptyState, ConfirmDialog } from '../../components';
+import { StatusBadge, TimeAgo, Duration, FileIconContainer, EmptyState, ConfirmDialog, DragDropZone } from '../../components';
 import { MediaModal } from '../../components/media';
 
 // ── Types ────────────────────────────────────────────────────────────────────────────────────
@@ -383,6 +383,24 @@ export function CaptureDetailPage() {
               </div>
             )}
           </div>
+
+          {/* ── Browser upload zone (visible for active/completed sessions) ────────── */}
+          {capture.state !== 'cancelled' && (
+            <div className="mt-6">
+              <DragDropZone
+                accept={['image/png', 'image/jpeg']}
+                maxSizeBytes={5 * 1024 * 1024 * 1024}
+                multiple
+                compact
+                concurrency={3}
+                uploadUrl={`/api/captures/${captureId}/screenshots`}
+                onUploadComplete={() => {
+                  // Refresh upload list after successful upload
+                  fetchCapture(captureId!).then(setCapture).catch(() => {});
+                }}
+              />
+            </div>
+          )}
         </>
       )}
 
