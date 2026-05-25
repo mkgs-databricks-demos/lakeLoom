@@ -257,7 +257,13 @@ struct SessionsListView: View {
     }
 }
 
-/// Single session row. Label, started-at relative time, state pill.
+/// Single session row. Label, state pill, relative time, plus —
+/// when the server populates `upload_kinds` (added in Genie's
+/// PR #61) — a row of small SF Symbol chips telling the user at a
+/// glance what kinds of artifacts the session contains
+/// (audio / photo / screenshot / document). The chips stay hidden
+/// when the field is nil or empty so older / sparser captures
+/// don't render a stray row of icons.
 private struct SessionRow: View {
     let session: CaptureSession
 
@@ -274,8 +280,58 @@ private struct SessionRow: View {
                         .font(BrandTypography.caption)
                         .foregroundStyle(BrandColors.textSecondary)
                 }
+                Spacer(minLength: Spacing.sm)
+                uploadKindsBadges
             }
         }
         .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private var uploadKindsBadges: some View {
+        if let kinds = session.uploadKinds, !kinds.isEmpty {
+            HStack(spacing: 6) {
+                ForEach(orderedKinds(kinds), id: \.self) { kind in
+                    Image(systemName: kind.sfSymbol)
+                        .font(BrandTypography.caption)
+                        .foregroundStyle(BrandColors.textSecondary)
+                        .accessibilityLabel(kind.accessibleName)
+                }
+            }
+        }
+    }
+
+    /// Stable display order — audio first (the primary artifact),
+    /// then photos, then screenshots, then documents. Independent
+    /// of the order the server's `array_agg` happens to return.
+    private func orderedKinds(_ kinds: [CaptureUpload.Kind]) -> [CaptureUpload.Kind] {
+        let priority: [CaptureUpload.Kind] = [.audio, .photo, .screenshot, .document]
+        let set = Set(kinds)
+        return priority.filter { set.contains($0) }
+    }
+}
+
+extension CaptureUpload.Kind {
+    /// SF Symbol for the kind, used by `SessionRow`'s badge chips
+    /// and matching the per-row icon styling in `CaptureDetailView`'s
+    /// uploads list so the two surfaces stay visually consistent.
+    var sfSymbol: String {
+        switch self {
+        case .audio:      return "waveform"
+        case .photo:      return "camera.fill"
+        case .screenshot: return "rectangle.dashed"
+        case .document:   return "doc.fill"
+        }
+    }
+
+    /// Accessibility label for VoiceOver — Image-only chips need
+    /// a spoken name since the icon glyph alone isn't read.
+    var accessibleName: String {
+        switch self {
+        case .audio:      return "Audio"
+        case .photo:      return "Photo"
+        case .screenshot: return "Screenshot"
+        case .document:   return "Document"
+        }
     }
 }
