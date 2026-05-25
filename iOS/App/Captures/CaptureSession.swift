@@ -30,6 +30,16 @@ public struct CaptureSession: Sendable, Equatable, Hashable, Codable, Identifiab
     public let createdByUserID: String?
     public let deviceLabel: String?
     public let uploads: [CaptureUpload]?
+    /// Distinct upload kinds attached to this capture, as surfaced
+    /// by the captures list response since Genie's PR #61 (the
+    /// `array_agg(DISTINCT kind)` LATERAL join in `capture-routes.ts`).
+    /// Empty when no uploads have landed yet. The sessions list
+    /// uses this to badge each row with the kinds it contains
+    /// without having to fetch every session's `uploads` array.
+    /// Nil when the response shape doesn't carry the field (e.g.,
+    /// older clients or the single-capture get-by-id path), which
+    /// the decoder accepts gracefully.
+    public let uploadKinds: [CaptureUpload.Kind]?
 
     public init(
         id: String,
@@ -40,7 +50,8 @@ public struct CaptureSession: Sendable, Equatable, Hashable, Codable, Identifiab
         endedAt: Date?,
         createdByUserID: String? = nil,
         deviceLabel: String? = nil,
-        uploads: [CaptureUpload]? = nil
+        uploads: [CaptureUpload]? = nil,
+        uploadKinds: [CaptureUpload.Kind]? = nil
     ) {
         self.id = id
         self.projectID = projectID
@@ -51,6 +62,7 @@ public struct CaptureSession: Sendable, Equatable, Hashable, Codable, Identifiab
         self.createdByUserID = createdByUserID
         self.deviceLabel = deviceLabel
         self.uploads = uploads
+        self.uploadKinds = uploadKinds
     }
 
     public enum State: String, Sendable, Equatable, Hashable, Codable, CaseIterable {
@@ -69,6 +81,7 @@ public struct CaptureSession: Sendable, Equatable, Hashable, Codable, Identifiab
         case createdByUserID = "created_by_user_id"
         case deviceLabel = "device_label"
         case uploads
+        case uploadKinds = "upload_kinds"
     }
 }
 
