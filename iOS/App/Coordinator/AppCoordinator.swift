@@ -75,6 +75,12 @@ public final class AppCoordinator {
     /// production wiring so existing tests don't need to construct
     /// one.
     public let deviceIdentity: (any DeviceIdentityStore)?
+    /// Optional media-content downloader for the Documents viewer.
+    /// Production wiring constructs a `LiveMediaContentService`
+    /// against the same `LakeloomAppClient` everything else uses.
+    /// Tests omit it; the docs sheet renders the error state if the
+    /// closure isn't wired.
+    public let mediaContent: (any MediaContentService)?
     let logger: AppLogger
     let nowProvider: @Sendable () -> Date
 
@@ -95,6 +101,7 @@ public final class AppCoordinator {
         captureService: (any CaptureService)? = nil,
         transcriptEvents: (any TranscriptEventsClient)? = nil,
         deviceIdentity: (any DeviceIdentityStore)? = nil,
+        mediaContent: (any MediaContentService)? = nil,
         logger: AppLogger = AppLogger(category: .coordinator),
         nowProvider: @Sendable @escaping () -> Date = Date.init
     ) {
@@ -108,6 +115,7 @@ public final class AppCoordinator {
         self.captureService = captureService
         self.transcriptEvents = transcriptEvents
         self.deviceIdentity = deviceIdentity
+        self.mediaContent = mediaContent
         self.logger = logger
         self.nowProvider = nowProvider
     }

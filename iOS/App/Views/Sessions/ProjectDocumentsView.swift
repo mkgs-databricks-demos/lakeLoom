@@ -13,6 +13,11 @@ import SwiftUI
 struct ProjectDocumentsView: View {
 
     let captureAPI: any CaptureAPIClient
+    /// Optional content downloader. When provided, tapping a row
+    /// pushes ``DocumentViewerView`` with QuickLook preview. When
+    /// nil (older test paths, builds without the service wired),
+    /// rows are non-interactive and just display metadata.
+    let mediaContent: (any MediaContentService)?
     let workspaceID: String
     let projectID: String
     let projectName: String
@@ -120,13 +125,35 @@ struct ProjectDocumentsView: View {
         ScrollView {
             VStack(spacing: Spacing.sm) {
                 ForEach(list) { document in
-                    DocumentRow(document: document)
+                    documentRowLink(document)
                 }
             }
             .padding(.horizontal, Spacing.lg)
             .padding(.vertical, Spacing.lg)
         }
         .background(BrandColors.surfaceSecondary)
+    }
+
+    /// Wrap the row in a `NavigationLink` only when we can actually
+    /// open the document (i.e., `mediaContent` is wired). Without the
+    /// service we render a plain row — taps no-op rather than push
+    /// to a viewer that has nothing to download with.
+    @ViewBuilder
+    private func documentRowLink(_ document: ProjectDocument) -> some View {
+        if let mediaContent {
+            NavigationLink {
+                DocumentViewerView(
+                    document: document,
+                    workspaceID: workspaceID,
+                    mediaContent: mediaContent
+                )
+            } label: {
+                DocumentRow(document: document)
+            }
+            .buttonStyle(.plain)
+        } else {
+            DocumentRow(document: document)
+        }
     }
 
     // MARK: - Load

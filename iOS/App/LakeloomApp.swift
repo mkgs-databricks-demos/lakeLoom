@@ -86,6 +86,7 @@ struct LakeloomApp: App {
         }
 
         let photoCapture = LivePhotoCapture()
+        let mediaContent = LiveMediaContentService(lakeloomApp: lakeloomApp)
 
         // Capture orchestrator. Bundles captureAPI + a shared
         // AudioRecorder + the upload coordinator + the
@@ -136,7 +137,8 @@ struct LakeloomApp: App {
                 photoCapture: photoCapture,
                 captureService: captureService,
                 transcriptEvents: transcriptEvents,
-                deviceIdentity: deviceIdentity
+                deviceIdentity: deviceIdentity,
+                mediaContent: mediaContent
             )
         )
     }

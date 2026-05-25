@@ -118,6 +118,7 @@ struct HomeContainerView: View {
                let context = coordinator.activeContext {
                 ProjectDocumentsView(
                     captureAPI: api,
+                    mediaContent: coordinator.mediaContent,
                     workspaceID: context.workspace.id,
                     projectID: context.project.id,
                     projectName: context.project.name,
