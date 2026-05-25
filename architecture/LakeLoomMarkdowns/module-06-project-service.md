@@ -736,3 +736,43 @@ App/Projects/
 ```
 
 Tests mirror this layout under `AppTests/Projects/`.
+
+---
+
+## As-Built Addenda (2026-05-25)
+
+### Edit-in-place: `update(...)`
+
+`ProjectServicing` gained a `PATCH /api/v1/projects/:id` wrapper that lets users rename a project and/or edit its description without re-creating:
+
+```swift
+func update(
+    projectID: String,
+    workspaceID: String,
+    name: String?,        // nil = leave unchanged
+    description: String?  // nil = leave unchanged
+) async throws -> ProjectMetadata
+```
+
+Either field may be nil; sending both nil throws `ProjectError.validationFailed` without hitting the network. Server requires at least one. The wire body uses a `UpdateProjectBody` value type that omits nil fields from the JSON entirely so the server's partial-PATCH semantics work cleanly.
+
+Both inputs run through `ProjectValidator` (same trim + length caps as create). On `.unauthorized`, retries once after force-refreshing the token. On success: `cache.upsert(...)` + broadcast `.projectUpdated(project)`. Logged as `"project updated"` with a `fields=name,description` metadata tag listing which fields actually changed.
+
+### New `ProjectChangeEvent` case
+
+```swift
+public enum ProjectChangeEvent: Sendable, Equatable {
+    case listRefreshed(workspaceID: String, projects: [ProjectMetadata])
+    case projectCreated(ProjectMetadata)
+    case projectUpdated(ProjectMetadata)   // <— added 2026-05-25
+    case projectArchived(projectID: String, workspaceID: String)
+    case projectUnarchived(ProjectMetadata)
+    case defaultChanged(workspaceID: String, projectID: String?)
+}
+```
+
+`projectUpdated` fires whenever `update(...)` succeeds. Subscribers (sessions list, project switcher row) re-read the new metadata to refresh their rendering.
+
+### UI surface
+
+`ProjectDetailView` (Module 08) is the read/edit detail sheet that consumes both `update(...)` and `setDefault(...)`. Reached from a per-row info button on `ProjectSwitcherView`. View mode by default; toolbar Edit toggles to TextFields. Save sends only the changed fields.

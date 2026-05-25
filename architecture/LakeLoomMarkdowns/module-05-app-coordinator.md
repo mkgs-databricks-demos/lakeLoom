@@ -989,3 +989,46 @@ App/Views/
 ```
 
 Tests mirror this layout under `AppTests/Coordinator/`.
+
+---
+
+## 17. As-Built Addenda (2026-05-25)
+
+### 17.1 In-session project switching (post-onboarding)
+
+`AppCoordinator+Onboarding.swift` adds two public methods reached from `ProjectSwitcherView` rather than the onboarding state machine:
+
+* `switchActiveProject(to projectID: String) async` — fetches fresh `ProjectMetadata` for the target, persists it as the workspace's new default via `ProjectServicing.setDefault`, and replaces `activeContext` so observers (home view, sessions list, capture-create flow) re-render. No-ops if no active context. Logs `"project switched"`. Failures during fetch are swallowed (warn + return) so the existing context isn't torn down by a transient network blip.
+
+* `createAndSwitchToProject(name:description:) async throws -> ProjectMetadata` — `@discardableResult`. Combines `ProjectServicing.create` + `setDefault` + `activeContext` replacement in one round trip. Throws `ProjectError` on create failure so `ProjectCreateFormView` can render the typed reason inline.
+
+These are the post-onboarding analog of the `selectProject` / `createProject` methods used inside the onboarding state machine. Both end at the same `activeContext` mutation; only the entry point differs.
+
+### 17.2 New `AppCoordinator` dependencies
+
+`AppCoordinator.init(...)` has grown a few more optional collaborators:
+
+| Dependency | Purpose | Wired by |
+|---|---|---|
+| `mediaContent: (any MediaContentService)?` | Downloads `/api/media/:upload_id` content for the documents viewer and tap-to-play media on capture detail. | `LiveMediaContentService(lakeloomApp: lakeloomApp)` in `LakeloomApp.swift` |
+| `photoCapture: (any PhotoCapture)?` | In-session camera. | `LivePhotoCapture()` |
+| `transcriptEvents: (any TranscriptEventsClient)?` | ZeroBus transcript-events transport. | `LiveTranscriptEventsClient(lakeloomApp: ...)` |
+| `deviceIdentity: (any DeviceIdentityStore)?` | Per-device UUID for event payloads + Account sheet. | `LiveDeviceIdentityStore()` |
+
+All optional with a `nil` default so existing tests don't have to update their constructors. The home view's `.sheet(...)` modifiers nil-degrade by hiding the affordance when the corresponding dependency isn't wired.
+
+### 17.3 Service composition (production wiring)
+
+`LakeloomApp.swift` constructs the dependency graph in roughly this order:
+
+```
+CoreDataStack → LiveDeviceKeyStore → LiveM2MTokenClient → RequestSigner
+   → LiveLakeloomAppClient
+       → AuthService, ProjectService, captureAPI, uploadCoordinator,
+         photoCapture, mediaContent, transcriptEvents, deviceIdentity
+   → LiveCaptureService (binds audio recorder, photo capture, upload
+     coordinator, streaming recognizer, transcript streamer, …)
+→ AppCoordinator (holds everything; observes auth events)
+```
+
+`BrandFontRegistration.registerAll()` runs synchronously in `LakeloomApp.init` before the first frame to register DM Sans + DM Mono with the process font manager (see Module 08).
