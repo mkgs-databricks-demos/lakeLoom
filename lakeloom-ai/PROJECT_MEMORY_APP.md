@@ -62,9 +62,9 @@ lakeLoom/
 │   │   ├── server.ts              # Entry: secrets → migrations → routes → serve
 │   │   ├── lib/                   # crypto.ts, errors.ts (RFC 9457)
 │   │   ├── middleware/            # ios-auth.ts, browser-auth.ts + dualAuth()
-│   │   ├── migrations/            # 001–013 (paired_sessions → device assignment backfill)
+│   │   ├── migrations/            # 001–016 (paired_sessions → uploads updated_at)
 │   │   ├── services/              # secrets, sse, zerobus stream pool
-│   │   └── routes/                # pairing, captures, uploads, events, projects, media
+│   │   └── routes/                # pairing, captures, uploads, events, projects, media, zerobus
 │   ├── client/                     # React frontend (Vite + Tailwind v4)
 │   │   ├── src/                   # App.tsx, pages/, components/media/
 │   │   └── public/                # Favicons, manifest
@@ -117,6 +117,7 @@ lakeLoom/
 * **2026-05-23: Migrations 009/010 deployed.** `client_type` on uploads (server-determined), `username` on paired_sessions (from `x-forwarded-email` at QR gen). Shared `PairingTestClient` module replaces duplicated test boilerplate. Lakehouse Sync schema mismatch fixed via Delta `ALTER TABLE ADD COLUMN`.
 * **2026-05-24: iOS auth hardening + device assignment backfill.** Migration 012 remediates 55 projects misattributed to SPN (→ human SCIM ID). Migration 013 backfills `project_device_assignments` from `capture_sessions` (5 rows). `browserAuth()` hardened to reject bare SPN requests (requires `X-Forwarded-Email`). `project-routes.ts` auto-assigns device on iOS project creation (when `req.user.sessionId` present). Phase 2 UI fully COMPLETE (sort toggle, inline label editing, empty state CTA shipped same day).
 * **2026-05-24: Phase 3 — Media Viewer & Audio Playback COMPLETE on branch `gc-phase3-browser-ui`.**
+* **2026-05-25: Phase 4 — Browser Uploads COMPLETE on branch `mg-phase3-cleanup`.** Server streaming (5 GB), client DragDropZone + progress pool, expanded MIME types (PDF/DOCX/PPTX/Markdown/PNG/JPEG), delete, markdown viewing/editing, MIME-aware icons, original filename capture from browser FormData, backfill migration 015, CDF pipeline prep (migration 016: `updated_at`, PUT handler sha256). 14 commits, zero conflicts with main (iOS-only PRs #62–#67 merged since branch point).
   * Server: `server/routes/media/media-routes.ts` adds 3 endpoints — `GET /api/media/:upload_id` (stream with Range support + strict 206 handling), `GET /api/media/:upload_id/metadata`, `GET /api/media/session/:capture_session_id`.
   * Client media components: `AudioPlayer` (HTML5 audio, static waveform, speed control), `ImageViewer` (thumbnail + lightbox zoom), `DocumentViewer` (PDF iframe inline, DOCX download fallback), `MediaPanel` (dispatch by MIME type), `MediaModal` (shared `<dialog>` modal wrapper).
   * `CaptureDetailPage.tsx`: upload clicks open `MediaModal` instead of inline preview; no auto-select on load.

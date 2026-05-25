@@ -1,7 +1,7 @@
 # Phase 4: Browser-Side Uploads — Implementation Plan
 
 **Date:** 2026-05-25
-**Status:** ✅ Complete (Tasks 1–9) — Task 10 (Playwright tests) deferred
+**Status:** ✅ Complete — shipped beyond original scope (expanded types, delete, markdown editing, MIME icons, filename capture, CDF pipeline prep). Task 10 (Playwright tests) deferred.
 **Estimated effort:** 2–3 days
 **Dependencies:** Phase 2 (Capture Session Browser) ✅ + Phase 3 (Media Viewer) ✅
 

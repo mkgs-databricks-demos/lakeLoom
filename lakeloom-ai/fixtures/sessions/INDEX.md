@@ -15,6 +15,7 @@
 
 | Date | Summary | File |
 |------|---------|------|
+| 2026-05-25 | [Phase 4 Browser Uploads Complete](2026-05-25_phase4-browser-uploads-complete.md) | Browser upload feature end-to-end, MIME icons, filename capture, CDF pipeline groundwork |
 | 2026-05-24 | Phase 3 media modal: unified modal overlay for audio/images/docs; project-level PDFs now open inline instead of new tab | [phase3-media-modal-and-project-docs](./2026-05-24_phase3-media-modal-and-project-docs.md) |
 | 2026-05-24 | Phase 3 build fixes: TS type assertions, unused imports, null/undefined compat, CORS + deferred Web Audio for audio playback | [phase3-build-fixes-audio-playback](./2026-05-24_phase3-build-fixes-audio-playback.md) |
 | 2026-05-24 | iOS auth hardened (SPN rejection), migrations 012 (user_id remediation) + 013 (device assignment backfill), auto-assign on iOS create | [ios-auth-hardening-device-backfill](./2026-05-24_ios-auth-hardening-device-backfill.md) |
