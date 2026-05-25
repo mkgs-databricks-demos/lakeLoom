@@ -92,6 +92,36 @@ public struct LiveProjectAPIClient: ProjectAPIClient {
         return try decode(ProjectMetadata.self, from: data)
     }
 
+    // MARK: Update
+
+    public func update(
+        projectID: String,
+        workspaceID: String,
+        name: String?,
+        description: String?,
+        token: AccessToken,
+        endpoint: AppEndpoint
+    ) async throws -> ProjectMetadata {
+        // Server requires at least one field. iOS validates here too
+        // so a stray empty edit doesn't hit the wire.
+        if name == nil && description == nil {
+            throw ProjectAPIError.badRequest(nil)
+        }
+        let body: Data
+        do {
+            body = try encoder.encode(UpdateProjectBody(name: name, description: description))
+        } catch {
+            throw ProjectAPIError.unexpectedResponse(reason: "encode update body: \(error)")
+        }
+        let data = try await rawSend(
+            workspaceID: workspaceID,
+            method: .patch,
+            path: "/api/v1/projects/\(percentEncoded(projectID))",
+            body: body
+        )
+        return try decode(ProjectMetadata.self, from: data)
+    }
+
     // MARK: Archive / Restore
 
     public func archive(

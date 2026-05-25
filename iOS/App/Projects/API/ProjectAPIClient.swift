@@ -37,6 +37,20 @@ public protocol ProjectAPIClient: Sendable {
         endpoint: AppEndpoint
     ) async throws -> ProjectMetadata
 
+    /// `PATCH {appBaseURL}/api/v1/projects/{project_id}` with a JSON
+    /// body of `{ name?, description? }`. At least one field must be
+    /// supplied (server validates). Returns the updated
+    /// ``ProjectMetadata`` so callers can refresh local state
+    /// without an extra round trip.
+    func update(
+        projectID: String,
+        workspaceID: String,
+        name: String?,
+        description: String?,
+        token: AccessToken,
+        endpoint: AppEndpoint
+    ) async throws -> ProjectMetadata
+
     /// `PATCH {appBaseURL}/api/v1/projects/{project_id}/archive`.
     /// 204 No Content on success.
     func archive(

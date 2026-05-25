@@ -39,3 +39,29 @@ public struct ArchiveProjectPayload: Sendable, Equatable, Codable {
         case workspaceID = "workspace_id"
     }
 }
+
+/// Body for `PATCH /api/v1/projects/{id}`. Either field may be
+/// omitted; sending nil drops the key from the JSON entirely so
+/// callers can edit just one of name / description without
+/// clobbering the other. Server validates that at least one is
+/// supplied; iOS guards too so an all-nil call doesn't hit the wire.
+public struct UpdateProjectBody: Sendable, Equatable, Codable {
+    public let name: String?
+    public let description: String?
+
+    public init(name: String?, description: String?) {
+        self.name = name
+        self.description = description
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(name, forKey: .name)
+        try c.encodeIfPresent(description, forKey: .description)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case description
+    }
+}

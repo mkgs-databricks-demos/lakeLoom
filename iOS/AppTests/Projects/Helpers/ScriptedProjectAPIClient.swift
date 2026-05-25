@@ -132,6 +132,17 @@ public actor ScriptedProjectAPIClient: ProjectAPIClient {
         }
     }
 
+    public func update(
+        projectID: String,
+        workspaceID: String,
+        name: String?,
+        description: String?,
+        token: AccessToken,
+        endpoint: AppEndpoint
+    ) async throws -> ProjectMetadata {
+        throw ProjectAPIError.unexpectedResponse(reason: "ScriptedProjectAPIClient: update not stubbed")
+    }
+
     public func archive(
         projectID: String,
         workspaceID: String,
