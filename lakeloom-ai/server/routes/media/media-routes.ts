@@ -58,148 +58,6 @@ function uploadNotFound(uploadId: string): AppError {
     status: 404,
     title: 'Upload not found',
     detail: `No upload found with id '${uploadId}'.`,
-    // ── PUT /api/media/:upload_id/content ────────────────────────────────
-    // Overwrite file content on the volume (for editable types like Markdown).
-    app.put('/api/media/:upload_id/content', auth, async (req: Request, res: Response, next: NextFunction) => {
-      try {
-        const uploadId = req.params.upload_id as string;
-
-        // 1. Look up upload record
-        const { rows } = await lakebase.query(
-          `SELECT id, kind, mime_type, volume_path, revoked_at
-           FROM app.uploads
-           WHERE id = $1`,
-          [uploadId],
-        );
-
-        if (rows.length === 0) throw uploadNotFound(uploadId);
-        const upload = rows[0];
-
-        if (upload.revoked_at) {
-          throw new AppError({
-            type: ErrorTypes.VALIDATION_ERROR,
-            status: 410,
-            title: 'Upload deleted',
-            detail: `Cannot edit a deleted upload.`,
-          });
-        }
-
-        // Only allow editing text-based files
-        const mimeType = upload.mime_type as string;
-        if (!mimeType.startsWith('text/')) {
-          throw new AppError({
-            type: ErrorTypes.VALIDATION_ERROR,
-            status: 400,
-            title: 'Not editable',
-            detail: `Only text-based files can be edited. This file is ${mimeType}.`,
-          });
-        }
-
-        // 2. Read the new content from the request body
-        const chunks: Buffer[] = [];
-        for await (const chunk of req) {
-          chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
-        }
-        const newContent = Buffer.concat(chunks);
-
-        // 3. Write to the volume via the internal files API
-        const volumePath = upload.volume_path as string;
-        const relativePath = getRelativePath(volumePath);
-        const kind = upload.kind as string;
-        const volumeKey = KIND_TO_VOLUME_KEY[kind];
-
-        if (!volumeKey) {
-          throw new AppError({
-            type: ErrorTypes.INTERNAL_ERROR,
-            status: 500,
-            title: 'Unknown volume',
-            detail: `Upload kind '${kind}' has no volume mapping.`,
-          });
-        }
-
-        const port = process.env.PORT || '8000';
-        const uploadUrl = `http://127.0.0.1:${port}/api/files/${volumeKey}/upload?path=${encodeURIComponent(relativePath)}`;
-
-        const forwardedHeaders: Record<string, string> = {
-          ...(req.headers['x-forwarded-user'] ? { 'x-forwarded-user': req.headers['x-forwarded-user'] as string } : {}),
-          ...(req.headers['x-forwarded-email'] ? { 'x-forwarded-email': req.headers['x-forwarded-email'] as string } : {}),
-          ...(req.headers.cookie ? { cookie: req.headers.cookie as string } : {}),
-        };
-
-        const writeResponse = await fetch(uploadUrl, {
-          method: 'POST',
-          headers: { ...forwardedHeaders, 'Content-Type': 'application/octet-stream' },
-          body: newContent,
-        });
-
-        if (!writeResponse.ok) {
-          throw new AppError({
-            type: ErrorTypes.INTERNAL_ERROR,
-            status: 502,
-            title: 'Volume write failed',
-            detail: `Failed to write file to volume (HTTP ${writeResponse.status}).`,
-          });
-        }
-
-        // 4. Update size_bytes in Lakebase
-        await lakebase.query(
-          `UPDATE app.uploads SET size_bytes = $1 WHERE id = $2`,
-          [newContent.length, uploadId],
-        );
-
-        console.log(`[media] content.updated { upload_id: '${uploadId}', new_size: ${newContent.length} }`);
-
-        res.status(200).json({ id: uploadId, size_bytes: newContent.length });
-      } catch (err) {
-        next(err);
-      }
-    });
-
-    // ── DELETE /api/media/:upload_id ───────────────────────────────────────
-    // Soft-delete an upload (sets revoked_at). File remains on volume for audit.
-    // Only the user who uploaded the file can delete it.
-    app.delete('/api/media/:upload_id', auth, async (req: Request, res: Response, next: NextFunction) => {
-      try {
-        const uploadId = req.params.upload_id as string;
-        const userId = (req as any).user?.userId ?? (req as any).user?.id ?? null;
-
-        // Verify the upload exists and belongs to this user
-        const { rows } = await lakebase.query(
-          `SELECT id, user_id, revoked_at
-           FROM app.uploads
-           WHERE id = $1`,
-          [uploadId],
-        );
-
-        if (rows.length === 0) {
-          throw uploadNotFound(uploadId);
-        }
-
-        const upload = rows[0];
-
-        if (upload.revoked_at) {
-          throw new AppError({
-            type: ErrorTypes.VALIDATION_ERROR,
-            status: 410,
-            title: 'Upload already deleted',
-            detail: `Upload '${uploadId}' has already been deleted.`,
-          });
-        }
-
-        // Soft-delete: set revoked_at timestamp
-        await lakebase.query(
-          `UPDATE app.uploads SET revoked_at = NOW() WHERE id = $1`,
-          [uploadId],
-        );
-
-        console.log(`[media] upload.revoked { upload_id: '${uploadId}', revoked_by: '${userId}' }`);
-
-        res.status(200).json({ id: uploadId, revoked: true });
-      } catch (err) {
-        next(err);
-      }
-    });
-
   });
 }
 
@@ -501,11 +359,12 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
         }
 
         // 2. Read the new content from the request body
-        const chunks: Buffer[] = [];
-        for await (const chunk of req) {
-          chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
-        }
-        const newContent = Buffer.concat(chunks);
+        const newContent = await new Promise<Buffer>((resolve, reject) => {
+          const chunks: Buffer[] = [];
+          req.on('data', (chunk: Buffer) => chunks.push(chunk));
+          req.on('end', () => resolve(Buffer.concat(chunks)));
+          req.on('error', reject);
+        });
 
         // 3. Write to the volume via the internal files API
         const volumePath = upload.volume_path as string;
