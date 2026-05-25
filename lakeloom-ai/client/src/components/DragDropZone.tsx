@@ -9,6 +9,9 @@ import { UploadProgressItem } from './UploadProgressItem';
 const EXT_TO_MIME: Record<string, string> = {
   '.pdf': 'application/pdf',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.md': 'text/markdown',
+  '.markdown': 'text/markdown',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -26,6 +29,8 @@ function formatMimeList(mimes: string[]): string {
     'image/jpeg': 'JPEG',
     'application/pdf': 'PDF',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'DOCX',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'PPTX',
+    'text/markdown': 'Markdown',
   };
   return mimes.map((m) => extMap[m] ?? m.split('/')[1]?.toUpperCase() ?? m).join(', ');
 }

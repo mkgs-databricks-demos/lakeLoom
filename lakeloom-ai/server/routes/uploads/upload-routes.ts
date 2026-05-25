@@ -93,6 +93,8 @@ const MIME_TO_EXT: Record<string, string> = {
   'image/jpeg': 'jpg',
   'application/pdf': 'pdf',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+  'text/markdown': 'md',
 };
 
 // ── Client type constants ────────────────────────────────────────────────────────
@@ -1009,7 +1011,7 @@ export default function registerUploads(ctx: AppKitContext): void {
       '/api/projects/:project_id/documents',
       dualAuth({ lakebase }),
       createUploadHandler(
-        { kind: 'document', volumeKey: 'documents', volumeEnvVar: 'LAKELOOM_DOCUMENT_VOLUME_PATH', allowedMimes: ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'], resolveContext: resolveProjectContext },
+        { kind: 'document', volumeKey: 'documents', volumeEnvVar: 'LAKELOOM_DOCUMENT_VOLUME_PATH', allowedMimes: ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.openxmlformats-officedocument.presentationml.presentation', 'text/markdown', 'image/png', 'image/jpeg'], resolveContext: resolveProjectContext },
         lakebase, appkitFiles,
       ),
     );

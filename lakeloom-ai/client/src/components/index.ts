@@ -13,3 +13,4 @@ export { ConfirmDialog } from './ConfirmDialog';
 export { PairDeviceModal } from './PairDeviceModal';
 export { DragDropZone } from './DragDropZone';
 export { UploadProgressItem } from './UploadProgressItem';
+export { MarkdownDocument } from './MarkdownDocument';

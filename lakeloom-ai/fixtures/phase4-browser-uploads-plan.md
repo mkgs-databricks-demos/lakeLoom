@@ -1,7 +1,7 @@
 # Phase 4: Browser-Side Uploads — Implementation Plan
 
 **Date:** 2026-05-25
-**Status:** Planning
+**Status:** ✅ Complete (Tasks 1–9) — Task 10 (Playwright tests) deferred
 **Estimated effort:** 2–3 days
 **Dependencies:** Phase 2 (Capture Session Browser) ✅ + Phase 3 (Media Viewer) ✅
 
@@ -85,8 +85,9 @@ busboy.on('file', (_fieldname, stream, info) => {
 
 ## Implementation Tasks
 
-### Task 1: Server — Make Upload Routes Browser-Compatible
+### Task 1: Server — Make Upload Routes Browser-Compatible ✅
 
+**Commit:** `647697c`
 **File:** `server/routes/uploads/upload-routes.ts`
 
 **Changes:**
@@ -128,12 +129,13 @@ busboy.on('file', (_fieldname, stream, info) => {
    ```
    iOS retains `state = 'active'` only (no behavioral change for existing clients).
 
-**Migration consideration:** None needed — `app.uploads` already has `client_type` column (migration 009) and `paired_session_id` is nullable.
+**Migration 014:** `paired_session_id` column relaxed to nullable (`ALTER COLUMN paired_session_id DROP NOT NULL`). Commit `78c653f`.
 
 ---
 
-### Task 2: Server — Streaming Upload Path for Browser
+### Task 2: Server — Streaming Upload Path for Browser ✅
 
+**Commit:** `cc63c8e`
 **File:** `server/routes/uploads/upload-routes.ts`
 
 The existing `parseMultipart` → buffer → write pattern stays for iOS. For browser, implement a streaming path:
@@ -184,8 +186,9 @@ stream.on('data', (chunk: Buffer) => {
 
 ---
 
-### Task 3: Client — `DragDropZone` Reusable Component
+### Task 3: Client — `DragDropZone` Reusable Component ✅
 
+**Commit:** `d583148`
 **File:** `client/src/components/DragDropZone.tsx`
 
 **Props interface:**
@@ -234,8 +237,9 @@ interface DragDropZoneProps {
 
 ---
 
-### Task 4: Client — `UploadProgressItem` Component
+### Task 4: Client — `UploadProgressItem` Component ✅
 
+**Commit:** `d583148`
 **File:** `client/src/components/UploadProgressItem.tsx`
 
 **States:**
@@ -252,8 +256,9 @@ interface DragDropZoneProps {
 
 ---
 
-### Task 5: Client — Upload Hook
+### Task 5: Client — Upload Hook ✅
 
+**Commit:** `d583148`
 **File:** `client/src/hooks/useUpload.ts`
 
 **Interface:**
@@ -313,8 +318,9 @@ startNext();
 
 ---
 
-### Task 6: Client — Integrate into `CaptureDetailPage`
+### Task 6: Client — Integrate into `CaptureDetailPage` ✅
 
+**Commit:** `d583148`
 **File:** `client/src/pages/projects/CaptureDetailPage.tsx`
 
 **Placement:** Below the upload timeline, above the empty state. Only visible when session state is `active` or `completed` (not `cancelled`).
@@ -348,8 +354,9 @@ startNext();
 
 ---
 
-### Task 7: Client — Integrate into `ProjectDetailPage`
+### Task 7: Client — Integrate into `ProjectDetailPage` ✅
 
+**Commit:** `d583148`
 **File:** `client/src/pages/projects/ProjectDetailPage.tsx`
 
 **Placement:** In the "Documents" section, below the existing document list.
@@ -380,7 +387,9 @@ startNext();
 
 ---
 
-### Task 8: Client — MIME + Size Validation UX
+### Task 8: Client — MIME + Size Validation UX ✅
+
+**Included in Task 3 implementation (DragDropZone).**
 
 **Client-side validation (instant, before upload starts):**
 
@@ -408,7 +417,9 @@ startNext();
 
 ---
 
-### Task 9: Accessibility & Keyboard Support
+### Task 9: Accessibility & Keyboard Support ✅
+
+**Included in Task 3 implementation (DragDropZone).**
 
 - Drop zone is focusable (`tabIndex={0}`), Enter/Space opens file picker
 - Progress items are `role="status"` with `aria-live="polite"`
@@ -419,7 +430,7 @@ startNext();
 
 ---
 
-### Task 10: Testing
+### Task 10: Testing (Deferred)
 
 **Playwright smoke test additions** (`tests/smoke.spec.ts`):
 1. Navigate to a project, verify drop zone is visible
@@ -429,9 +440,9 @@ startNext();
 5. Verify MIME rejection for an invalid file type
 
 **Manual testing checklist:**
+- [x] Drag PDF onto project detail → uploads successfully (verified via OTel, 201 response)
 - [ ] Drag PNG onto capture detail → uploads successfully
 - [ ] Drag JPEG onto capture detail → uploads successfully
-- [ ] Drag PDF onto project detail → uploads successfully
 - [ ] Drag DOCX onto project detail → uploads successfully
 - [ ] Drag MP3 onto capture detail → rejected with friendly error
 - [ ] Drag 6 GB file → rejected client-side with size error
@@ -450,47 +461,58 @@ startNext();
 
 | File | Action | Purpose |
 |------|--------|---------|
-| `server/routes/uploads/upload-routes.ts` | Modify | Switch screenshot/photo/document routes to `dualAuth`, derive `clientType` dynamically, add streaming path |
-| `client/src/components/DragDropZone.tsx` | Create | Reusable drag-and-drop upload zone |
-| `client/src/components/UploadProgressItem.tsx` | Create | Per-file upload progress display |
-| `client/src/hooks/useUpload.ts` | Create | Upload queue management hook with concurrency pool |
-| `client/src/components/index.ts` | Modify | Export new components |
-| `client/src/pages/projects/CaptureDetailPage.tsx` | Modify | Add DragDropZone below timeline |
-| `client/src/pages/projects/ProjectDetailPage.tsx` | Modify | Add DragDropZone in documents section |
-| `tests/smoke.spec.ts` | Modify | Add upload smoke tests |
+| `server/routes/uploads/upload-routes.ts` | Modified | Switch screenshot/photo/document routes to `dualAuth`, derive `clientType` dynamically, add streaming path |
+| `server/migrations/014_nullable_paired_session_id.ts` | Created | Allow NULL `paired_session_id` for browser uploads |
+| `server/migrations/migrate.ts` | Modified | Register migration 014 |
+| `client/src/components/DragDropZone.tsx` | Created | Reusable drag-and-drop upload zone |
+| `client/src/components/UploadProgressItem.tsx` | Created | Per-file upload progress display |
+| `client/src/hooks/useUpload.ts` | Created | Upload queue management hook with concurrency pool |
+| `client/src/components/index.ts` | Modified | Export new components |
+| `client/src/pages/projects/CaptureDetailPage.tsx` | Modified | Add DragDropZone below timeline |
+| `client/src/pages/projects/ProjectDetailPage.tsx` | Modified | Add DragDropZone in documents section |
+| `client/src/App.tsx` | Modified | Remove example Analytics/Files pages + nav links |
+| `config/queries/hello_world.sql` | Deleted | Removed example query (caused deploy failures) |
+| `config/queries/mocked_sales.sql` | Deleted | Removed example query (caused deploy failures) |
+| `client/src/pages/analytics/AnalyticsPage.tsx` | Deleted | Removed example page |
+| `client/src/pages/files/FilesPage.tsx` | Deleted | Removed example page |
 
 ---
 
-## Implementation Order (Recommended)
+## Commits
+
+| Hash | Description |
+|------|-------------|
+| `647697c` | Task 1: dualAuth + browser compatibility |
+| `cc63c8e` | Task 2: streaming uploads |
+| `d583148` | Tasks 3–7: browser upload UI + page integrations + example cleanup |
+| `78c653f` | Fix: nullable paired_session_id (migration 014) |
+
+---
+
+## Implementation Order (Actual)
 
 ```
-1. Server changes (Task 1–2)              ~4 hours
-   ├── dualAuth switch + clientType detection
-   ├── Streaming upload path for browser
-   └── Test with curl from browser auth context
-2. useUpload hook (Task 5)                 ~3 hours
-   ├── Concurrency pool implementation
-   └── Unit testable in isolation
-3. DragDropZone + ProgressItem (Task 3–4)  ~3 hours
-   └── Render in isolation, verify brand compliance
-4. CaptureDetailPage integration (Task 6)  ~1 hour
-5. ProjectDetailPage integration (Task 7)  ~1 hour
-6. Validation polish (Task 8–9)            ~1.5 hours
-7. Testing (Task 10)                       ~1.5 hours
+1. Server changes (Task 1–2)              ✅ commits 647697c, cc63c8e
+2. useUpload hook (Task 5)                 ✅ commit d583148
+3. DragDropZone + ProgressItem (Task 3–4)  ✅ commit d583148
+4. CaptureDetailPage integration (Task 6)  ✅ commit d583148
+5. ProjectDetailPage integration (Task 7)  ✅ commit d583148
+6. Validation polish (Task 8–9)            ✅ included in Task 3
+7. Migration fix (discovered at runtime)   ✅ commit 78c653f
+8. Testing (Task 10)                       ⏳ deferred (manual PDF verified)
 ```
-
-**Total: ~15 hours / 2 working days**
 
 ---
 
 ## Risks & Mitigations
 
-| Risk | Likelihood | Mitigation |
-|------|-----------|-------------|
-| AppKit body parser interferes with Busboy streaming | Low (existing `getBufferedRequestBody` fallback) | Test early with browser FormData |
-| Large file uploads (multi-GB) timeout on AppKit container | Medium | Streaming path avoids memory pressure; verify AppKit has no request timeout < file transfer time |
-| AppKit files plugin doesn't stream ReadableStream for large files | Medium | Test with 1 GB file early. Fallback: chunked upload via REST API directly |
-| CORS issues on multipart from browser | None (same-origin — browser hits App directly) | N/A |
-| Progress events not firing (chunked encoding) | Low (XHR upload progress is reliable for multipart) | Fallback: indeterminate progress bar |
-| Memory pressure from parallel 5 GB uploads | Medium | Server streams (no buffer). Client limited to 3 concurrent. Monitor container memory. |
-| UC Volume write timeout for very large files | Low | AppKit plugin handles chunked writes internally; verify no SDK-level timeout |
+| Risk | Likelihood | Mitigation | Status |
+|------|-----------|-------------|--------|
+| AppKit body parser interferes with Busboy streaming | Low (existing `getBufferedRequestBody` fallback) | Test early with browser FormData | ✅ Verified working |
+| Large file uploads (multi-GB) timeout on AppKit container | Medium | Streaming path avoids memory pressure; verify AppKit has no request timeout < file transfer time | ⚠️ Untested with GB-scale files |
+| AppKit files plugin doesn't stream ReadableStream for large files | Medium | Test with 1 GB file early. Fallback: chunked upload via REST API directly | ⚠️ Untested |
+| CORS issues on multipart from browser | None (same-origin — browser hits App directly) | N/A | ✅ Confirmed |
+| Progress events not firing (chunked encoding) | Low (XHR upload progress is reliable for multipart) | Fallback: indeterminate progress bar | ⚠️ Untested |
+| Memory pressure from parallel 5 GB uploads | Medium | Server streams (no buffer). Client limited to 3 concurrent. Monitor container memory. | ⚠️ Untested |
+| UC Volume write timeout for very large files | Low | AppKit plugin handles chunked writes internally; verify no SDK-level timeout | ⚠️ Untested |
+| NULL paired_session_id constraint on uploads table | **Hit** | Migration 014 drops NOT NULL | ✅ Fixed |

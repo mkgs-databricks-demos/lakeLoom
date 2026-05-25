@@ -16,7 +16,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router';
-import { ArrowLeft, Smartphone, Loader2, ChevronDown, ArrowUpDown, Mic2, Camera, FileText, Download } from 'lucide-react';
+import { ArrowLeft, Smartphone, Loader2, ChevronDown, ArrowUpDown, Mic2, Camera, FileText, Download, Trash2 } from 'lucide-react';
 import { StatusBadge, TimeAgo, Duration, EmptyState, ConfirmDialog, PairDeviceModal, DragDropZone } from '../../components';
 import { MediaModal } from '../../components/media';
 
@@ -192,6 +192,22 @@ export function ProjectDetailPage() {
 
   const projectId = id!;
 
+  // Delete document handler
+  const handleDeleteDocument = async (uploadId: string, filename: string) => {
+    if (!window.confirm(`Delete "${filename}"? This cannot be undone.`)) return;
+    try {
+      const res = await fetch(`/api/media/${uploadId}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? `Delete failed (${res.status})`);
+      }
+      // Refresh the list
+      fetchProjectUploads(projectId).then(setProjectUploads).catch(() => {});
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
   // Load project + captures + assigned devices + project-level uploads
   const loadData = useCallback(async () => {
     try {
@@ -316,22 +332,36 @@ export function ProjectDetailPage() {
             {projectUploads.map((upload) => (
               <div
                 key={upload.id}
-                onClick={() => setSelectedDocument(upload)}
                 className="flex items-center gap-3 px-4 py-3 rounded-lg border
                            border-[var(--border-default,#DCE0E2)] bg-[var(--surface-raised,#fff)]
                            hover:border-[var(--border-focus,#2272B4)] hover:shadow-sm
                            transition-all duration-200 group cursor-pointer"
               >
-                <FileText className="w-5 h-5 text-[var(--accent-warning,#D97706)] shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <span className="text-sm font-medium text-[var(--text-primary,#1B3139)] truncate block">
-                    {upload.original_filename ?? `Document`}
-                  </span>
-                  <span className="text-xs text-[var(--text-secondary,#5A6F77)]">
-                    {formatBytes(upload.size_bytes)} · {upload.mime_type.split('/').pop()?.toUpperCase()}
-                  </span>
+                <div className="flex-1 flex items-center gap-3 min-w-0" onClick={() => setSelectedDocument(upload)}>
+                  <FileText className="w-5 h-5 text-[var(--accent-warning,#D97706)] shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <span className="text-sm font-medium text-[var(--text-primary,#1B3139)] truncate block">
+                      {upload.original_filename ?? `Document`}
+                    </span>
+                    <span className="text-xs text-[var(--text-secondary,#5A6F77)]">
+                      {formatBytes(upload.size_bytes)} · {upload.mime_type.split('/').pop()?.toUpperCase()}
+                    </span>
+                  </div>
                 </div>
-                <Download className="w-4 h-4 text-[var(--text-secondary,#5A6F77)] opacity-0 group-hover:opacity-100 transition-opacity duration-150" />
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDeleteDocument(upload.id, upload.original_filename ?? 'Document');
+                  }}
+                  className="p-1.5 rounded-md opacity-0 group-hover:opacity-100
+                             text-[var(--text-tertiary,#8C9EA5)] hover:text-[var(--accent-error,#BD2B26)]
+                             hover:bg-[var(--accent-error-subtle,#FABFBA)]
+                             transition-all duration-150"
+                  aria-label={`Delete ${upload.original_filename ?? 'document'}`}
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
               </div>
             ))}
           </div>
@@ -339,7 +369,14 @@ export function ProjectDetailPage() {
 
         {/* Browser document upload zone */}
         <DragDropZone
-          accept={['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']}
+          accept={[
+            'application/pdf',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            'text/markdown',
+            'image/png',
+            'image/jpeg',
+          ]}
           maxSizeBytes={5 * 1024 * 1024 * 1024}
           multiple
           compact
@@ -349,7 +386,7 @@ export function ProjectDetailPage() {
             // Refresh documents after successful upload
             fetchProjectUploads(projectId).then(setProjectUploads).catch(() => {});
           }}
-          label="Drop PDF or DOCX documents here"
+          label="Drop documents, images, or markdown here"
         />
       </div>
 
