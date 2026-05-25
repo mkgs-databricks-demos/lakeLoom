@@ -43,6 +43,9 @@ const CreateCaptureBody = z.object({
   // device_id: stable keychain-persisted UUID v4 identifying the physical device.
   // Optional until all iOS builds include it (PR 8a-2).
   device_id: z.string().uuid().optional(),
+  // client_generated_id: UUIDv7 from iOS for offline capture starts (Phase 2).
+  // When supplied, used as the row's id (Option A). Idempotent on (user, id).
+  client_generated_id: z.string().uuid().optional(),
 });
 
 const PatchCaptureBody = z.object({

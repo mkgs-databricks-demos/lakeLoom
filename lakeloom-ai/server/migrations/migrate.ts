@@ -25,6 +25,7 @@ import { migration014 } from './014_nullable_paired_session_id';
 import { migration015 } from './015_backfill_upload_filenames';
 import { migration016 } from './016_uploads_updated_at';
 import { migration017 } from './017_capture_sessions_updated_at';
+import { migration018 } from './018_capture_sessions_client_generated_id';
 
 // ── Migration registry ─────────────────────────────────────────────────────────────────────
 // Add new migrations here in order. The `name` must be unique and stable.
@@ -34,7 +35,7 @@ export interface Migration {
   up: string; // SQL to apply
 }
 
-const migrations: Migration[] = [migration001, migration002, migration003, migration004, migration005, migration006, migration007, migration008, migration009, migration010, migration011, migration012, migration013, migration014, migration015, migration016, migration017];
+const migrations: Migration[] = [migration001, migration002, migration003, migration004, migration005, migration006, migration007, migration008, migration009, migration010, migration011, migration012, migration013, migration014, migration015, migration016, migration017, migration018];
 
 // ── Lakebase query interface ─────────────────────────────────────────────────────────────────
 
