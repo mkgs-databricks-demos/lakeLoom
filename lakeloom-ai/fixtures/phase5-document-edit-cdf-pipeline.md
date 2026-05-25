@@ -216,11 +216,11 @@ def document_embeddings():
 | Prerequisite | Status |
 |---|---|
 | `PUT /api/media/:id/content` endpoint | ✅ Implemented (media-routes.ts) |
-| OTel event `[media] content.updated` | ✅ Emitted on each edit |
+| OTel event `[media] content.updated` | ✅ Emitted on each edit (now includes sha256_hex) |
 | `lb_uploads_history` Delta table | ✅ Exists (Lakehouse Sync) |
 | CDF enabled on sync table | ❓ Verify / enable |
-| `updated_at` column in Lakebase | ⏳ Needs migration |
-| `sha256_hex` updated on edit | ⏳ Needs PUT handler update |
+| `updated_at` column in Lakebase | ✅ Migration 016 (commit `36d21c6`) |
+| `sha256_hex` updated on edit | ✅ PUT handler fixed (commit `36d21c6`) |
 | SDP pipeline (bronze/silver/gold) | ⏳ Phase 5 work |
 | Vector Search index | ⏳ Phase 5+ work |
 
@@ -247,7 +247,7 @@ def document_embeddings():
 
 ---
 
-## Migration Needed (server-side)
+## Migration (DONE — commit `36d21c6`)
 
 ```typescript
 // Migration 016: add updated_at to uploads, update PUT handler
@@ -257,15 +257,13 @@ export const migration016: Migration = {
 };
 ```
 
-And in `media-routes.ts`, the PUT handler should:
+The PUT handler in `media-routes.ts` now does (commit `36d21c6`):
 ```typescript
+const newHash = createHash('sha256').update(newContent).digest('hex');
 await lakebase.query(
-  `UPDATE app.uploads
-   SET size_bytes = $1, sha256_hex = $2, updated_at = NOW()
-   WHERE id = $3`,
-  [newSize, newHash, uploadId]
+  `UPDATE app.uploads SET size_bytes = $1, sha256_hex = $2, updated_at = NOW() WHERE id = $3`,
+  [newContent.length, newHash, uploadId]
 );
 ```
 
-Currently it only updates the volume file — it does NOT update the Lakebase row.
-This is the critical missing link for CDF to detect the change.
+✅ This is the critical link for CDF to detect the change — now implemented.
