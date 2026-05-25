@@ -506,8 +506,9 @@ public actor LiveCaptureService: CaptureService {
         // taken during the recording that haven't drained yet. Server
         // rejects uploads to non-active captures, so the watcher
         // must wait for all of them before PATCHing to .completed.
-        // Auto-retired (succeeded) photos are already gone from
-        // currentUploads(); we don't need to track them.
+        // Auto-retired (succeeded) uploads are already gone from
+        // currentUploads(); they don't need tracking — the server
+        // already accepted them while the capture was .active.
         let snapshot = await uploadCoordinator.currentUploads()
         let pendingIDs = Set(
             snapshot
@@ -515,9 +516,31 @@ public actor LiveCaptureService: CaptureService {
                 .filter { !$0.state.isTerminal }
                 .map { $0.id }
         )
-        // The audio we just enqueued is always non-terminal at this
-        // moment (worker hasn't started it yet), so it's guaranteed
-        // to be in the snapshot.
+
+        // Edge case: the audio + every in-recording photo upload
+        // may have already drained while we were awaiting the
+        // recognizer's drain Task (a fast network + small audio +
+        // small photos beats the 1.5s recognizer drain wait). In
+        // that window the worker has auto-retired every entry from
+        // the queue per the PR #60 fix, so the snapshot is empty.
+        //
+        // If we spawn a watcher with an empty pending set, the
+        // watcher's `pending.contains(...)` filter rejects every
+        // buffered .succeeded event and `pending.isEmpty` never
+        // triggers the `patchServerCompleted` branch — the UI sits
+        // on `.finalizing` "Uploading 0 files…" forever. Skip the
+        // watcher in this case and patch directly.
+        if pendingIDs.isEmpty {
+            await patchServerCompleted(context: context)
+            transition(to: .completed(context))
+            await contextStore?.clear()
+            await logger.info(
+                "capture.stop.all_already_drained",
+                metadata: ["capture_session_id": .uuidPrefix(context.captureSessionID)]
+            )
+            return
+        }
+
         transition(to: .finalizing(context, pendingUploadIDs: pendingIDs))
         await persistFinalizingIfNeeded(context: context, pending: pendingIDs)
         spawnWatcher(stream: uploadStream, for: context, pendingUploadIDs: pendingIDs)
