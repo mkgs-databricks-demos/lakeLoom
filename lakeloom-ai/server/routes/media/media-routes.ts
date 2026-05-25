@@ -27,6 +27,7 @@
 
 import type { Application, Request, Response, NextFunction } from 'express';
 import { dualAuth } from '../../middleware/browser-auth';
+import { createHash } from 'crypto';
 import { AppError, ErrorTypes } from '../../lib/errors';
 
 // ── Interfaces ─────────────────────────────────────────────────────────────────
@@ -405,15 +406,18 @@ export async function setupMediaRoutes(appkit: AppKitContext): Promise<void> {
           });
         }
 
-        // 4. Update size_bytes in Lakebase
+        // 4. Compute SHA-256 of new content
+        const newHash = createHash('sha256').update(newContent).digest('hex');
+
+        // 5. Update size_bytes, sha256_hex, updated_at in Lakebase (enables CDF detection)
         await lakebase.query(
-          `UPDATE app.uploads SET size_bytes = $1 WHERE id = $2`,
-          [newContent.length, uploadId],
+          `UPDATE app.uploads SET size_bytes = $1, sha256_hex = $2, updated_at = NOW() WHERE id = $3`,
+          [newContent.length, newHash, uploadId],
         );
 
-        console.log(`[media] content.updated { upload_id: '${uploadId}', new_size: ${newContent.length} }`);
+        console.log(`[media] content.updated { upload_id: '${uploadId}', new_size: ${newContent.length}, sha256_hex: '${newHash}' }`);
 
-        res.status(200).json({ id: uploadId, size_bytes: newContent.length });
+        res.status(200).json({ id: uploadId, size_bytes: newContent.length, sha256_hex: newHash });
       } catch (err) {
         next(err);
       }
