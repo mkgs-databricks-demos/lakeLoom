@@ -218,7 +218,7 @@ def document_embeddings():
 | `PUT /api/media/:id/content` endpoint | ✅ Implemented (media-routes.ts) |
 | OTel event `[media] content.updated` | ✅ Emitted on each edit (now includes sha256_hex) |
 | `lb_uploads_history` Delta table | ✅ Exists (Lakehouse Sync) |
-| CDF enabled on sync table | ❓ Verify / enable |
+| CDF enabled on sync table | ✅ Enabled (2026-05-25, ALTER TABLE SET TBLPROPERTIES) |
 | `updated_at` column in Lakebase | ✅ Migration 016 (commit `36d21c6`) |
 | `sha256_hex` updated on edit | ✅ PUT handler fixed (commit `36d21c6`) |
 | SDP pipeline (bronze/silver/gold) | ⏳ Phase 5 work |
