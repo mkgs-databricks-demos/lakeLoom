@@ -60,6 +60,97 @@ public protocol CaptureAPIClient: Sendable {
         limit: Int,
         before: Date?
     ) async throws -> [CaptureSession]
+
+    /// `GET /api/media/project/:project_id` — project-level uploads
+    /// (per Genie's 2026-05-24 Phase 3 PR #61). These are uploads
+    /// with `capture_session_id IS NULL` — documents the AI pipeline
+    /// produced (Whisper transcript, requirements doc, architecture
+    /// diagram, Genie Code session plan per the 2026-05-23
+    /// uploads-surfacing answer), plus any reference materials
+    /// uploaded server-side.
+    ///
+    /// Response shape per Genie's `media-routes.ts`:
+    /// ```
+    /// { "uploads": [
+    ///     { id, kind, mime_type, original_filename, size_bytes,
+    ///       uploaded_at }
+    ///   ] }
+    /// ```
+    /// Returns the full list — no pagination params today; iOS reads
+    /// everything in one shot and renders. Pagination can be wired
+    /// when Genie adds a cursor.
+    func listProjectDocuments(
+        workspaceID: String,
+        projectID: String
+    ) async throws -> [ProjectDocument]
+}
+
+/// Project-level upload as surfaced by
+/// ``CaptureAPIClient/listProjectDocuments(workspaceID:projectID:)``.
+/// Leaner than ``CaptureUpload`` because the
+/// `GET /api/media/project/:project_id` route is read-only — no
+/// `volume_path` / `sha256_hex` / `client_ts*` fields are surfaced
+/// in the list response. Fetching the content goes through
+/// `GET /api/media/:upload_id` (proxy with Range support) — a
+/// separate trip iOS will wire once we add tap-to-view.
+public struct ProjectDocument: Sendable, Equatable, Hashable, Codable, Identifiable {
+    public let id: String
+    public let kind: CaptureUpload.Kind
+    public let mimeType: String
+    public let originalFilename: String?
+    public let sizeBytes: Int64
+    public let uploadedAt: Date
+
+    public init(
+        id: String,
+        kind: CaptureUpload.Kind,
+        mimeType: String,
+        originalFilename: String?,
+        sizeBytes: Int64,
+        uploadedAt: Date
+    ) {
+        self.id = id
+        self.kind = kind
+        self.mimeType = mimeType
+        self.originalFilename = originalFilename
+        self.sizeBytes = sizeBytes
+        self.uploadedAt = uploadedAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case kind
+        case mimeType = "mime_type"
+        case originalFilename = "original_filename"
+        case sizeBytes = "size_bytes"
+        case uploadedAt = "uploaded_at"
+    }
+
+    /// `size_bytes` round-trips as number-or-string in Lakebase's
+    /// bigint serialization — same lenient handling as
+    /// ``CaptureUpload``.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(String.self, forKey: .id)
+        self.kind = try c.decode(CaptureUpload.Kind.self, forKey: .kind)
+        self.mimeType = try c.decode(String.self, forKey: .mimeType)
+        self.originalFilename = try c.decodeIfPresent(String.self, forKey: .originalFilename)
+        if let direct = try? c.decode(Int64.self, forKey: .sizeBytes) {
+            self.sizeBytes = direct
+        } else if let string = try? c.decode(String.self, forKey: .sizeBytes),
+                  let parsed = Int64(string) {
+            self.sizeBytes = parsed
+        } else {
+            throw DecodingError.typeMismatch(
+                Int64.self,
+                DecodingError.Context(
+                    codingPath: c.codingPath + [CodingKeys.sizeBytes],
+                    debugDescription: "Expected Int64 as a number or numeric string"
+                )
+            )
+        }
+        self.uploadedAt = try c.decode(Date.self, forKey: .uploadedAt)
+    }
 }
 
 extension CaptureSession {
@@ -209,6 +300,24 @@ public actor LiveCaptureAPIClient: CaptureAPIClient {
             log: "capture.list"
         )
         return response.captures
+    }
+
+    public func listProjectDocuments(
+        workspaceID: String,
+        projectID: String
+    ) async throws -> [ProjectDocument] {
+        let path = "/api/media/project/\(projectID)"
+        struct ListResponse: Decodable {
+            let uploads: [ProjectDocument]
+        }
+        let response: ListResponse = try await send(
+            workspaceID: workspaceID,
+            method: .get,
+            path: path,
+            body: nil,
+            log: "documents.list"
+        )
+        return response.uploads
     }
 
     // MARK: - Helpers

@@ -30,19 +30,39 @@ struct RecordingView: View {
     /// pattern-match against the state's associated context twice.
     let projectName: String
 
+    /// Factory for the live transcript-segment stream. Returns nil
+    /// when no live recognizer is wired (older test paths, permission
+    /// denied, etc.) — the transcript panel then hides entirely. The
+    /// view consumes the stream in a `.task` and accumulates segments
+    /// into `segments` for the scrolling display. The factory should
+    /// return a fresh independent stream per call.
+    let transcriptStream: (() async -> AsyncStream<TranscriptSegment>?)?
+
+    /// Optional in-session photo capture trigger. When provided, the
+    /// view shows a camera button next to Stop that awaits this
+    /// closure — the closure presents the camera (via
+    /// ``PhotoCapture``), enqueues the resulting JPEG on the
+    /// ``UploadCoordinator``, and returns once both finish. Nil
+    /// hides the button entirely (older test paths or builds without
+    /// a photoCapture dependency).
+    let onCapturePhoto: (() async -> Void)?
+
     @State private var pulseScale: CGFloat = 1.0
+    @State private var segments: [TranscriptSegment] = []
+    @State private var isCapturingPhoto = false
 
     var body: some View {
         ZStack {
             BrandColors.surfacePrimary
                 .ignoresSafeArea()
 
-            VStack(spacing: Spacing.xxl) {
+            VStack(spacing: Spacing.xl) {
                 header
-                Spacer()
+                transcriptPanel
+                Spacer(minLength: Spacing.md)
                 stateIndicator
                 elapsedReadout
-                Spacer()
+                Spacer(minLength: Spacing.md)
                 actionButtons
             }
             .padding(.horizontal, Spacing.xl)
@@ -60,6 +80,70 @@ struct RecordingView: View {
             ) {
                 pulseScale = 1.18
             }
+        }
+        .task { await subscribeToTranscripts() }
+    }
+
+    // MARK: - Live transcript panel
+
+    /// Scrolling panel of phrases as the on-device speech recognizer
+    /// emits them. Surfaces the "rapid prototyping" demo loop —
+    /// users see their own words appearing in real time, which is
+    /// the proof point that the in-session pipeline is alive.
+    ///
+    /// Hidden entirely when no segments have arrived yet (so we
+    /// don't take up space with a blank box during the silent
+    /// pre-speech moments of a session). Auto-scrolls to the newest
+    /// segment on every append.
+    @ViewBuilder
+    private var transcriptPanel: some View {
+        if !segments.isEmpty {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Spacing.sm) {
+                        ForEach(segments, id: \.segmentIndex) { segment in
+                            Text(segment.text)
+                                .font(BrandTypography.body)
+                                .foregroundStyle(BrandColors.textPrimary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .id(segment.segmentIndex)
+                        }
+                    }
+                    .padding(.horizontal, Spacing.md)
+                    .padding(.vertical, Spacing.md)
+                }
+                .frame(maxHeight: 200)
+                .background(
+                    BrandColors.surfaceSecondary,
+                    in: RoundedRectangle(cornerRadius: 12)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(BrandColors.borderDefault, lineWidth: 0.5)
+                )
+                .onChange(of: segments.count) { _, _ in
+                    guard let last = segments.last else { return }
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo(last.segmentIndex, anchor: .bottom)
+                    }
+                }
+            }
+            .transition(.opacity)
+        }
+    }
+
+    /// Pull segments off the captureService's broadcast stream into
+    /// `segments`. Runs for the life of this view's `.task`, which
+    /// is the same as the recording cover (mounts on `.recording`,
+    /// unmounts when the parent dismisses the cover). The stream
+    /// naturally finishes when the recognizer's drain task closes
+    /// every UI subscriber on capture stop/cancel — no manual
+    /// cancellation needed.
+    private func subscribeToTranscripts() async {
+        guard let factory = transcriptStream else { return }
+        guard let stream = await factory() else { return }
+        for await segment in stream {
+            segments.append(segment)
         }
     }
 
@@ -144,9 +228,42 @@ struct RecordingView: View {
     @ViewBuilder
     private var actionButtons: some View {
         VStack(spacing: Spacing.md) {
+            if let onCapturePhoto, case .recording = state {
+                photoButton(onCapturePhoto: onCapturePhoto)
+            }
             primaryButton
             cancelButton
         }
+    }
+
+    /// Camera button — only visible during `.recording`, never
+    /// `.finalizing` (uploads are draining; new attachments would
+    /// race the server-side state transition). Spinner replaces the
+    /// label while the underlying `PhotoCapture` presents the camera
+    /// and writes the JPEG, since the closure is fire-and-forget on
+    /// the view's side.
+    private func photoButton(onCapturePhoto: @escaping () async -> Void) -> some View {
+        Button {
+            Task {
+                isCapturingPhoto = true
+                await onCapturePhoto()
+                isCapturingPhoto = false
+            }
+        } label: {
+            HStack(spacing: Spacing.sm) {
+                if isCapturingPhoto {
+                    ProgressView().controlSize(.small).tint(BrandColors.accentPrimary)
+                } else {
+                    Image(systemName: "camera.fill")
+                }
+                Text(isCapturingPhoto ? "Capturing…" : "Take photo")
+                    .font(BrandTypography.bodyEmphasis)
+            }
+            .frame(maxWidth: .infinity, minHeight: 48)
+        }
+        .buttonStyle(.bordered)
+        .tint(BrandColors.accentPrimary)
+        .disabled(isCapturingPhoto)
     }
 
     private var primaryButton: some View {

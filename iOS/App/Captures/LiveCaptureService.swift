@@ -48,6 +48,11 @@ public actor LiveCaptureService: CaptureService {
     /// instance that backs `LiveAudioRecorder`. Tests can leave it
     /// nil to use the file-based fallback.
     private let audioBufferSource: (any AudioBufferSource)?
+    /// PR 10c: optional camera path for in-session photo capture.
+    /// Production wiring sets `LivePhotoCapture`; tests that don't
+    /// exercise the photo flow can omit. When nil,
+    /// ``capturePhoto()`` throws ``CaptureServiceError/photoCaptureUnavailable``.
+    private let photoCapture: (any PhotoCapture)?
     /// Workspace + paired-session resolver — the transcript events
     /// endpoint is `/api/sessions/<paired_session_id>/events`, so we
     /// need to know the active paired session at emit time without
@@ -67,6 +72,14 @@ public actor LiveCaptureService: CaptureService {
 
     private var current: CaptureServiceState = .idle
     private var continuations: [UUID: AsyncStream<CaptureServiceState>.Continuation] = [:]
+    /// Fan-out continuations for live transcript segments. The
+    /// recording fullScreenCover subscribes via
+    /// ``transcriptSegmentUpdates()`` so the user sees phrases
+    /// scrolling on screen as the recognizer emits them. Each
+    /// segment is forwarded both to these UI subscribers AND to the
+    /// `TranscriptStreamer` ZeroBus pipeline — neither path blocks
+    /// the other. Cleared on capture stop / cancel.
+    private var transcriptContinuations: [UUID: AsyncStream<TranscriptSegment>.Continuation] = [:]
     private var watcherTask: Task<Void, Never>?
     private var didStart = false
     /// PR 9b: background Task draining the live recognizer's
@@ -91,6 +104,7 @@ public actor LiveCaptureService: CaptureService {
         transcriptStreamer: (any TranscriptStreamer)? = nil,
         streamingRecognizer: (any StreamingSpeechRecognizer)? = nil,
         audioBufferSource: (any AudioBufferSource)? = nil,
+        photoCapture: (any PhotoCapture)? = nil,
         pairedSessionIDProvider: (@Sendable () async -> String?)? = nil,
         logger: AppLogger = AppLogger(category: .capture)
     ) {
@@ -103,6 +117,7 @@ public actor LiveCaptureService: CaptureService {
         self.transcriptStreamer = transcriptStreamer
         self.streamingRecognizer = streamingRecognizer
         self.audioBufferSource = audioBufferSource
+        self.photoCapture = photoCapture
         self.pairedSessionIDProvider = pairedSessionIDProvider
         self.logger = logger
         self.nowProvider = Date.init
@@ -123,6 +138,7 @@ public actor LiveCaptureService: CaptureService {
         transcriptStreamer: (any TranscriptStreamer)? = nil,
         streamingRecognizer: (any StreamingSpeechRecognizer)? = nil,
         audioBufferSource: (any AudioBufferSource)? = nil,
+        photoCapture: (any PhotoCapture)? = nil,
         pairedSessionIDProvider: (@Sendable () async -> String?)? = nil,
         logger: AppLogger = AppLogger(category: .capture),
         nowProvider: @Sendable @escaping () -> Date,
@@ -138,6 +154,7 @@ public actor LiveCaptureService: CaptureService {
         self.transcriptStreamer = transcriptStreamer
         self.streamingRecognizer = streamingRecognizer
         self.audioBufferSource = audioBufferSource
+        self.photoCapture = photoCapture
         self.pairedSessionIDProvider = pairedSessionIDProvider
         self.logger = logger
         self.nowProvider = nowProvider
@@ -159,6 +176,17 @@ public actor LiveCaptureService: CaptureService {
         continuation.onTermination = { [weak self] _ in
             guard let self else { return }
             Task { await self.unsubscribe(id: id) }
+        }
+        return stream
+    }
+
+    public func transcriptSegmentUpdates() async -> AsyncStream<TranscriptSegment> {
+        let (stream, continuation) = AsyncStream<TranscriptSegment>.makeStream()
+        let id = UUID()
+        transcriptContinuations[id] = continuation
+        continuation.onTermination = { [weak self] _ in
+            guard let self else { return }
+            Task { await self.unsubscribeTranscript(id: id) }
         }
         return stream
     }
@@ -473,9 +501,113 @@ public actor LiveCaptureService: CaptureService {
             )
         }
 
-        transition(to: .finalizing(context, pendingUploadIDs: [pending.id]))
-        await persistFinalizingIfNeeded(context: context, pending: [pending.id])
-        spawnWatcher(stream: uploadStream, for: context, pendingUploadIDs: [pending.id])
+        // Snapshot every non-terminal upload still attached to this
+        // capture session — the audio we just enqueued + any photos
+        // taken during the recording that haven't drained yet. Server
+        // rejects uploads to non-active captures, so the watcher
+        // must wait for all of them before PATCHing to .completed.
+        // Auto-retired (succeeded) uploads are already gone from
+        // currentUploads(); they don't need tracking — the server
+        // already accepted them while the capture was .active.
+        let snapshot = await uploadCoordinator.currentUploads()
+        let pendingIDs = Set(
+            snapshot
+                .filter { $0.captureSessionID == context.captureSessionID }
+                .filter { !$0.state.isTerminal }
+                .map { $0.id }
+        )
+
+        // Edge case: the audio + every in-recording photo upload
+        // may have already drained while we were awaiting the
+        // recognizer's drain Task (a fast network + small audio +
+        // small photos beats the 1.5s recognizer drain wait). In
+        // that window the worker has auto-retired every entry from
+        // the queue per the PR #60 fix, so the snapshot is empty.
+        //
+        // If we spawn a watcher with an empty pending set, the
+        // watcher's `pending.contains(...)` filter rejects every
+        // buffered .succeeded event and `pending.isEmpty` never
+        // triggers the `patchServerCompleted` branch — the UI sits
+        // on `.finalizing` "Uploading 0 files…" forever. Skip the
+        // watcher in this case and patch directly.
+        if pendingIDs.isEmpty {
+            await patchServerCompleted(context: context)
+            transition(to: .completed(context))
+            await contextStore?.clear()
+            await logger.info(
+                "capture.stop.all_already_drained",
+                metadata: ["capture_session_id": .uuidPrefix(context.captureSessionID)]
+            )
+            return
+        }
+
+        transition(to: .finalizing(context, pendingUploadIDs: pendingIDs))
+        await persistFinalizingIfNeeded(context: context, pending: pendingIDs)
+        spawnWatcher(stream: uploadStream, for: context, pendingUploadIDs: pendingIDs)
+    }
+
+    public func capturePhoto() async throws {
+        guard case .recording(let context) = current else {
+            throw CaptureServiceError.notRecording
+        }
+        guard let photoCapture else {
+            throw CaptureServiceError.photoCaptureUnavailable
+        }
+
+        let photo: CapturedPhoto
+        do {
+            photo = try await photoCapture.capturePhoto(captureSessionID: context.captureSessionID)
+        } catch let error as PhotoCaptureError {
+            await logger.warning(
+                "photo.capture.failed",
+                metadata: [
+                    "capture_session_id": .uuidPrefix(context.captureSessionID),
+                    "reason": .string(String(describing: error))
+                ]
+            )
+            throw CaptureServiceError.photoCaptureFailed(reason: String(describing: error))
+        } catch {
+            throw CaptureServiceError.photoCaptureFailed(reason: error.localizedDescription)
+        }
+
+        let sha: String
+        do {
+            sha = try fileHasher(photo.fileURL)
+        } catch {
+            throw CaptureServiceError.hashingFailed(reason: error.localizedDescription)
+        }
+
+        let pending = PendingUpload(
+            id: uploadIDProvider(),
+            workspaceID: context.workspaceID,
+            captureSessionID: context.captureSessionID,
+            kind: .photo,
+            localFileURL: photo.fileURL,
+            mimeType: photo.mimeType,
+            sizeBytes: photo.sizeBytes,
+            sha256Hex: sha,
+            clientTimestamp: photo.capturedAt,
+            originalFilename: photo.fileURL.lastPathComponent,
+            deviceID: await resolvedDeviceID(),
+            createdAt: nowProvider()
+        )
+
+        do {
+            try await uploadCoordinator.enqueue(pending)
+        } catch let error as UploadCoordinatorError {
+            throw CaptureServiceError.enqueueFailed(reason: String(describing: error))
+        } catch {
+            throw CaptureServiceError.enqueueFailed(reason: error.localizedDescription)
+        }
+
+        await logger.info(
+            "photo.capture.enqueued",
+            metadata: [
+                "capture_session_id": .uuidPrefix(context.captureSessionID),
+                "upload_id": .uuidPrefix(pending.id),
+                "bytes": .int(photo.sizeBytes)
+            ]
+        )
     }
 
     public func cancelCapture() async throws {
@@ -566,23 +698,43 @@ public actor LiveCaptureService: CaptureService {
         let workspaceID = context.workspaceID
         let projectID = context.projectID
 
-        // Detached Task — drains segments through the
-        // TranscriptStreamer (batches + retry) into ZeroBus. Stays
-        // alive until the segment stream finishes naturally
-        // (recognizer.endAudio() + final callback) or
-        // cancelCapture cancels it.
-        liveStreamingTask = Task { [logger] in
-            await transcriptStreamer.stream(
+        // Fan-out: the recognizer emits each phrase exactly once, but
+        // we want two consumers — the durable side (TranscriptStreamer
+        // → ZeroBus) and the UI side (recording cover's scrolling
+        // list). Split the recognizer's stream into a mirror that
+        // TranscriptStreamer drains, and broadcast each segment to
+        // any UI subscribers as it passes through. Both arms run
+        // until the recognizer finishes, then we finish both the
+        // mirror continuation and the UI subscriber continuations
+        // so awaiters unblock.
+        let (mirrorStream, mirrorContinuation) = AsyncThrowingStream<TranscriptSegment, Error>.makeStream()
+
+        liveStreamingTask = Task { [logger, weak self] in
+            async let transportDrain: Void = transcriptStreamer.stream(
                 workspaceID: workspaceID,
                 pairedSessionID: pairedSessionID,
                 projectID: projectID,
                 deviceID: deviceID,
                 recordingStartedAt: recordingStartedAt,
-                segments: segments,
+                segments: mirrorStream,
                 source: "on_device_live",
                 model: "sf_speech_streaming_phrased",
                 language: "en-US"
             )
+
+            do {
+                for try await segment in segments {
+                    if Task.isCancelled { break }
+                    await self?.broadcastTranscriptSegment(segment)
+                    mirrorContinuation.yield(segment)
+                }
+                mirrorContinuation.finish()
+            } catch {
+                mirrorContinuation.finish(throwing: error)
+            }
+
+            await transportDrain
+            await self?.finishTranscriptSubscribers()
             await logger.debug("speech.streaming.drain_complete")
         }
     }
@@ -684,6 +836,31 @@ public actor LiveCaptureService: CaptureService {
 
     private func unsubscribe(id: UUID) {
         continuations[id] = nil
+    }
+
+    private func unsubscribeTranscript(id: UUID) {
+        transcriptContinuations[id] = nil
+    }
+
+    /// Yield a segment to every UI subscriber. Called from the
+    /// live-streaming fan-out task between the recognizer and the
+    /// `TranscriptStreamer` so UI + ZeroBus paths see the same
+    /// segment with no extra latency on the transport side.
+    private func broadcastTranscriptSegment(_ segment: TranscriptSegment) {
+        for continuation in transcriptContinuations.values {
+            continuation.yield(segment)
+        }
+    }
+
+    /// Close every live transcript subscriber stream — invoked when
+    /// the recognizer's segment stream finishes (capture stop / cancel
+    /// completes its drain). Subscribers see the stream end and can
+    /// pop the recording cover or freeze the rendered list.
+    private func finishTranscriptSubscribers() {
+        for continuation in transcriptContinuations.values {
+            continuation.finish()
+        }
+        transcriptContinuations.removeAll()
     }
 
     private func rollbackServerSession(

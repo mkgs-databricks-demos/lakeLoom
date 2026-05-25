@@ -37,6 +37,7 @@ struct HomeContainerView: View {
 
     @State private var showingPendingUploads = false
     @State private var showingProjectSwitcher = false
+    @State private var showingDocuments = false
 
     /// Live count of `UploadCoordinator.currentUploads()`. Drives a
     /// badge on the toolbar so the user can tell at a glance when
@@ -65,7 +66,30 @@ struct HomeContainerView: View {
                     state: captureState,
                     onStop: stopCapture,
                     onCancel: cancelCapture,
-                    projectName: projectName.isEmpty ? "Capture" : projectName
+                    projectName: projectName.isEmpty ? "Capture" : projectName,
+                    transcriptStream: { [captureService = coordinator.captureService] in
+                        guard let service = captureService else { return nil }
+                        return await service.transcriptSegmentUpdates()
+                    },
+                    onCapturePhoto: { [captureService = coordinator.captureService] in
+                        guard let service = captureService else { return }
+                        do {
+                            try await service.capturePhoto()
+                        } catch let error as CaptureServiceError {
+                            // Camera failures don't tear down the
+                            // capture — surface the same banner
+                            // machinery used for terminal results
+                            // so the user sees what went wrong and
+                            // can retry.
+                            await MainActor.run {
+                                self.lastResult = Self.result(for: error)
+                            }
+                        } catch {
+                            await MainActor.run {
+                                self.lastResult = .failed(reason: error.localizedDescription)
+                            }
+                        }
+                    }
                 )
                 .ignoresSafeArea()
                 // Drop the system back-swipe so the user can't
@@ -89,6 +113,18 @@ struct HomeContainerView: View {
             }
         }
         .task { await observePendingUploadCount() }
+        .sheet(isPresented: $showingDocuments) {
+            if let api = coordinator.captureAPI,
+               let context = coordinator.activeContext {
+                ProjectDocumentsView(
+                    captureAPI: api,
+                    workspaceID: context.workspace.id,
+                    projectID: context.project.id,
+                    projectName: context.project.name,
+                    onDismiss: { showingDocuments = false }
+                )
+            }
+        }
         .sheet(isPresented: $showingProjectSwitcher) {
             if let context = coordinator.activeContext {
                 ProjectSwitcherView(
@@ -193,6 +229,13 @@ struct HomeContainerView: View {
                         showingProjectSwitcher = true
                     } label: {
                         Label("Switch project", systemImage: "folder.badge.gear")
+                    }
+                }
+                if coordinator.captureAPI != nil, coordinator.activeContext != nil {
+                    Button {
+                        showingDocuments = true
+                    } label: {
+                        Label("Documents", systemImage: "doc.text")
                     }
                 }
                 if coordinator.uploadCoordinator != nil {
@@ -425,6 +468,10 @@ struct HomeContainerView: View {
             return .failed(reason: "Couldn't hash the recording: \(reason)")
         case .enqueueFailed(let reason):
             return .failed(reason: "Couldn't queue the upload: \(reason)")
+        case .photoCaptureFailed(let reason):
+            return .failed(reason: "Couldn't capture the photo: \(reason)")
+        case .photoCaptureUnavailable:
+            return .failed(reason: "Photo capture isn't available on this device.")
         }
     }
 
