@@ -23,6 +23,12 @@ struct CaptureDetailView: View {
 
     let captureAPI: any CaptureAPIClient
     let uploadCoordinator: (any UploadCoordinator)?
+    /// Optional content downloader. When wired, server-ingested
+    /// upload rows (audio, photo, screenshot, document) become
+    /// tappable — tapping pushes ``DocumentViewerView`` which
+    /// fetches via `/api/media/:upload_id` and previews through
+    /// QLPreviewController. Without it the rows render flat.
+    let mediaContent: (any MediaContentService)?
     let workspaceID: String
     let captureSessionID: String
 
@@ -330,10 +336,34 @@ struct CaptureDetailView: View {
                         )
                     }
                     ForEach(server) { upload in
-                        UploadRow(upload: upload)
+                        serverUploadRowLink(for: upload)
                     }
                 }
             }
+        }
+    }
+
+    /// Wrap a server-ingested upload row in a `NavigationLink` only
+    /// when ``mediaContent`` is wired. Tap pushes
+    /// ``DocumentViewerView`` which downloads via
+    /// `/api/media/:upload_id` and previews with QLPreviewController —
+    /// audio gets the scrubber UI, photos render as images, etc.
+    /// Without the service the row stays flat (taps no-op).
+    @ViewBuilder
+    private func serverUploadRowLink(for upload: CaptureUpload) -> some View {
+        if let mediaContent {
+            NavigationLink {
+                DocumentViewerView(
+                    document: ProjectDocument(from: upload),
+                    workspaceID: workspaceID,
+                    mediaContent: mediaContent
+                )
+            } label: {
+                UploadRow(upload: upload)
+            }
+            .buttonStyle(.plain)
+        } else {
+            UploadRow(upload: upload)
         }
     }
 
