@@ -159,6 +159,79 @@ public actor ProjectService: ProjectServicing {
         return project
     }
 
+    public func update(
+        projectID: String,
+        workspaceID: String,
+        name: String?,
+        description: String?
+    ) async throws -> ProjectMetadata {
+        // Validate up front so we don't burn a network round trip on
+        // a payload the server will reject. Each branch normalizes
+        // the input (trim whitespace, length cap) — same rules the
+        // create path uses.
+        let normalizedName: String?
+        if let name {
+            normalizedName = try ProjectValidator.validateName(name)
+        } else {
+            normalizedName = nil
+        }
+        let normalizedDescription: String?
+        if let description {
+            normalizedDescription = try ProjectValidator.validateDescription(description)
+        } else {
+            normalizedDescription = nil
+        }
+        guard normalizedName != nil || normalizedDescription != nil else {
+            throw ProjectError.validationFailed(reason: "At least one of name or description must be provided.")
+        }
+
+        let token = try await auth.currentToken()
+        let endpoint = try await endpointResolver.resolve(
+            workspaceID: workspaceID,
+            workspaceURL: workspaceURL(for: workspaceID, fallbackTo: token)
+        )
+
+        let project: ProjectMetadata
+        do {
+            project = try await api.update(
+                projectID: projectID,
+                workspaceID: workspaceID,
+                name: normalizedName,
+                description: normalizedDescription,
+                token: token,
+                endpoint: endpoint
+            )
+        } catch ProjectAPIError.unauthorized {
+            project = try await retryAfterForceRefresh { newToken in
+                try await self.api.update(
+                    projectID: projectID,
+                    workspaceID: workspaceID,
+                    name: normalizedName,
+                    description: normalizedDescription,
+                    token: newToken,
+                    endpoint: endpoint
+                )
+            }
+        } catch {
+            throw ProjectErrorMapper.map(error)
+        }
+
+        await cache.upsert(project, workspaceID: workspaceID)
+        broadcast(.projectUpdated(project))
+        await logger.info(
+            "project updated",
+            metadata: [
+                "project_id": .uuidPrefix(project.id),
+                "workspace_id": .uuidPrefix(workspaceID),
+                "fields": .string([
+                    normalizedName != nil ? "name" : nil,
+                    normalizedDescription != nil ? "description" : nil
+                ].compactMap { $0 }.joined(separator: ","))
+            ]
+        )
+        return project
+    }
+
     public func archive(projectID: String, workspaceID: String) async throws {
         try await runArchiveAction(.archive, projectID: projectID, workspaceID: workspaceID)
     }

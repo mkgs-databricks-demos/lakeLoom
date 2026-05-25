@@ -28,6 +28,10 @@ struct CaptureDetailView: View {
 
     @State private var loadState: LoadState = .loading
     @State private var pendingUploads: [PendingUpload] = []
+    @State private var editingLabel = false
+    @State private var labelDraft: String = ""
+    @State private var labelSaveError: String?
+    @State private var isSavingLabel = false
 
     enum LoadState {
         case loading
@@ -52,6 +56,110 @@ struct CaptureDetailView: View {
         .task { await initialLoad() }
         .task { await observePendingUploads() }
         .refreshable { await refresh() }
+        .sheet(isPresented: $editingLabel) { labelEditSheet }
+    }
+
+    // MARK: - Label edit
+
+    /// Sheet for renaming the capture. Server treats labels as
+    /// metadata (no lifecycle constraint), so this works whether the
+    /// session is active / completed / cancelled. Save calls
+    /// `PATCH /api/v1/captures/:id/label` and uses the returned
+    /// `CaptureSession` to refresh the local state without an extra
+    /// round trip.
+    @ViewBuilder
+    private var labelEditSheet: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Label", text: $labelDraft)
+                        .textInputAutocapitalization(.words)
+                        .autocorrectionDisabled()
+                        .submitLabel(.done)
+                        .onSubmit { Task { await saveLabel() } }
+                } header: {
+                    Text("Capture name")
+                        .font(BrandTypography.caption)
+                        .foregroundStyle(BrandColors.textSecondary)
+                }
+                if let labelSaveError {
+                    Section {
+                        Text(labelSaveError)
+                            .font(BrandTypography.caption)
+                            .foregroundStyle(BrandColors.statusError)
+                    }
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(BrandColors.surfaceSecondary)
+            .navigationTitle("Rename capture")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") { editingLabel = false }
+                        .tint(BrandColors.accentPrimary)
+                        .disabled(isSavingLabel)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        Task { await saveLabel() }
+                    } label: {
+                        if isSavingLabel {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text("Save").font(BrandTypography.bodyEmphasis)
+                        }
+                    }
+                    .tint(BrandColors.accentPrimary)
+                    .disabled(isSavingLabel || trimmedLabel.isEmpty || trimmedLabel == currentLabel)
+                }
+            }
+        }
+    }
+
+    private var trimmedLabel: String {
+        labelDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var currentLabel: String {
+        if case .loaded(let session) = loadState { return session.label ?? "" }
+        return ""
+    }
+
+    private func saveLabel() async {
+        guard !trimmedLabel.isEmpty else { return }
+        isSavingLabel = true
+        labelSaveError = nil
+        defer { isSavingLabel = false }
+        do {
+            let updated = try await captureAPI.updateCaptureLabel(
+                workspaceID: workspaceID,
+                captureSessionID: captureSessionID,
+                label: trimmedLabel
+            )
+            // Merge the returned label into the loaded state so the
+            // header reflects the new name without re-fetching.
+            if case .loaded(let existing) = loadState {
+                let merged = CaptureSession(
+                    id: existing.id,
+                    projectID: existing.projectID,
+                    state: existing.state,
+                    label: updated.label,
+                    startedAt: existing.startedAt,
+                    endedAt: existing.endedAt,
+                    createdByUserID: existing.createdByUserID,
+                    deviceLabel: existing.deviceLabel,
+                    uploads: existing.uploads,
+                    uploadKinds: existing.uploadKinds
+                )
+                loadState = .loaded(merged)
+            }
+            editingLabel = false
+        } catch let error as CaptureAPIError {
+            labelSaveError = reason(for: error)
+        } catch {
+            labelSaveError = error.localizedDescription
+        }
     }
 
     // MARK: - States
@@ -115,9 +223,22 @@ struct CaptureDetailView: View {
                     .font(BrandTypography.caption.monospaced())
                     .foregroundStyle(BrandColors.textMuted)
             }
-            Text(session.label ?? "Untitled capture")
-                .font(BrandTypography.titleSmall)
-                .foregroundStyle(BrandColors.textPrimary)
+            HStack(alignment: .firstTextBaseline, spacing: Spacing.sm) {
+                Text(session.label ?? "Untitled capture")
+                    .font(BrandTypography.titleSmall)
+                    .foregroundStyle(BrandColors.textPrimary)
+                Button {
+                    labelDraft = session.label ?? ""
+                    labelSaveError = nil
+                    editingLabel = true
+                } label: {
+                    Image(systemName: "pencil")
+                        .font(BrandTypography.caption)
+                        .foregroundStyle(BrandColors.accentPrimary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Edit label")
+            }
 
             VStack(alignment: .leading, spacing: 2) {
                 metadataRow(

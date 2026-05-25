@@ -31,6 +31,12 @@ struct ProjectSwitcherView: View {
     let onCreate: (_ name: String, _ description: String?) async throws -> Void
     let onDismiss: () -> Void
 
+    /// Project the user tapped the info button on; bound to the
+    /// detail-sheet presentation. Held on the switcher so the
+    /// detail-view's local state survives pull-to-refresh on the
+    /// underlying list.
+    @State private var detailProject: ProjectMetadata?
+
     @State private var loadState: LoadState = .loading
 
     enum LoadState {
@@ -69,6 +75,20 @@ struct ProjectSwitcherView: View {
             .refreshable { await reload(forceRefresh: true) }
         }
         .task { await initialLoad() }
+        .sheet(item: $detailProject) { project in
+            ProjectDetailView(
+                projects: projects,
+                workspaceID: workspaceID,
+                project: project,
+                onDismiss: {
+                    detailProject = nil
+                    // Refresh the underlying list so any name /
+                    // description edit the user just made
+                    // propagates back to the switcher row.
+                    Task { await reload(forceRefresh: true) }
+                }
+            )
+        }
     }
 
     // MARK: - Create footer
@@ -189,6 +209,15 @@ struct ProjectSwitcherView: View {
                 }
             }
             Spacer()
+            Button {
+                detailProject = project
+            } label: {
+                Image(systemName: "info.circle")
+                    .font(BrandTypography.body)
+                    .foregroundStyle(BrandColors.textSecondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Project details")
             if project.id == activeProjectID {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(BrandColors.accentPrimary)

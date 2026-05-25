@@ -27,6 +27,19 @@ public protocol ProjectServicing: Sendable {
     /// existing project rather than failing.
     func create(name: String, description: String?, workspaceID: String) async throws -> ProjectMetadata
 
+    /// Update a project's name and/or description. At least one of
+    /// the two must be non-nil; passing both nil throws
+    /// ``ProjectError/validationFailed`` without hitting the network.
+    /// Returns the server's canonical post-update ``ProjectMetadata``;
+    /// also invalidates the cache for `workspaceID` so the next
+    /// `list` reflects the change.
+    func update(
+        projectID: String,
+        workspaceID: String,
+        name: String?,
+        description: String?
+    ) async throws -> ProjectMetadata
+
     /// Archive a project (soft delete). The remote project is preserved;
     /// list calls hide it by default. Restore via ``unarchive``.
     func archive(projectID: String, workspaceID: String) async throws

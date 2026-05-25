@@ -42,6 +42,17 @@ public protocol CaptureAPIClient: Sendable {
         endedAt: Date?
     ) async throws -> CaptureSession
 
+    /// `PATCH /api/v1/captures/:capture_session_id/label` — rename
+    /// a capture session. Labels are metadata, not lifecycle, so the
+    /// server accepts this in any state (active / completed /
+    /// cancelled). Returns the updated capture so callers can refresh
+    /// the displayed name without an extra round trip.
+    func updateCaptureLabel(
+        workspaceID: String,
+        captureSessionID: String,
+        label: String
+    ) async throws -> CaptureSession
+
     /// `GET /api/captures/:capture_session_id` — full metadata plus
     /// optionally the uploads ingested so far.
     func getCaptureSession(
@@ -243,6 +254,29 @@ public actor LiveCaptureAPIClient: CaptureAPIClient {
             path: "/api/captures/\(captureSessionID)",
             body: bodyData,
             log: "capture.update"
+        )
+    }
+
+    public func updateCaptureLabel(
+        workspaceID: String,
+        captureSessionID: String,
+        label: String
+    ) async throws -> CaptureSession {
+        struct Body: Encodable {
+            let label: String
+        }
+        let bodyData: Data
+        do {
+            bodyData = try encoder.encode(Body(label: label))
+        } catch {
+            throw CaptureAPIError.unexpectedResponse(reason: "encode label body: \(error)")
+        }
+        return try await sendDecoding(
+            workspaceID: workspaceID,
+            method: .patch,
+            path: "/api/v1/captures/\(captureSessionID)/label",
+            body: bodyData,
+            log: "capture.label.update"
         )
     }
 
