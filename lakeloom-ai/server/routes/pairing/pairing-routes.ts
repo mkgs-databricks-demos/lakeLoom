@@ -193,7 +193,9 @@ export async function setupPairingRoutes(appkit: AppKitContext): Promise<void> {
     );
 
     // ── GET /api/pairing/devices ───────────────────────────────────────────
-    // Browser-authenticated. Lists all non-revoked paired devices for current user.
+    // Browser-authenticated. Lists paired devices for current user.
+    // Query params:
+    //   ?include_revoked=true — also include revoked devices (with revoked_at timestamp)
     app.get('/api/pairing/devices', async (req, res, next) => {
       try {
         const userId = req.headers['x-forwarded-user'] as string | undefined;
@@ -201,10 +203,13 @@ export async function setupPairingRoutes(appkit: AppKitContext): Promise<void> {
           throw validationError('User identity not available.');
         }
 
+        const includeRevoked = req.query.include_revoked === 'true';
+        const revokedFilter = includeRevoked ? '' : 'AND revoked_at IS NULL';
+
         const { rows } = await lakebase.query(
-          `SELECT id, device_label, first_seen_at, last_seen_at, expires_at, paired_at
+          `SELECT id, device_label, first_seen_at, last_seen_at, expires_at, paired_at, revoked_at
            FROM app.paired_sessions
-           WHERE user_id = $1 AND revoked_at IS NULL AND device_pubkey IS NOT NULL
+           WHERE user_id = $1 ${revokedFilter} AND device_pubkey IS NOT NULL
            ORDER BY paired_at DESC`,
           [userId],
         );
@@ -216,6 +221,7 @@ export async function setupPairingRoutes(appkit: AppKitContext): Promise<void> {
           last_seen_at: r.last_seen_at,
           expires_at: r.expires_at,
           paired_at: r.paired_at,
+          revoked_at: r.revoked_at ?? null,
         }));
 
         res.json({ devices });
