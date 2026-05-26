@@ -388,6 +388,7 @@
 		FB390E143DB0511F80869D10 /* Spacing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Spacing.swift; sourceTree = "<group>"; };
 		FBE7480D4A2F1A24A1DD51D1 /* SessionRecord+CoreDataProperties.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionRecord+CoreDataProperties.swift"; sourceTree = "<group>"; };
 		FD573DAB2799C24220D8300E /* LakeloomApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LakeloomApp.swift; sourceTree = "<group>"; };
+		D000A0F1D0F1D0F1D0F1D0F1 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		FEB0DA2CBAF15DD19C0D2100 /* OutboxRecord+CoreDataProperties.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OutboxRecord+CoreDataProperties.swift"; sourceTree = "<group>"; };
 		A0010A01A001A001A001A001 /* AudioRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecorder.swift; sourceTree = "<group>"; };
 		A0010A02A002A002A002A002 /* AudioRecordingEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecordingEngine.swift; sourceTree = "<group>"; };
@@ -669,6 +670,7 @@
 				FFE6FB7D59D2D3D722AEEEE2 /* Resources */,
 				0DBF26829977F9318E46E6A5 /* Telemetry */,
 				D8D2CD6ABFE5DA02EEDD781D /* Views */,
+				D000A0F1D0F1D0F1D0F1D0F1 /* Info.plist */,
 				FD573DAB2799C24220D8300E /* LakeloomApp.swift */,
 			);
 			path = App;
@@ -1747,8 +1749,8 @@
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "lakeLoom records audio during a capture session so the Databricks side can transcribe the conversation into a project brief.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "lakeLoom runs on-device speech recognition on the audio you've just recorded to stream a live transcript to the project's session log.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UIBackgroundModes = audio;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
@@ -1775,8 +1777,8 @@
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "lakeLoom records audio during a capture session so the Databricks side can transcribe the conversation into a project brief.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "lakeLoom runs on-device speech recognition on the audio you've just recorded to stream a live transcript to the project's session log.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UIBackgroundModes = audio;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
@@ -1820,8 +1822,8 @@
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "lakeLoom records audio during a capture session so the Databricks side can transcribe the conversation into a project brief.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "lakeLoom runs on-device speech recognition on the audio you've just recorded to stream a live transcript to the project's session log.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UIBackgroundModes = audio;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
