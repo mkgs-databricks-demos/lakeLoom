@@ -1,6 +1,5 @@
 import Foundation
 import MediaPlayer
-import UIKit
 
 /// Drives the lock-screen + Control Center "Now Playing" surface
 /// while a capture is recording.
@@ -86,19 +85,22 @@ public final class NowPlayingController: NowPlayingControlling {
             title = "Recording"
         }
 
-        var info: [String: Any] = [
+        // Minimal payload: title + elapsed time + playback rate.
+        // Earlier versions of this code set `MPNowPlayingInfoPropertyIsLiveStream`,
+        // `MPNowPlayingInfoPropertyMediaType`, and an `MPMediaItemArtwork`
+        // built from `UIImage(systemName: "waveform")`. On a fresh
+        // install we saw an EXC_BREAKPOINT trap inside MediaPlayer on
+        // the Record-tap path — almost certainly an assertion when one
+        // of those richer fields was inconsistent (live-stream + finite
+        // elapsed time, or the SF-symbol-derived bounds). Strip back to
+        // the keys Apple's own sample code uses; we can layer richness
+        // back on once the basic surface is verified on device.
+        let info: [String: Any] = [
             MPMediaItemPropertyTitle: title,
             MPMediaItemPropertyArtist: "lakeLoom",
-            MPNowPlayingInfoPropertyIsLiveStream: true,
-            MPNowPlayingInfoPropertyMediaType: NSNumber(value: MPNowPlayingInfoMediaType.audio.rawValue),
-            MPNowPlayingInfoPropertyElapsedPlaybackTime: 0.0,
-            MPNowPlayingInfoPropertyPlaybackRate: 1.0
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: NSNumber(value: 0.0),
+            MPNowPlayingInfoPropertyPlaybackRate: NSNumber(value: 1.0)
         ]
-        // Attach the app icon as artwork so the lock-screen widget
-        // shows the lakeLoom mark rather than a generic placeholder.
-        if let image = UIImage(named: "AppIcon") ?? UIImage(systemName: "waveform") {
-            info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-        }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
 
         configureRemoteCommands()
@@ -106,13 +108,13 @@ public final class NowPlayingController: NowPlayingControlling {
 
     public func update(elapsedSeconds: TimeInterval) {
         guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
-        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsedSeconds
+        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = NSNumber(value: elapsedSeconds)
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 
     public func setInterrupted(_ interrupted: Bool) {
         guard var info = MPNowPlayingInfoCenter.default().nowPlayingInfo else { return }
-        info[MPNowPlayingInfoPropertyPlaybackRate] = interrupted ? 0.0 : 1.0
+        info[MPNowPlayingInfoPropertyPlaybackRate] = NSNumber(value: interrupted ? 0.0 : 1.0)
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 
