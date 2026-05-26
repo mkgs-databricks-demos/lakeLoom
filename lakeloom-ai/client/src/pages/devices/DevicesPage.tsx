@@ -246,9 +246,9 @@ export function DevicesPage() {
         description={`This will permanently revoke "${revokeTarget?.label ?? ''}". The device will need to be re-paired to connect again.`}
         confirmLabel="Revoke"
         onConfirm={handleRevoke}
-        onCancel={() => setRevokeTarget(null)}
+        onClose={() => setRevokeTarget(null)}
         loading={revoking}
-        destructive
+        variant="danger"
       />
     </div>
   );
