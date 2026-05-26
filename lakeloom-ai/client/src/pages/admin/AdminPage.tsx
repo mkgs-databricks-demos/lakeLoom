@@ -134,7 +134,7 @@ function CheckCard({ name, check }: { name: string; check: HealthCheck }) {
                 <p>Last run: {check.last_run_at ? new Date(check.last_run_at as string).toLocaleString() : 'Never'}</p>
                 <p>Orphans found: {check.orphan_count as number}</p>
                 <p>Reclaimed: {formatBytes(check.bytes_reclaimed as number)}</p>
-                {check.is_stale && <p className="text-[var(--accent-warning,#FFAB00)]">Stale (>7 days)</p>}
+                {check.is_stale && <p className="text-[var(--accent-warning,#FFAB00)]">Stale (&gt;7 days)</p>}
               </>
             )}
           </div>
