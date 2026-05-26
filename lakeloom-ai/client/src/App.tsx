@@ -9,13 +9,15 @@ import {
 import { Suspense, lazy } from 'react';
 import { useCurrentUser } from './hooks/useCurrentUser';
 
-// ── Route-level code splitting ────────────────────────────────────────────────
+// ── Route-level code splitting ────────────────────────────────────────────
 // Each page is loaded on demand. Reduces initial bundle from ~1.7 MB to the
 // shell + whichever page the user navigates to first.
 const ProjectsPage = lazy(() => import('./pages/projects/ProjectsPage').then(m => ({ default: m.ProjectsPage })));
 const ProjectDetailPage = lazy(() => import('./pages/projects/ProjectDetailPage').then(m => ({ default: m.ProjectDetailPage })));
 const CaptureDetailPage = lazy(() => import('./pages/projects/CaptureDetailPage').then(m => ({ default: m.CaptureDetailPage })));
 const PairingPage = lazy(() => import('./pages/pairing/PairingPage').then(m => ({ default: m.PairingPage })));
+const DevicesPage = lazy(() => import('./pages/devices/DevicesPage').then(m => ({ default: m.DevicesPage })));
+const AdminPage = lazy(() => import('./pages/admin/AdminPage').then(m => ({ default: m.AdminPage })));
 
 function PageLoader() {
   return (
@@ -54,8 +56,14 @@ function Layout() {
           <NavLink to="/" end className={navLinkClass}>
             Projects
           </NavLink>
+          <NavLink to="/devices" className={navLinkClass}>
+            Devices
+          </NavLink>
           <NavLink to="/pairing" className={navLinkClass}>
-            Pair iPhone
+            Pair Device
+          </NavLink>
+          <NavLink to="/admin" className={navLinkClass}>
+            Admin
           </NavLink>
         </nav>
 
@@ -85,7 +93,7 @@ function Layout() {
   );
 }
 
-// ── Route-level error boundary ────────────────────────────────────────────────
+// ── Route-level error boundary ────────────────────────────────────────────
 // React Router v7 creates its own error boundary scope that supersedes the outer
 // class-based ErrorBoundary in main.tsx. This component catches navigation errors,
 // lazy-load failures, and unhandled throws from route loaders/actions/components.
@@ -147,6 +155,8 @@ const router = createBrowserRouter([
       { path: '/projects/:id', element: <ProjectDetailPage /> },
       { path: '/projects/:id/captures/:cid', element: <CaptureDetailPage /> },
       { path: '/pairing', element: <PairingPage /> },
+      { path: '/devices', element: <DevicesPage /> },
+      { path: '/admin', element: <AdminPage /> },
     ],
   },
 ]);
