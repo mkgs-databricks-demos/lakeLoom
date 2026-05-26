@@ -6,7 +6,7 @@
  */
 
 import type { Application } from 'express';
-import { getSecrets, getMissingKeys, isPairingReady, isZerobusReady } from '../../services/secrets-service';
+import { getSecrets, getMissingKeys, isZerobusReady } from '../../services/secrets-service';
 import { zeroBusService } from '../../services/zerobus-service';
 import { validationError } from '../../lib/errors';
 
