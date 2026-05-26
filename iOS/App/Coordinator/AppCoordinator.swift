@@ -251,6 +251,17 @@ public final class AppCoordinator {
                 "project_id": .uuidPrefix(activeContext?.project.id ?? "")
             ]
         )
+        // PR #16 Phase 1: warm the full project list into cache + disk
+        // so the project switcher works offline even if the user hasn't
+        // opened it before going offline. defaultProject only fetches
+        // one project; this fills in the rest. Fire-and-forget — a
+        // failure here is fine, since the active project is already
+        // pinned via activeContext.
+        if let workspaceID = activeContext?.workspace.id {
+            Task { [projects] in
+                _ = try? await projects.list(workspaceID: workspaceID, forceRefresh: false)
+            }
+        }
     }
 
     func beginOnboarding(at step: OnboardingState) async {

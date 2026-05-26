@@ -132,15 +132,16 @@ public actor ProjectService: ProjectServicing {
             workspaceID: workspaceID,
             workspaceURL: workspaceURL(for: workspaceID, fallbackTo: token)
         )
+        let project: ProjectMetadata
         do {
-            return try await api.fetch(
+            project = try await api.fetch(
                 projectID: projectID,
                 workspaceID: workspaceID,
                 token: token,
                 endpoint: endpoint
             )
         } catch ProjectAPIError.unauthorized {
-            return try await retryAfterForceRefresh { newToken in
+            project = try await retryAfterForceRefresh { newToken in
                 try await self.api.fetch(
                     projectID: projectID,
                     workspaceID: workspaceID,
@@ -151,6 +152,17 @@ public actor ProjectService: ProjectServicing {
         } catch {
             throw ProjectErrorMapper.map(error)
         }
+        // Populate the in-memory cache + disk store so a subsequent
+        // offline lookup of this project (or the list it belongs to)
+        // can serve from local state. Without this, the bootstrap
+        // path's defaultProject → fetch network call would hydrate
+        // activeContext but leave the cache empty — and the next
+        // offline tap on the project switcher would surface
+        // "you're offline" even though the user just used the app
+        // online a moment ago.
+        await cache.upsert(project, workspaceID: workspaceID)
+        await mirrorCacheToStore(workspaceID: workspaceID)
+        return project
     }
 
     public func create(name: String, description: String?, workspaceID: String) async throws -> ProjectMetadata {
