@@ -73,6 +73,10 @@ struct HomeContainerView: View {
                         guard let service = captureService else { return nil }
                         return await service.transcriptSegmentUpdates()
                     },
+                    interruptionStream: { [captureService = coordinator.captureService] in
+                        guard let service = captureService else { return nil }
+                        return await service.interruptionUpdates()
+                    },
                     onCapturePhoto: { [captureService = coordinator.captureService] in
                         guard let service = captureService else { return }
                         do {

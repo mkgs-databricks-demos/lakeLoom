@@ -94,6 +94,16 @@ public protocol CaptureService: Sendable {
     /// to drain before firing (the server rejects uploads against
     /// non-active captures).
     func capturePhoto() async throws
+
+    /// Subscribe to interruption state changes for the active
+    /// capture. Each yield is `true` when iOS interrupts the audio
+    /// session (incoming phone call, Siri trigger) and the engine
+    /// pauses, and `false` when the interruption window ends.
+    ///
+    /// The recording UI uses this to surface a "Recording paused"
+    /// indicator without polling. The stream completes when the
+    /// capture stops / cancels, or when the subscriber drops it.
+    func interruptionUpdates() async -> AsyncStream<Bool>
 }
 
 /// State machine surfaced to the UI. Each non-`.idle` case carries

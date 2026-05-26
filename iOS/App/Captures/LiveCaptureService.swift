@@ -48,6 +48,16 @@ public actor LiveCaptureService: CaptureService {
     /// instance that backs `LiveAudioRecorder`. Tests can leave it
     /// nil to use the file-based fallback.
     private let audioBufferSource: (any AudioBufferSource)?
+    /// PR 19: surfaces `AVAudioSession` interruptions from the
+    /// engine. Wired alongside `audioBufferSource` — same
+    /// `EngineAudioRecordingEngine` instance fills both roles in
+    /// production. Tests omit it; interruption broadcasting is a
+    /// no-op without it.
+    private let interruptionPublisher: (any AudioInterruptionPublishing)?
+    /// PR 19: drives the lock-screen Now Playing entry + Stop
+    /// command. Production wiring supplies a `NowPlayingController`;
+    /// tests omit it (no lock-screen UI to verify).
+    private let nowPlaying: (any NowPlayingControlling)?
     /// PR 10c: optional camera path for in-session photo capture.
     /// Production wiring sets `LivePhotoCapture`; tests that don't
     /// exercise the photo flow can omit. When nil,
@@ -91,6 +101,20 @@ public actor LiveCaptureService: CaptureService {
     /// current capture. When true, we skip the file-based fallback
     /// in stopCapture (the live path already emitted segments).
     private var liveStreamingActive = false
+    /// PR 19: fan-out for `interruptionUpdates()`. UI subscribes per
+    /// recording cover. Cleared on stop/cancel.
+    private var interruptionContinuations: [UUID: AsyncStream<Bool>.Continuation] = [:]
+    /// PR 19: background Task that drains the engine's interruption
+    /// stream and broadcasts to subscribers + the Now Playing
+    /// controller. Cancelled on stop/cancel.
+    private var interruptionListenerTask: Task<Void, Never>?
+    /// PR 19: background Task that ticks the Now Playing elapsed-time
+    /// display every second so the lock-screen widget stays current.
+    /// Cancelled on stop/cancel.
+    private var nowPlayingTickTask: Task<Void, Never>?
+    /// PR 19: latest interruption state mirrored locally so a new
+    /// subscriber gets the current value as its first yield.
+    private var isInterrupted = false
 
     // MARK: Init
 
@@ -104,6 +128,8 @@ public actor LiveCaptureService: CaptureService {
         transcriptStreamer: (any TranscriptStreamer)? = nil,
         streamingRecognizer: (any StreamingSpeechRecognizer)? = nil,
         audioBufferSource: (any AudioBufferSource)? = nil,
+        interruptionPublisher: (any AudioInterruptionPublishing)? = nil,
+        nowPlaying: (any NowPlayingControlling)? = nil,
         photoCapture: (any PhotoCapture)? = nil,
         pairedSessionIDProvider: (@Sendable () async -> String?)? = nil,
         logger: AppLogger = AppLogger(category: .capture)
@@ -117,6 +143,8 @@ public actor LiveCaptureService: CaptureService {
         self.transcriptStreamer = transcriptStreamer
         self.streamingRecognizer = streamingRecognizer
         self.audioBufferSource = audioBufferSource
+        self.interruptionPublisher = interruptionPublisher
+        self.nowPlaying = nowPlaying
         self.photoCapture = photoCapture
         self.pairedSessionIDProvider = pairedSessionIDProvider
         self.logger = logger
@@ -138,6 +166,8 @@ public actor LiveCaptureService: CaptureService {
         transcriptStreamer: (any TranscriptStreamer)? = nil,
         streamingRecognizer: (any StreamingSpeechRecognizer)? = nil,
         audioBufferSource: (any AudioBufferSource)? = nil,
+        interruptionPublisher: (any AudioInterruptionPublishing)? = nil,
+        nowPlaying: (any NowPlayingControlling)? = nil,
         photoCapture: (any PhotoCapture)? = nil,
         pairedSessionIDProvider: (@Sendable () async -> String?)? = nil,
         logger: AppLogger = AppLogger(category: .capture),
@@ -154,6 +184,8 @@ public actor LiveCaptureService: CaptureService {
         self.transcriptStreamer = transcriptStreamer
         self.streamingRecognizer = streamingRecognizer
         self.audioBufferSource = audioBufferSource
+        self.interruptionPublisher = interruptionPublisher
+        self.nowPlaying = nowPlaying
         self.photoCapture = photoCapture
         self.pairedSessionIDProvider = pairedSessionIDProvider
         self.logger = logger
@@ -187,6 +219,21 @@ public actor LiveCaptureService: CaptureService {
         continuation.onTermination = { [weak self] _ in
             guard let self else { return }
             Task { await self.unsubscribeTranscript(id: id) }
+        }
+        return stream
+    }
+
+    public func interruptionUpdates() async -> AsyncStream<Bool> {
+        let (stream, continuation) = AsyncStream<Bool>.makeStream()
+        let id = UUID()
+        interruptionContinuations[id] = continuation
+        // Replay the current value so a UI subscriber that opens
+        // mid-interruption (e.g., user unlocks during a phone call)
+        // doesn't sit at the default state until the next change.
+        continuation.yield(isInterrupted)
+        continuation.onTermination = { [weak self] _ in
+            guard let self else { return }
+            Task { await self.unsubscribeInterruption(id: id) }
         }
         return stream
     }
@@ -391,6 +438,12 @@ public actor LiveCaptureService: CaptureService {
         // transcribeAudioInBackground path fires from stopCapture
         // instead.
         await startLiveStreamingTranscription(context: context, deviceID: deviceID)
+
+        // PR 19: surface the lock-screen Now Playing entry and start
+        // listening for engine interruptions. Both no-op if the
+        // respective dep is nil (older tests).
+        await startNowPlaying(label: label, context: context)
+        startInterruptionListener()
     }
 
     public func stopCapture() async throws {
@@ -409,10 +462,12 @@ public actor LiveCaptureService: CaptureService {
             // state.
             transition(to: .failed(reason: "recorder.stop: \(String(describing: error))"))
             await contextStore?.clear()
+            await tearDownInSessionResources()
             throw CaptureServiceError.recorderStopFailed(reason: String(describing: error))
         } catch {
             transition(to: .failed(reason: "recorder.stop: \(error.localizedDescription)"))
             await contextStore?.clear()
+            await tearDownInSessionResources()
             throw CaptureServiceError.recorderStopFailed(reason: error.localizedDescription)
         }
 
@@ -422,6 +477,7 @@ public actor LiveCaptureService: CaptureService {
         } catch {
             transition(to: .failed(reason: "hash: \(error.localizedDescription)"))
             await contextStore?.clear()
+            await tearDownInSessionResources()
             throw CaptureServiceError.hashingFailed(reason: error.localizedDescription)
         }
 
@@ -465,10 +521,12 @@ public actor LiveCaptureService: CaptureService {
         } catch let error as UploadCoordinatorError {
             transition(to: .failed(reason: "enqueue: \(String(describing: error))"))
             await contextStore?.clear()
+            await tearDownInSessionResources()
             throw CaptureServiceError.enqueueFailed(reason: String(describing: error))
         } catch {
             transition(to: .failed(reason: "enqueue: \(error.localizedDescription)"))
             await contextStore?.clear()
+            await tearDownInSessionResources()
             throw CaptureServiceError.enqueueFailed(reason: error.localizedDescription)
         }
 
@@ -534,12 +592,19 @@ public actor LiveCaptureService: CaptureService {
             await patchServerCompleted(context: context)
             transition(to: .completed(context))
             await contextStore?.clear()
+            await tearDownInSessionResources()
             await logger.info(
                 "capture.stop.all_already_drained",
                 metadata: ["capture_session_id": .uuidPrefix(context.captureSessionID)]
             )
             return
         }
+
+        // The recording has ended even though uploads are still in
+        // flight — the lock-screen widget should clear immediately
+        // so the user doesn't see a stale "Recording" entry with a
+        // climbing timer while uploads drain in the background.
+        await tearDownInSessionResources()
 
         transition(to: .finalizing(context, pendingUploadIDs: pendingIDs))
         await persistFinalizingIfNeeded(context: context, pending: pendingIDs)
@@ -627,6 +692,7 @@ public actor LiveCaptureService: CaptureService {
             await patchServerCancelled(context: context)
             transition(to: .cancelled(context))
             await contextStore?.clear()
+            await tearDownInSessionResources()
 
         case .finalizing(let context, let pendingUploadIDs):
             // Stop the watcher first so it doesn't race with the
@@ -639,6 +705,7 @@ public actor LiveCaptureService: CaptureService {
             await patchServerCancelled(context: context)
             transition(to: .cancelled(context))
             await contextStore?.clear()
+            await tearDownInSessionResources()
 
         case .idle, .completed, .cancelled, .failed:
             throw CaptureServiceError.notRecording
@@ -840,6 +907,89 @@ public actor LiveCaptureService: CaptureService {
 
     private func unsubscribeTranscript(id: UUID) {
         transcriptContinuations[id] = nil
+    }
+
+    private func unsubscribeInterruption(id: UUID) {
+        interruptionContinuations[id] = nil
+    }
+
+    // MARK: - PR 19: Now Playing + interruption wiring
+
+    /// Light up the lock-screen Now Playing entry and start the
+    /// once-per-second elapsed-time tick. Wires the remote Stop
+    /// command to `stopCapture()` via a `@Sendable` closure that
+    /// hops back into this actor. No-op when `nowPlaying` is nil.
+    private func startNowPlaying(label: String?, context: CaptureContext) async {
+        guard let nowPlaying else { return }
+        let onStop: @Sendable () -> Void = { [weak self] in
+            Task { [weak self] in
+                // The Stop tap fires from the lock screen — even
+                // a transient failure here is fine to swallow; the
+                // user can always force-quit. Anything that throws
+                // already gets logged inside stopCapture().
+                try? await self?.stopCapture()
+            }
+        }
+        await nowPlaying.start(label: label, startedAt: context.startedAt, onStop: onStop)
+
+        let startedAt = context.startedAt
+        nowPlayingTickTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let elapsed = Date().timeIntervalSince(startedAt)
+                await self?.updateNowPlayingElapsed(elapsedSeconds: elapsed)
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+    }
+
+    /// Tiny hop to call into the @MainActor-isolated controller from
+    /// the tick Task. Pulled out so the Task body stays clean.
+    private func updateNowPlayingElapsed(elapsedSeconds: TimeInterval) async {
+        await nowPlaying?.update(elapsedSeconds: elapsedSeconds)
+    }
+
+    /// Drain the engine's interruption stream and fan-out to both
+    /// the in-process subscribers (the recording cover UI) and the
+    /// Now Playing controller (so the lock-screen widget flips its
+    /// play/pause icon when iOS interrupts).
+    private func startInterruptionListener() {
+        guard let interruptionPublisher else { return }
+        interruptionListenerTask = Task { [weak self] in
+            guard let stream = await interruptionPublisher.interruptionUpdates() else { return }
+            for await interrupted in stream {
+                if Task.isCancelled { return }
+                await self?.handleInterruption(interrupted)
+            }
+        }
+    }
+
+    private func handleInterruption(_ interrupted: Bool) async {
+        isInterrupted = interrupted
+        for continuation in interruptionContinuations.values {
+            continuation.yield(interrupted)
+        }
+        await nowPlaying?.setInterrupted(interrupted)
+        await logger.info(
+            "capture.interruption.broadcast",
+            metadata: ["interrupted": .bool(interrupted)]
+        )
+    }
+
+    /// Cancel the Now Playing tick + interruption listener, clear
+    /// the lock-screen entry, and close out the interruption
+    /// subscriber streams. Idempotent — safe to call from every
+    /// terminal path (success, failure, cancel).
+    private func tearDownInSessionResources() async {
+        nowPlayingTickTask?.cancel()
+        nowPlayingTickTask = nil
+        interruptionListenerTask?.cancel()
+        interruptionListenerTask = nil
+        await nowPlaying?.stop()
+        isInterrupted = false
+        for continuation in interruptionContinuations.values {
+            continuation.finish()
+        }
+        interruptionContinuations.removeAll()
     }
 
     /// Yield a segment to every UI subscriber. Called from the

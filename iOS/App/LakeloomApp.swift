@@ -122,6 +122,11 @@ struct LakeloomApp: App {
             let pairedSessionIDProvider: @Sendable () async -> String? = { [auth] in
                 await auth.activeWorkspace?.authMethod.pairedSessionID
             }
+            // PR 19: same engine instance also publishes interruption
+            // events. NowPlayingController owns the lock-screen +
+            // Control Center surface; it's @MainActor so the actor
+            // can hop into it via `await`.
+            let nowPlayingController = NowPlayingController()
             captureService = LiveCaptureService(
                 captureAPI: captureAPI,
                 recorder: LiveAudioRecorder(engine: engineRecordingEngine),
@@ -132,6 +137,8 @@ struct LakeloomApp: App {
                 transcriptStreamer: transcriptStreamer,
                 streamingRecognizer: streamingRecognizer,
                 audioBufferSource: engineRecordingEngine,
+                interruptionPublisher: engineRecordingEngine,
+                nowPlaying: nowPlayingController,
                 photoCapture: photoCapture,
                 pairedSessionIDProvider: pairedSessionIDProvider
             )
