@@ -16,6 +16,12 @@ public actor ProjectService: ProjectServicing {
     private let api: any ProjectAPIClient
     private let cache: ProjectCache
     private let defaults: any DefaultsStore
+    /// Optional disk-persistent project-list cache. When wired,
+    /// every successful list / upsert / remove mirrors into it so a
+    /// cold launch without network can still render the projects
+    /// the user saw most recently. Production wiring sets this;
+    /// tests omit it.
+    private let listStore: ProjectListStore?
     private let logger: AppLogger
     private let nowProvider: @Sendable () -> Date
 
@@ -32,6 +38,7 @@ public actor ProjectService: ProjectServicing {
         endpointResolver: any AppEndpointResolving,
         api: any ProjectAPIClient,
         defaults: any DefaultsStore = LiveDefaultsStore(),
+        listStore: ProjectListStore? = nil,
         cacheTTL: TimeInterval = 5 * 60,
         logger: AppLogger = AppLogger(category: .projects),
         nowProvider: @Sendable @escaping () -> Date = Date.init
@@ -40,6 +47,7 @@ public actor ProjectService: ProjectServicing {
         self.endpointResolver = endpointResolver
         self.api = api
         self.defaults = defaults
+        self.listStore = listStore
         self.cache = ProjectCache(ttl: cacheTTL, nowProvider: nowProvider)
         self.logger = logger
         self.nowProvider = nowProvider
@@ -83,6 +91,21 @@ public actor ProjectService: ProjectServicing {
             }
             return projects
         case .miss:
+            // Cold-launch survival: hydrate from the on-disk
+            // ``listStore`` before falling through to the network.
+            // If the disk has projects we've seen before, serve them
+            // immediately and kick a background refresh — same
+            // pattern as the `.stale` branch above. Only fall to
+            // `fetchAndCache` (which can throw on a network error)
+            // when the disk is also empty.
+            if let stored = await listStore?.load(workspaceID: workspaceID),
+               !stored.isEmpty {
+                await cache.store(stored, workspaceID: workspaceID)
+                Task { [weak self] in
+                    _ = try? await self?.fetchAndCache(workspaceID: workspaceID)
+                }
+                return stored
+            }
             return try await fetchAndCache(workspaceID: workspaceID)
         }
     }
@@ -92,20 +115,33 @@ public actor ProjectService: ProjectServicing {
            let hit = cached.first(where: { $0.id == projectID }) {
             return hit
         }
+        // Cold-launch survival: hydrate the in-memory cache from
+        // disk before falling through to the network. Lets
+        // `AppCoordinator.bootstrap` (which calls `fetch` via
+        // `defaultProject`) reach `.ready` from a cached project
+        // when the network is down. The disk-hit also short-
+        // circuits the network round trip on warm launches, which
+        // matters for startup latency.
+        if let stored = await listStore?.load(workspaceID: workspaceID),
+           let hit = stored.first(where: { $0.id == projectID }) {
+            await cache.store(stored, workspaceID: workspaceID)
+            return hit
+        }
         let token = try await auth.currentToken()
         let endpoint = try await endpointResolver.resolve(
             workspaceID: workspaceID,
             workspaceURL: workspaceURL(for: workspaceID, fallbackTo: token)
         )
+        let project: ProjectMetadata
         do {
-            return try await api.fetch(
+            project = try await api.fetch(
                 projectID: projectID,
                 workspaceID: workspaceID,
                 token: token,
                 endpoint: endpoint
             )
         } catch ProjectAPIError.unauthorized {
-            return try await retryAfterForceRefresh { newToken in
+            project = try await retryAfterForceRefresh { newToken in
                 try await self.api.fetch(
                     projectID: projectID,
                     workspaceID: workspaceID,
@@ -116,6 +152,17 @@ public actor ProjectService: ProjectServicing {
         } catch {
             throw ProjectErrorMapper.map(error)
         }
+        // Populate the in-memory cache + disk store so a subsequent
+        // offline lookup of this project (or the list it belongs to)
+        // can serve from local state. Without this, the bootstrap
+        // path's defaultProject → fetch network call would hydrate
+        // activeContext but leave the cache empty — and the next
+        // offline tap on the project switcher would surface
+        // "you're offline" even though the user just used the app
+        // online a moment ago.
+        await cache.upsert(project, workspaceID: workspaceID)
+        await mirrorCacheToStore(workspaceID: workspaceID)
+        return project
     }
 
     public func create(name: String, description: String?, workspaceID: String) async throws -> ProjectMetadata {
@@ -146,6 +193,7 @@ public actor ProjectService: ProjectServicing {
         }
 
         await cache.upsert(project, workspaceID: workspaceID)
+        await mirrorCacheToStore(workspaceID: workspaceID)
         diagnosticsState.recordCreate(at: nowProvider())
         broadcast(.projectCreated(project))
         await logger.info(
@@ -217,6 +265,7 @@ public actor ProjectService: ProjectServicing {
         }
 
         await cache.upsert(project, workspaceID: workspaceID)
+        await mirrorCacheToStore(workspaceID: workspaceID)
         broadcast(.projectUpdated(project))
         await logger.info(
             "project updated",
@@ -341,11 +390,14 @@ public actor ProjectService: ProjectServicing {
         switch action {
         case .archive:
             await cache.remove(projectID: projectID, workspaceID: workspaceID)
+            await mirrorCacheToStore(workspaceID: workspaceID)
             broadcast(.projectArchived(projectID: projectID, workspaceID: workspaceID))
         case .unarchive:
             // Refresh cache so the restored project re-appears with its
             // current state. We could fetch by id, but a list refresh keeps
             // ordering / archived state right for everything.
+            // `fetchAndCache` mirrors the new list into the store
+            // already, so no separate save needed here.
             if let refreshed = try? await fetchAndCache(workspaceID: workspaceID),
                let restored = refreshed.first(where: { $0.id == projectID }) {
                 broadcast(.projectUnarchived(restored))
@@ -436,9 +488,23 @@ public actor ProjectService: ProjectServicing {
             }
         }
         await cache.store(response.projects, workspaceID: workspaceID)
+        await listStore?.save(response.projects, workspaceID: workspaceID)
         diagnosticsState.recordListFetch(at: nowProvider())
         broadcast(.listRefreshed(workspaceID: workspaceID, projects: response.projects))
         return response.projects
+    }
+
+    /// Snapshot the in-memory cache for `workspaceID` and mirror it
+    /// to ``listStore`` (if wired). Called after every per-row write
+    /// (`upsert`, `remove`) so the disk copy stays in sync without
+    /// having to thread the new project list through every call
+    /// site. Fire-and-forget at the call site — the writer is
+    /// already async, the actor serializes, and a failed save is
+    /// non-fatal (the cache stays correct in memory).
+    private func mirrorCacheToStore(workspaceID: String) async {
+        guard let listStore else { return }
+        let current = await cache.projects(workspaceID: workspaceID) ?? []
+        await listStore.save(current, workspaceID: workspaceID)
     }
 
     private func retryAfterForceRefresh<T: Sendable>(

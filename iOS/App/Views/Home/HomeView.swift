@@ -19,6 +19,13 @@ struct HomeView: View {
     let userName: String
     let lastResult: HomeViewResult
     let isStartingCapture: Bool
+    /// Whether the device is reachable. When false, the Record CTA
+    /// is disabled and an "Offline" banner renders above it so the
+    /// user knows the next tap won't work (and why). PR #16 Phase 1
+    /// gates the record button behind connectivity — Phase 2 will
+    /// allow offline recording with a queued capture-session
+    /// create, at which point this gate moves.
+    let isOnline: Bool
 
     let onRecord: () -> Void
     let onClearResult: () -> Void
@@ -56,6 +63,9 @@ struct HomeView: View {
                 projectHeader
                 Spacer()
                 resultBanner
+                if !isOnline {
+                    offlineBanner
+                }
                 recordButton
                 Spacer()
                 footer
@@ -152,7 +162,40 @@ struct HomeView: View {
         .buttonStyle(RecordButtonPressStyle())
         .accessibilityLabel("Record")
         .accessibilityHint("Starts a capture session in this project.")
-        .disabled(isStartingCapture)
+        .opacity(isOnline ? 1.0 : 0.4)
+        .disabled(isStartingCapture || !isOnline)
+    }
+
+    // MARK: - Offline banner
+
+    /// Inline banner shown above the Record CTA when the device
+    /// has no usable network path. PR #16 Phase 1 gates recording
+    /// behind connectivity entirely — Phase 2 (queued capture-
+    /// session create + client-generated IDs) lets recording start
+    /// offline, at which point this banner becomes informational
+    /// rather than blocking.
+    private var offlineBanner: some View {
+        HStack(spacing: Spacing.md) {
+            Image(systemName: "wifi.slash")
+                .font(BrandTypography.titleSmall)
+                .foregroundStyle(BrandColors.statusWarning)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Offline")
+                    .font(BrandTypography.bodyEmphasis)
+                    .foregroundStyle(BrandColors.textPrimary)
+                Text("Recording is paused until the network is reachable. The project list above is loaded from your last session.")
+                    .font(BrandTypography.caption)
+                    .foregroundStyle(BrandColors.textSecondary)
+                    .lineLimit(3)
+            }
+        }
+        .padding(Spacing.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(BrandColors.surfacePrimary, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(BrandColors.statusWarning.opacity(0.4), lineWidth: 1)
+        )
     }
 
     // MARK: - Result banner
