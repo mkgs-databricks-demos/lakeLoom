@@ -1,7 +1,7 @@
 # Databricks App UI — Feature Plan & Implementation Order
 
 **Date:** 2026-05-14 (created) | **Last updated:** 2026-05-26
-**Status:** Phases 1–4 COMPLETE. Phase 5 in progress. Phase 6–7 planned.
+**Status:** Phases 1–5 COMPLETE. Phase 6–7 planned.
 **Principle:** The Databricks App does everything the iOS app does EXCEPT record audio.
 
 ---
@@ -287,11 +287,11 @@ The ordering optimizes for: (a) unblocking iOS Module 06, (b) delivering reviewa
 | **Phase 2** | Capture Session Browser | ✅ COMPLETE (2026-05-24) | — |
 | **Phase 3** | Media Viewer & Audio Playback | ✅ COMPLETE (2026-05-24, PR #69) | — |
 | **Phase 4** | Browser-Side Uploads | ✅ COMPLETE (2026-05-25, PR #69) | — |
-| **Phase 5** | Device & Admin Panel | 🚧 IN PROGRESS | 1–2 days |
+| **Phase 5** | Device & Admin Panel | ✅ COMPLETE (2026-05-26) | — |
 | **Phase 6** | Transcript Viewer | ⏳ UNBLOCKED — bronze ingest validated (2026-05-21); silver SDP next | 3–4 days |
 | **Phase 7** | Genie Code Session Planning | Blocked on gold-layer tables + Agent design | 5–7 days |
 
-**Remaining estimated: ~10–13 working days for Phases 5–7.**
+**Remaining estimated: ~8–11 working days for Phases 6–7.**
 
 ---
 

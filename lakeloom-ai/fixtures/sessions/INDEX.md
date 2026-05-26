@@ -1,5 +1,6 @@
 # Session Index
 
+* [2026-05-26] Phase 5 — Device & Admin Panel Implementation — `2026-05-26_phase5-device-admin-panel.md`
 * [2026-05-25] CDF Estate + Offline Capture + Pipeline Design — `2026-05-25_cdf-estate-offline-capture.md`
 * [2026-05-24] Phase 3 Media Modal & Project-Level Documents — `2026-05-24_phase3-media-modal-and-project-docs.md`
 * [2026-05-24] Phase 3 Media Viewer — Build Fixes & Audio Playback — `2026-05-24_phase3-build-fixes-audio-playback.md`

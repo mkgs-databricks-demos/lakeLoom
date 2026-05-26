@@ -62,7 +62,7 @@ lakeLoom/
 │   │   ├── server.ts              # Entry: secrets → migrations → routes → serve
 │   │   ├── lib/                   # crypto.ts, errors.ts (RFC 9457)
 │   │   ├── middleware/            # ios-auth.ts, browser-auth.ts + dualAuth()
-│   │   ├── migrations/            # 001–018 (paired_sessions → client_generated_id)
+│   │   ├── migrations/            # 001–019 (paired_sessions → sweeper_runs)
 │   │   ├── services/              # secrets, sse, zerobus stream pool
 │   │   └── routes/                # pairing, captures, uploads, events, projects, media, zerobus
 │   ├── client/                     # React frontend (Vite + Tailwind v4)
@@ -132,6 +132,7 @@ lakeLoom/
 * **2026-05-25: CDF enabled on ALL Lakebase sync tables.** `lb_capture_sessions_history`, `lb_paired_sessions_history`, `lb_projects_history` now join `lb_uploads_history` and `transcript_events_raw`. Enables streaming pipeline triggers for Phase 5 AI processing.
 * **2026-05-25: Offline capture contract DEPLOYED.** Migration 018 (`client_generated_id` UUID + partial unique index), handler idempotency (200 re-submit / 201 new), Option A (client ID = primary key). Both migrations 017+018 verified in OTel. Reply sent to Isaac. Branch: `mg-isaac-genie-interaction`.
 * **2026-05-25: Capture-completion pipeline designed.** CDF on `lb_capture_sessions_history` triggers bronze→silver→gold SDP pipeline. Gold produces 4 AI deliverables per capture: Whisper transcript, requirements doc, architecture diagram, Genie Code session plan. Latency budget: ~3–7 min. Design doc: `fixtures/phase5-document-edit-cdf-pipeline.md`.
+* **2026-05-26: Phase 5 — Device & Admin Panel IMPLEMENTED on branch `mg-phase5-device-admin-panel`.** New routes: `GET /api/admin/health` (structured health dashboard). New pages: `/devices` (paired device grid with status badges, revoke, revoked history), `/admin` (system health with auto-refresh). Migration 019: `app.sweeper_runs`. Nav updated: Devices, Pair Device (renamed), Admin. `pairing-routes.ts`: `?include_revoked=true` query param support.
 
 ## Resolved Target Variables (dev)
 
