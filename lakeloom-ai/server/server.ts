@@ -6,6 +6,7 @@ import { setupEventRoutes } from './routes/events/event-routes';
 import { setupProjectRoutes } from './routes/projects/project-routes';
 import { setupZerobusRoutes } from './routes/zerobus/zerobus-routes';
 import { setupMediaRoutes } from './routes/media/media-routes';
+import { setupAdminRoutes } from './routes/admin/admin-routes';
 import { runMigrations } from './migrations/migrate';
 import { initSecrets } from './services/secrets-service';
 import { zeroBusService } from './services/zerobus-service';
@@ -121,6 +122,7 @@ createApp({
     await setupProjectRoutes(appkit);
     await setupZerobusRoutes(appkit);
     await setupMediaRoutes(appkit);
+    await setupAdminRoutes(appkit);
 
     // ── Error handler (must be last) ──────────────────────────────────────
     appkit.server.extend((app) => {

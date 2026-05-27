@@ -62,7 +62,7 @@ lakeLoom/
 │   │   ├── server.ts              # Entry: secrets → migrations → routes → serve
 │   │   ├── lib/                   # crypto.ts, errors.ts (RFC 9457)
 │   │   ├── middleware/            # ios-auth.ts, browser-auth.ts + dualAuth()
-│   │   ├── migrations/            # 001–018 (paired_sessions → client_generated_id)
+│   │   ├── migrations/            # 001–019 (paired_sessions → sweeper_runs)
 │   │   ├── services/              # secrets, sse, zerobus stream pool
 │   │   └── routes/                # pairing, captures, uploads, events, projects, media, zerobus
 │   ├── client/                     # React frontend (Vite + Tailwind v4)
@@ -132,6 +132,7 @@ lakeLoom/
 * **2026-05-25: CDF enabled on ALL Lakebase sync tables.** `lb_capture_sessions_history`, `lb_paired_sessions_history`, `lb_projects_history` now join `lb_uploads_history` and `transcript_events_raw`. Enables streaming pipeline triggers for Phase 5 AI processing.
 * **2026-05-25: Offline capture contract DEPLOYED.** Migration 018 (`client_generated_id` UUID + partial unique index), handler idempotency (200 re-submit / 201 new), Option A (client ID = primary key). Both migrations 017+018 verified in OTel. Reply sent to Isaac. Branch: `mg-isaac-genie-interaction`.
 * **2026-05-25: Capture-completion pipeline designed.** CDF on `lb_capture_sessions_history` triggers bronze→silver→gold SDP pipeline. Gold produces 4 AI deliverables per capture: Whisper transcript, requirements doc, architecture diagram, Genie Code session plan. Latency budget: ~3–7 min. Design doc: `fixtures/phase5-document-edit-cdf-pipeline.md`.
+* **2026-05-26: Phase 5 — Device & Admin Panel IMPLEMENTED on branch `mg-phase5-device-admin-panel`.** New routes: `GET /api/admin/health` (structured health dashboard). New pages: `/devices` (paired device grid with status badges, revoke, revoked history), `/admin` (system health with auto-refresh). Migration 019: `app.sweeper_runs`. Nav updated: Devices, Pair Device (renamed), Admin. `pairing-routes.ts`: `?include_revoked=true` query param support.
 
 ## Resolved Target Variables (dev)
 
@@ -283,3 +284,66 @@ filesApi.delete({ file_path: string }): Promise<EmptyResponse>
 * Pairing now starts in the Databricks App browser UI, which generates a QR.
 * Native app scans QR, obtains M2M token, calls pairing endpoints, then receives a long-lived device identity.
 * This means the App bundle is now a **runtime dependency** for mobile onboarding, not just an admin/Genie UI.
+
+
+## Admin & Device Management (Phase 5 — 2026-05-26)
+
+### Admin Health API
+
+`GET /api/admin/health` returns structured JSON:
+```json
+{
+  "status": "healthy|degraded|unhealthy",
+  "checks": { "secrets": {...}, "lakebase": {...}, "volumes": {...}, "zerobus": {...}, "app": {...}, "sweeper": {...}, "environment": {...} },
+  "timestamp": "ISO string"
+}
+```
+
+Each check has `status: 'ok'|'warning'|'error'` plus subsystem-specific fields.
+
+### Environment Variables (Runtime)
+
+The admin health check collects all `LAKELOOM_*`, `DATABRICKS_*`, `LAKEBASE_*`, `NODE_ENV`, `npm_package_*` vars. Secrets matching `SECRET|TOKEN|PASSWORD|CREDENTIAL` are masked (last 4 chars only).
+
+**Key env var mappings in `app.yaml`:**
+- `DATABRICKS_VOLUME_SESSION_AUDIO` / `DATABRICKS_VOLUME_SCREENSHOTS` / `DATABRICKS_VOLUME_DOCUMENTS` — AppKit `files()` plugin auto-discovery (full `/Volumes/...` path)
+- `LAKELOOM_AUDIO_VOLUME_PATH` / `LAKELOOM_SCREENSHOT_VOLUME_PATH` / `LAKELOOM_DOCUMENT_VOLUME_PATH` — legacy app references (same values)
+- `DATABRICKS_APP_NAME` — target-specific: `lakeloom-ai-dev` / `lakeloom-ai` / `lakeloom-ai-prod`
+
+### Re-pair Device Flow
+
+`POST /api/pairing/devices/:id/repair` — Owner-authenticated. Resets an existing device row for re-pairing:
+1. Generates fresh session token
+2. Sets new `token_hash`, clears `device_pubkey` (awaiting iOS `/confirm`)
+3. Resets `expires_at` to +7 days, clears `revoked_at`
+4. Returns full QR payload (same shape as `GET /api/pairing/qr`)
+
+Client shows inline QR + SSE listener for real-time confirmation. Avoids duplicate device entries.
+
+### TypeScript Gotchas (Learned from Deploy Failures)
+
+1. **`as X` is compile-time only** — `{check.error as string}` does NOT convert at runtime. Use `String(check.error)` for JSX rendering of `unknown` typed values.
+2. **`{check.error && <JSX>}` with `unknown` type** — evaluates to `unknown` when falsy, which isn't a valid `ReactNode`. Use ternary: `{check.error ? <JSX> : null}`.
+3. **Rules of Hooks** — `useState` must be called before ANY early return. A hook after `if (loading) return <Skeleton/>` causes React #310 on second render.
+
+### App Target Derivation
+
+The `environment` field in the Application health card is derived from `DATABRICKS_APP_NAME`:
+- Suffix `-dev` → `"dev"`
+- Suffix `-prod` → `"prod"`
+- Bare `lakeloom-ai` → `"hls_fde"`
+- Missing → falls back to `NODE_ENV`
+
+### HealthCheck Interface Pattern
+
+```typescript
+interface HealthCheck {
+  status: string;
+  [key: string]: unknown;  // Index signature — all dynamic fields are `unknown`
+}
+```
+
+When rendering dynamic fields from this interface in JSX:
+- Wrap in `String()` / `Number()` for display
+- Use ternary (not `&&`) for conditional rendering
+- Cast arrays explicitly: `(check.missing as string[])`
