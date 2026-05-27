@@ -19,6 +19,7 @@ import { useParams, useNavigate, Link } from 'react-router';
 import { ArrowLeft, Smartphone, Loader2, ChevronDown, ArrowUpDown, Mic2, Camera, FileText, Image, FileCode, Trash2 } from 'lucide-react';
 import { StatusBadge, TimeAgo, Duration, EmptyState, ConfirmDialog, PairDeviceModal, DragDropZone } from '../../components';
 import { MediaModal } from '../../components/media';
+import { TranscriptSearch } from '../../components/transcript';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -405,6 +406,14 @@ export function ProjectDetailPage() {
           }}
           label="Drop documents, images, or markdown here"
         />
+      </div>
+
+      {/* ── Transcript search ─────────────────────────────────────────────────── */}
+      <div className="mb-6">
+        <h2 className="text-base font-semibold text-[var(--text-primary,#1B3139)] mb-3">
+          Search Transcripts
+        </h2>
+        <TranscriptSearch projectId={projectId} />
       </div>
 
       {/* ── Section header + filter + sort ───────────────────────────────────── */}

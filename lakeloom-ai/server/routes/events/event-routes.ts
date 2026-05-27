@@ -31,6 +31,7 @@ import type { Application } from 'express';
 import { iosAuth } from '../../middleware/ios-auth';
 import { validationError } from '../../lib/errors';
 import { zeroBusService } from '../../services/zerobus-service';
+import { pushTranscriptEvent } from '../transcripts/transcript-routes';
 import { isZerobusReady } from '../../services/secrets-service';
 
 // -- Interfaces ---------------------------------------------------------------
@@ -154,6 +155,23 @@ export async function setupEventRoutes(appkit: AppKitContext): Promise<void> {
           await zeroBusService.ingestRecord(records[0]);
         } else {
           await zeroBusService.ingestBatch(records);
+        }
+
+        // ── Relay transcript events to connected SSE clients ──────────────
+        for (const record of records) {
+          if (record.event_type === 'final_transcript' && record.session_id) {
+            const rawBody = typeof record.body === 'string' ? JSON.parse(record.body) : record.body;
+            pushTranscriptEvent(record.session_id, {
+              event_id: record.event_id,
+              event_time: record.event_time ? new Date(record.event_time / 1000).toISOString() : new Date().toISOString(),
+              text: record.transcript_text || '',
+              language: record.transcript_language || 'en-US',
+              confidence: rawBody?.confidence ?? null,
+              segment_index: rawBody?.segment_index ?? null,
+              duration_ms: rawBody?.duration_ms ?? null,
+              model: rawBody?.model ?? null,
+            });
+          }
         }
 
         res.status(202).json({ accepted: events.length });
