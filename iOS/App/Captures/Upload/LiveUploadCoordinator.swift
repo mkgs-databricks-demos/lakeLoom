@@ -374,7 +374,18 @@ public actor LiveUploadCoordinator: UploadCoordinator {
             }
             // Fallback by status: 408/429/5xx are transient; other
             // 4xx and unknown statuses are permanent.
+            //
+            // 404 is the Phase 3 special case: when iOS records
+            // offline, the capture-create operation lands in
+            // `OperationQueue` first and uploads land on
+            // `UploadCoordinator` second. Both worker loops drain
+            // concurrently when the network returns, and a fast
+            // upload can race ahead of the create — the server then
+            // returns 404 because the capture row doesn't exist yet.
+            // Treating that as transient lets the upload back off
+            // and re-attempt once the create has drained.
             switch status {
+            case 404:             return false
             case 408, 429:        return false
             case 500...599:       return false
             case 400...499:       return true

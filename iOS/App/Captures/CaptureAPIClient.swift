@@ -23,12 +23,25 @@ public protocol CaptureAPIClient: Sendable {
     /// `hey_isaac/2026-05-23_device-id-contract-correction.md`)
     /// treats it as optional during rollout, so nil produces a
     /// payload that still validates.
+    ///
+    /// `clientGeneratedID` is the UUIDv7 iOS generates for the
+    /// capture row when it wants the row's `id` to be the same as
+    /// the one already in use locally. Phase 3 contract — see
+    /// `architecture/hey_isaac/2026-05-25_client-generated-capture-id-implemented.md`.
+    /// Server semantics:
+    ///   * On first POST with this id → 201, row created with
+    ///     `id == clientGeneratedID`.
+    ///   * On re-POST with the same id by the same user → 200, the
+    ///     existing row is returned (idempotent).
+    /// Optional during rollout; passing `nil` falls back to the
+    /// server-side id generation.
     func createCaptureSession(
         workspaceID: String,
         projectID: String,
         label: String?,
         clientTimestamp: Date?,
-        deviceID: String?
+        deviceID: String?,
+        clientGeneratedID: String?
     ) async throws -> CaptureSession
 
     /// `PATCH /api/captures/:capture_session_id` — transitions an
@@ -223,17 +236,20 @@ public actor LiveCaptureAPIClient: CaptureAPIClient {
         projectID: String,
         label: String?,
         clientTimestamp: Date?,
-        deviceID: String?
+        deviceID: String?,
+        clientGeneratedID: String?
     ) async throws -> CaptureSession {
         struct Body: Encodable {
             let label: String?
             let client_ts: String?
             let device_id: String?
+            let client_generated_id: String?
         }
         let body = Body(
             label: label,
             client_ts: clientTimestamp.map { Self.iso8601String(from: $0) },
-            device_id: deviceID
+            device_id: deviceID,
+            client_generated_id: clientGeneratedID
         )
         let bodyData: Data
         do {

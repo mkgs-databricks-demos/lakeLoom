@@ -358,7 +358,8 @@ struct EndpointSmokeTestView: View {
                 projectID: projectID,
                 label: label,
                 clientTimestamp: Date(),
-                deviceID: await resolvedDeviceID()
+                deviceID: await resolvedDeviceID(),
+                clientGeneratedID: nil
             )
             lastCaptureID = session.id
             // Fresh capture session resets the cancel/complete mutex

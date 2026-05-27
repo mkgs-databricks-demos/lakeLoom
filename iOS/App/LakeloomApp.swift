@@ -104,6 +104,29 @@ struct LakeloomApp: App {
         let reachability = ReachabilityMonitor()
         reachability.start()
 
+        // PR 21 (Phase 3 cutover): control-plane outbox. Holds queued
+        // capture-create + state-PATCH ops while the device is
+        // offline; drains them in FIFO order when the queue's worker
+        // sees a reachable network. Same store-as-the-source-of-truth
+        // pattern as the upload coordinator. Construction can throw
+        // on filesystem failure — fall through to nil so the rest of
+        // the wiring proceeds (LiveCaptureService falls back to its
+        // legacy direct-call path).
+        let operationQueueStore: OperationQueueStore? = try? OperationQueueStore.makeDefault()
+        let operationQueue: (any OperationQueueing)?
+        if let operationQueueStore {
+            let executor = OperationExecutor.make(
+                captureAPI: captureAPI,
+                projects: projects
+            )
+            operationQueue = LiveOperationQueue(
+                queueStore: operationQueueStore,
+                execute: executor
+            )
+        } else {
+            operationQueue = nil
+        }
+
         // Capture orchestrator. Bundles captureAPI + a shared
         // AudioRecorder + the upload coordinator + the
         // capture-context store so app-killed-mid-capture
@@ -139,6 +162,7 @@ struct LakeloomApp: App {
                 audioBufferSource: engineRecordingEngine,
                 interruptionPublisher: engineRecordingEngine,
                 nowPlaying: nowPlayingController,
+                operationQueue: operationQueue,
                 photoCapture: photoCapture,
                 pairedSessionIDProvider: pairedSessionIDProvider
             )
@@ -162,7 +186,8 @@ struct LakeloomApp: App {
                 transcriptEvents: transcriptEvents,
                 deviceIdentity: deviceIdentity,
                 mediaContent: mediaContent,
-                reachability: reachability
+                reachability: reachability,
+                operationQueue: operationQueue
             )
         )
     }
@@ -186,6 +211,29 @@ struct LakeloomApp: App {
                         // directly so any queued uploads from a
                         // previous run can drain.
                         await uploads.start()
+                    }
+                    // PR 21 (Phase 3): start the control-plane outbox
+                    // so any ops queued from a prior launch (or that
+                    // accumulated while the user was offline) drain
+                    // immediately on cold start.
+                    if let operationQueue = coordinator.operationQueue {
+                        await operationQueue.start()
+                    }
+                }
+                .task {
+                    // PR 21 (Phase 3): nudge the operation queue
+                    // whenever the device transitions back online so
+                    // a backlog of capture-create / state-PATCH ops
+                    // drains right away instead of waiting out the
+                    // current backoff window.
+                    guard
+                        let reachability = coordinator.reachability,
+                        let operationQueue = coordinator.operationQueue
+                    else { return }
+                    for await state in reachability.stateUpdates() {
+                        if state == .online {
+                            await operationQueue.wake()
+                        }
                     }
                 }
         }

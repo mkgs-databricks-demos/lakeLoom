@@ -136,6 +136,7 @@
 		4DC766A42C6AD8C1FFD5011D /* PendingOperation.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3CD03905FBFD23EE276E643 /* PendingOperation.swift */; };
 		CAFF2D4985644C8973C37FB6 /* OperationQueueStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AC598E073C5C779BEAE86F1 /* OperationQueueStore.swift */; };
 		BF70271B8FAC43E2A650EDCE /* OperationQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00DE150691D870FBFBF829B1 /* OperationQueue.swift */; };
+		F00020A1F001F001F001F001 /* OperationExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00010A1F001F001F001F001 /* OperationExecutor.swift */; };
 		EA1B4419DE3130EF2A1A764E /* ProjectListResponse.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32080BB1BD8EA5147F9A4CC3 /* ProjectListResponse.swift */; };
 		ECE53915B725456A12B47287 /* ProjectChangeEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4C1F0F742E686377CE95118 /* ProjectChangeEvent.swift */; };
 		EDFE64F07782183CC5E2EB6C /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F8C68EE40684831BCCD364B /* QRScannerView.swift */; };
@@ -176,6 +177,8 @@
 		D00020A3D003D003D003D003 /* FakeAudioInterruptionPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00010A3D003D003D003D003 /* FakeAudioInterruptionPublisher.swift */; };
 		D00020A4D004D004D004D004 /* SpyNowPlayingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00010A4D004D004D004D004 /* SpyNowPlayingController.swift */; };
 		D00020A5D005D005D005D005 /* LiveCaptureServiceInterruptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00010A5D005D005D005D005 /* LiveCaptureServiceInterruptionTests.swift */; };
+		F00020A2F002F002F002F002 /* FakeOperationQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00010A2F002F002F002F002 /* FakeOperationQueue.swift */; };
+		F00020A3F003F003F003F003 /* LiveCaptureServicePhase3Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00010A3F003F003F003F003 /* LiveCaptureServicePhase3Tests.swift */; };
 		C0020A13C013C013C013C013 /* FakeUploadCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0010A13C013C013C013C013 /* FakeUploadCoordinator.swift */; };
 		C0020A14C014C014C014C014 /* LiveCaptureServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0010A14C014C014C014C014 /* LiveCaptureServiceTests.swift */; };
 		D0020A01D001D001D001D001 /* EndpointSmokeTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0010A01D001D001D001D001 /* EndpointSmokeTestView.swift */; };
@@ -292,6 +295,7 @@
 		C3CD03905FBFD23EE276E643 /* PendingOperation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingOperation.swift; sourceTree = "<group>"; };
 		6AC598E073C5C779BEAE86F1 /* OperationQueueStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OperationQueueStore.swift; sourceTree = "<group>"; };
 		00DE150691D870FBFBF829B1 /* OperationQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OperationQueue.swift; sourceTree = "<group>"; };
+		F00010A1F001F001F001F001 /* OperationExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OperationExecutor.swift; sourceTree = "<group>"; };
 		591E3564492C4623474DCB96 /* ProjectMetadataCache+DTO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ProjectMetadataCache+DTO.swift"; sourceTree = "<group>"; };
 		5ACDE0D326484062FF9B27A1 /* OAuthTokenResponse.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OAuthTokenResponse.swift; sourceTree = "<group>"; };
 		5BA6D92D1879F93D6F721FBC /* Base64URLEncoding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Base64URLEncoding.swift; sourceTree = "<group>"; };
@@ -425,6 +429,8 @@
 		D00010A3D003D003D003D003 /* FakeAudioInterruptionPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeAudioInterruptionPublisher.swift; sourceTree = "<group>"; };
 		D00010A4D004D004D004D004 /* SpyNowPlayingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpyNowPlayingController.swift; sourceTree = "<group>"; };
 		D00010A5D005D005D005D005 /* LiveCaptureServiceInterruptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveCaptureServiceInterruptionTests.swift; sourceTree = "<group>"; };
+		F00010A2F002F002F002F002 /* FakeOperationQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeOperationQueue.swift; sourceTree = "<group>"; };
+		F00010A3F003F003F003F003 /* LiveCaptureServicePhase3Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveCaptureServicePhase3Tests.swift; sourceTree = "<group>"; };
 		C0010A13C013C013C013C013 /* FakeUploadCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeUploadCoordinator.swift; sourceTree = "<group>"; };
 		C0010A14C014C014C014C014 /* LiveCaptureServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveCaptureServiceTests.swift; sourceTree = "<group>"; };
 		D0010A01D001D001D001D001 /* EndpointSmokeTestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndpointSmokeTestView.swift; sourceTree = "<group>"; };
@@ -551,6 +557,7 @@
 		8CE76FCBC15ED11FA69619A0 /* Operations */ = {
 			isa = PBXGroup;
 			children = (
+				F00010A1F001F001F001F001 /* OperationExecutor.swift */,
 				C3CD03905FBFD23EE276E643 /* PendingOperation.swift */,
 				6AC598E073C5C779BEAE86F1 /* OperationQueueStore.swift */,
 				00DE150691D870FBFBF829B1 /* OperationQueue.swift */,
@@ -1018,6 +1025,7 @@
 				11010A01110011001100110A /* CaptureUploadDecodeTests.swift */,
 				C0010A14C014C014C014C014 /* LiveCaptureServiceTests.swift */,
 				D00010A5D005D005D005D005 /* LiveCaptureServiceInterruptionTests.swift */,
+				F00010A3F003F003F003F003 /* LiveCaptureServicePhase3Tests.swift */,
 			);
 			path = Captures;
 			sourceTree = "<group>";
@@ -1047,6 +1055,7 @@
 				D00010A3D003D003D003D003 /* FakeAudioInterruptionPublisher.swift */,
 				C0010A12C012C012C012C012 /* FakeAudioRecorder.swift */,
 				C0010A11C011C011C011C011 /* FakeCaptureAPIClient.swift */,
+				F00010A2F002F002F002F002 /* FakeOperationQueue.swift */,
 				C0010A13C013C013C013C013 /* FakeUploadCoordinator.swift */,
 				D00010A4D004D004D004D004 /* SpyNowPlayingController.swift */,
 			);
@@ -1376,6 +1385,8 @@
 				6F51D58B5DEDCCAADCBEE9C6 /* LakeloomAppClientTests.swift in Sources */,
 				A0020A12A012A012A012A012 /* LiveAudioRecorderTests.swift in Sources */,
 				C0020A14C014C014C014C014 /* LiveCaptureServiceTests.swift in Sources */,
+				F00020A2F002F002F002F002 /* FakeOperationQueue.swift in Sources */,
+				F00020A3F003F003F003F003 /* LiveCaptureServicePhase3Tests.swift in Sources */,
 				D00020A3D003D003D003D003 /* FakeAudioInterruptionPublisher.swift in Sources */,
 				D00020A4D004D004D004D004 /* SpyNowPlayingController.swift in Sources */,
 				D00020A5D005D005D005D005 /* LiveCaptureServiceInterruptionTests.swift in Sources */,
@@ -1573,6 +1584,7 @@
 				4DC766A42C6AD8C1FFD5011D /* PendingOperation.swift in Sources */,
 				CAFF2D4985644C8973C37FB6 /* OperationQueueStore.swift in Sources */,
 				BF70271B8FAC43E2A650EDCE /* OperationQueue.swift in Sources */,
+				F00020A1F001F001F001F001 /* OperationExecutor.swift in Sources */,
 				3AA316AF587849BD292711B8 /* WorkspaceMetadataCache+CoreDataClass.swift in Sources */,
 				64D9768D139DC35CFA0659A3 /* WorkspaceMetadataCache+CoreDataProperties.swift in Sources */,
 				C12772FEE68EEDA38DA87746 /* WorkspaceMetadataCache+DTO.swift in Sources */,

@@ -1496,3 +1496,42 @@ The "IngestService" originally specified in Module 03 is realized in this module
 * **Media files** → `LiveUploadCoordinator` + `MultipartFormBuilder` (POST multipart to `/api/captures/:id/{audio|photos|screenshots}` + `/api/projects/:id/documents`).
 
 No standalone "outbox" actor — the two pipelines persist their own state independently (`UploadQueueStore` on disk; `TranscriptStreamer` keeps its batch buffer in memory for the session and best-effort drains to ZeroBus). Module 03's spec stays valid as a design but the as-built layout lives here.
+
+
+## 25. Phase 3 Cutover — Offline-First Recording (PR #21)
+
+The capture session id is now **client-generated** as a UUIDv7 inside `LiveCaptureService.startCapture`, and the server-side create lands via the control-plane `OperationQueue` outbox (Module 02 §24 doesn't reach into the queue infrastructure — see Module 05 §X for that). The recorder starts immediately, so the user can begin recording with no network at all.
+
+### 25.1 Flow
+
+1. User taps Record.
+2. `LiveCaptureService.startCapture`:
+    * Generates `captureSessionID = UUIDv7.generate(now: nowProvider())`.
+    * Builds `PendingOperation(.createCaptureSession(captureSessionID:projectID:label:clientTimestamp:deviceID:))`.
+    * Calls `operationQueue.enqueue(op)` — fully persisted to disk before returning.
+    * Calls `recorder.start(captureSessionID: captureSessionID)`.
+    * Transitions to `.recording(context)` with the same locally-generated id.
+3. `OperationQueue` worker drains the op when the network is reachable. Server's migration 018 makes the row's `id == clientGeneratedID`; the API is idempotent on `(created_by_user_id, client_generated_id)`.
+
+### 25.2 Cleanup paths
+
+`cancelCapture` and `stopCapture`'s patch-server-to-`completed` step both go through `LiveCaptureService.patchCaptureState`, which when `operationQueue` is wired enqueues a `.updateCaptureSessionState` op instead of firing a direct PATCH. The natural drain order — create → state PATCH → uploads — handles the race where the recorder finishes before the server has acknowledged the create.
+
+`rollbackCreate` (used when `recorder.start` fails after the create op has been enqueued) enqueues a `cancelled` state PATCH. The queue's FIFO order ensures the server sees a clean create→cancel pair, ending with a cancelled row.
+
+### 25.3 Upload coordinator 404 handling
+
+`LiveUploadCoordinator.isPermanent` was widened to treat HTTP 404 as transient. With Phase 3, an upload for a freshly-recorded capture can race ahead of the create op when the network returns — the server then 404s the upload because the capture row doesn't exist yet. The upload retries with backoff; once the create lands, the upload finds the row and succeeds.
+
+### 25.4 Reachability → queue.wake()
+
+`LakeloomApp` runs a `.task` that subscribes to `ReachabilityMonitor.stateUpdates()` and calls `operationQueue.wake()` on every transition to `.online`. Without this, an op that hit a transient 5xx while offline would sit in its backoff window even after the network returned; the wake nudge cuts that latency to ~zero.
+
+### 25.5 Failure modes
+
+| Scenario | Behavior |
+|---|---|
+| Pure offline record + stop, network returns later | Create + state PATCH drain in order; uploads then drain. No user action needed. |
+| App force-quit while op is mid-drain | Op stays persisted in `OperationQueueStore`; next launch's `operationQueue.start()` rehydrates and resumes. |
+| Server returns 4xx on create (invalid project, forbidden) | Op parks as `OperationPermanentFailure`. Capture row never exists. iOS UI stays on `.recording` until the user stops; on stop, upload coordinator gets 404 → retries → eventually permanent-fails. **Known v1 gap:** no surface yet to discard / retry orphan ops from the outbox; tracked for the diagnostic-outbox UI PR. |
+| User signs out while ops queued | `signOut` clears keychain; queue store keeps ops but executor's first API call returns `notSignedIn` → mapped to `OperationPermanentFailure` → parks. Same v1 gap as above. |

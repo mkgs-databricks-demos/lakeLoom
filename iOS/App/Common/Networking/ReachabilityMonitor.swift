@@ -46,6 +46,11 @@ public final class ReachabilityMonitor {
     private let monitor: NWPathMonitor
     private let queue: DispatchQueue
     private var didStart = false
+    /// Fan-out for non-UI subscribers (e.g. the OperationQueue wake
+    /// hook). UI surfaces just read `state` via @Observable; this
+    /// stream exists so the LakeloomApp `.task` block can wake the
+    /// outbox on online transitions without polling.
+    private var subscriptions: [UUID: AsyncStream<State>.Continuation] = [:]
 
     public init() {
         self.monitor = NWPathMonitor()
@@ -65,9 +70,33 @@ public final class ReachabilityMonitor {
             // SwiftUI views re-render correctly.
             Task { @MainActor [weak self] in
                 self?.state = newState
+                self?.broadcast(newState)
             }
         }
         monitor.start(queue: queue)
+    }
+
+    /// Subscribe to every transition in `state`. The stream replays
+    /// the current value as its first yield so a late subscriber
+    /// (the LakeloomApp `.task` block runs after `start()`) gets the
+    /// initial state immediately.
+    public func stateUpdates() -> AsyncStream<State> {
+        AsyncStream { continuation in
+            let id = UUID()
+            subscriptions[id] = continuation
+            continuation.yield(state)
+            continuation.onTermination = { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.subscriptions[id] = nil
+                }
+            }
+        }
+    }
+
+    private func broadcast(_ next: State) {
+        for continuation in subscriptions.values {
+            continuation.yield(next)
+        }
     }
 
     /// Convenience predicate. UI code that wants to gate a

@@ -87,6 +87,13 @@ public final class AppCoordinator {
     /// `coordinator.reachability?.state` and gate / decorate
     /// affordances accordingly.
     public let reachability: ReachabilityMonitor?
+    /// PR 21 (Phase 3 cutover): outbox for control-plane ops
+    /// (capture create / state PATCH). Started during bootstrap and
+    /// woken when reachability transitions to online so a fresh
+    /// signal drains the backlog immediately. Nil when the queue
+    /// store failed to initialize — capture flow falls back to its
+    /// legacy direct-call path.
+    public let operationQueue: (any OperationQueueing)?
     let logger: AppLogger
     let nowProvider: @Sendable () -> Date
 
@@ -109,6 +116,7 @@ public final class AppCoordinator {
         deviceIdentity: (any DeviceIdentityStore)? = nil,
         mediaContent: (any MediaContentService)? = nil,
         reachability: ReachabilityMonitor? = nil,
+        operationQueue: (any OperationQueueing)? = nil,
         logger: AppLogger = AppLogger(category: .coordinator),
         nowProvider: @Sendable @escaping () -> Date = Date.init
     ) {
@@ -124,6 +132,7 @@ public final class AppCoordinator {
         self.deviceIdentity = deviceIdentity
         self.mediaContent = mediaContent
         self.reachability = reachability
+        self.operationQueue = operationQueue
         self.logger = logger
         self.nowProvider = nowProvider
     }
