@@ -31,15 +31,24 @@ struct AccountSettingsView: View {
     /// caller routes the workspace ID into
     /// `AppCoordinator.signOut(workspaceID:)`.
     let onSignOut: () -> Void
+    /// Re-pair callback — opens the QR scanner sheet (lives on the
+    /// container view since it owns the camera presentation flow). On
+    /// a successful scan the container view routes the QR text into
+    /// `AppCoordinator.repairCurrentDevice(qrText:)`.
+    let onRepair: () -> Void
     let onDismiss: () -> Void
 
     @State private var deviceID: String?
+    /// Recomputed every minute via TimelineView so the countdown chip
+    /// and the long description stay current while the sheet is up.
+    @State private var statusTick = Date()
 
     var body: some View {
         NavigationStack {
             Form {
                 accountSection
                 workspaceSection
+                pairingSection
                 deviceSection
                 appSection
                 signOutSection
@@ -56,6 +65,15 @@ struct AccountSettingsView: View {
             }
         }
         .task { await loadDeviceID() }
+        .task(id: statusTick) {
+            // Refresh the pairing countdown every 30 seconds so the
+            // "Expires in N hours/minutes" text doesn't go stale while
+            // the user lingers on the sheet. `task(id:)` cancels +
+            // restarts when `statusTick` changes, so the loop body is
+            // a single sleep + bump.
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            statusTick = Date()
+        }
     }
 
     // MARK: - Sections
@@ -96,11 +114,49 @@ struct AccountSettingsView: View {
         Section {
             row(label: "Device ID", value: deviceID ?? "—", monospaced: true)
             row(label: "Paired session", value: pairedSessionSummary, monospaced: true)
-            if let expiry = sessionExpiresAt {
-                row(label: "Session expires", value: dateFormatter.string(from: expiry))
-            }
         } header: {
             sectionHeader("Device")
+        }
+    }
+
+    private var pairingSection: some View {
+        let status = PairingStatus(expiresAt: sessionExpiresAt, now: statusTick)
+        return Section {
+            HStack(alignment: .firstTextBaseline) {
+                Text(status.longDescription)
+                    .font(BrandTypography.body)
+                    .foregroundStyle(BrandColors.textPrimary)
+                    .multilineTextAlignment(.leading)
+                Spacer()
+                PairingStatusChip(level: status.level, label: status.shortDescription)
+            }
+            Button {
+                onRepair()
+            } label: {
+                HStack {
+                    Image(systemName: "qrcode.viewfinder")
+                    Text(rescanButtonTitle(for: status.level))
+                }
+                .font(BrandTypography.bodyEmphasis)
+                .foregroundStyle(BrandColors.accentPrimary)
+            }
+        } header: {
+            sectionHeader("Pairing")
+        } footer: {
+            Text("Re-scan the QR code shown in the lakeLoom Databricks App to refresh this device's paired session. Existing recordings and project data stay where they are.")
+                .font(BrandTypography.caption)
+                .foregroundStyle(BrandColors.textSecondary)
+        }
+    }
+
+    private func rescanButtonTitle(for level: PairingStatus.WarningLevel) -> String {
+        switch level {
+        case .healthy, .soft:
+            return "Re-scan QR code"
+        case .warning:
+            return "Re-scan QR code now"
+        case .urgent:
+            return "Re-scan QR code — required"
         }
     }
 
@@ -164,7 +220,7 @@ struct AccountSettingsView: View {
         }
     }
 
-    private var sessionExpiresAt: Date? {
+    private var sessionExpiresAt: Date {
         switch context.workspace.authMethod {
         case .qrPaired(_, let expiresAt):
             return expiresAt
@@ -197,6 +253,46 @@ struct AccountSettingsView: View {
         guard let store = deviceIdentity else { return }
         if let id = try? await store.deviceID() {
             deviceID = id
+        }
+    }
+}
+
+/// Compact pill that mirrors `PairingStatus.shortDescription` and
+/// colors it by `WarningLevel`. Used inline in the Pairing section
+/// and (in the same shape) on the home toolbar so the visual language
+/// is consistent across surfaces.
+struct PairingStatusChip: View {
+    let level: PairingStatus.WarningLevel
+    let label: String
+
+    var body: some View {
+        Text(label)
+            .font(BrandTypography.caption.weight(.medium))
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(background, in: Capsule())
+            .overlay(
+                Capsule().stroke(foreground.opacity(0.25), lineWidth: 0.5)
+            )
+            .accessibilityLabel("Pairing status: \(label)")
+    }
+
+    private var foreground: Color {
+        switch level {
+        case .healthy: return BrandColors.statusSuccess
+        case .soft:    return BrandColors.statusInfo
+        case .warning: return BrandColors.statusWarning
+        case .urgent:  return BrandColors.statusError
+        }
+    }
+
+    private var background: Color {
+        switch level {
+        case .healthy: return BrandColors.statusSuccess.opacity(0.12)
+        case .soft:    return BrandColors.statusInfo.opacity(0.12)
+        case .warning: return BrandColors.statusWarning.opacity(0.15)
+        case .urgent:  return BrandColors.statusError.opacity(0.15)
         }
     }
 }

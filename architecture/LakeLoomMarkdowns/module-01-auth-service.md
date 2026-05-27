@@ -289,6 +289,59 @@ the correct App URL without falling back to the placeholder
 workspace-URL derivation.
 
 
+### 5.7 Re-pair (refresh an existing paired session)
+
+The 7-day session token eventually expires, and the Databricks App
+side surfaces a "Re-pair iPhone" QR for any signed-in user. The
+iOS surface for refreshing without signing out:
+
+* `AccountSettingsView` has a "Pairing" section showing
+  `PairingStatus.longDescription` ("Paired until May 31, 2026 at
+  4:00 PM"), a color-coded chip with the short relative-time
+  string ("Expires in 36 hours"), and a "Re-scan QR code" button.
+* When the session is in the warning band (12–48 h) or urgent band
+  (<12 h or expired), the home toolbar shows a `PairingStatusChip`
+  pill with the same short string. Tapping the pill goes straight
+  to the QR scanner — the user doesn't have to navigate through
+  Account to re-pair before a meeting.
+* The QR scanner sheet wraps the same `QRScannerView` used during
+  onboarding. On a successful scan, the QR text routes through
+  `AppCoordinator.repairCurrentDevice(qrText:allowWorkspaceSwitch:)`,
+  which decodes the payload locally and:
+    * If the workspace ID matches the active workspace → calls
+      `AuthService.signInViaPairing(qrText:deviceLabel:)`. Because
+      `persistPairing` upserts by workspace ID, the credential,
+      session token, and Xcode SPN entries are all overwritten in
+      place — no second pairing appears in the workspaces index,
+      no sign-out hiccup, no AppCoordinator phase reset.
+    * If the workspace ID is different → returns
+      `RepairOutcome.differentWorkspace(name, id)` without making
+      any change. `HomeContainerView` surfaces a confirm dialog
+      ("This QR is for [other workspace] — replace pairing?"). On
+      confirm, the same call is re-issued with
+      `allowWorkspaceSwitch: true`.
+    * On any failure (decode, server reject, device key roundtrip)
+      → returns `.failed(reason:)`. The home banner surfaces the
+      reason string and stays visible until the user dismisses it.
+* On `.refreshed`, a success banner shows above the home navigation
+  chrome ("Pairing refreshed — paired until [date]") and
+  auto-dismisses after 5 seconds. The toolbar pill disappears at
+  the next 1-minute tick.
+
+The `PairingStatus.WarningLevel` thresholds drive every visual
+state in the flow:
+
+| Level   | Window           | Chip / pill color | Surface         |
+|---------|------------------|-------------------|-----------------|
+| healthy | >7 days          | green             | Account only    |
+| soft    | 48 h – 7 days    | blue              | Account only    |
+| warning | 12 h – 48 h      | yellow            | Account + pill  |
+| urgent  | <12 h / expired  | red               | Account + pill  |
+
+Pure-value implementation lives in `App/Auth/Pairing/PairingStatus.swift`;
+unit-test coverage in `AppTests/Auth/PairingStatusTests.swift`.
+
+
 ## 6. M2M Token Cache (delegated to LakeloomAppClient)
 
 The QR-pair flow doesn't use refresh tokens — the M2M
