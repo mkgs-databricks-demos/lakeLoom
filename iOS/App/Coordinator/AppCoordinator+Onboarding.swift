@@ -52,9 +52,10 @@ extension AppCoordinator {
 
     /// Returns the user's device name (e.g. "Matthew's iPhone"),
     /// hopping to the main actor since `UIDevice.current.name` is
-    /// `@MainActor` in Swift 6.
+    /// `@MainActor` in Swift 6. Shared with the re-pair flow so the
+    /// scanned label matches what the user signed up with.
     @MainActor
-    private static func currentDeviceLabel() async -> String {
+    static func currentDeviceLabel() async -> String {
         UIDevice.current.name
     }
 

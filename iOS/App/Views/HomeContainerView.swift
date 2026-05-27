@@ -39,6 +39,24 @@ struct HomeContainerView: View {
     @State private var showingProjectSwitcher = false
     @State private var showingDocuments = false
     @State private var showingAccount = false
+    @State private var showingRepairScanner = false
+    /// Banner shown after a re-pair attempt resolves. Distinct from
+    /// `lastResult` (which is capture-flow scoped) so the two don't
+    /// fight for the same surface.
+    @State private var repairBanner: RepairBanner = .none
+    @State private var differentWorkspacePrompt: DifferentWorkspacePrompt?
+
+    enum RepairBanner: Equatable {
+        case none
+        case success(workspaceName: String, until: Date)
+        case failure(reason: String)
+    }
+
+    struct DifferentWorkspacePrompt: Identifiable, Equatable {
+        let id = UUID()
+        let qrText: String
+        let scannedName: String
+    }
 
     /// Live count of `UploadCoordinator.currentUploads()`. Drives a
     /// badge on the toolbar so the user can tell at a glance when
@@ -61,6 +79,9 @@ struct HomeContainerView: View {
                 onResultAction: performResultAction
             )
             .toolbar { toolbar }
+            .safeAreaInset(edge: .top) {
+                repairBannerView
+            }
         }
         .fullScreenCover(isPresented: bindingForRecordingPresentation) {
             if let context = currentCaptureContext {
@@ -130,9 +151,47 @@ struct HomeContainerView: View {
                             try? await coordinator.signOut(workspaceID: context.workspace.id)
                         }
                     },
+                    onRepair: {
+                        // Dismiss the Account sheet first; iOS doesn't
+                        // play nicely with stacking a second sheet on
+                        // top of the form. The scanner sheet opens
+                        // after the dismiss animation settles.
+                        showingAccount = false
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                            showingRepairScanner = true
+                        }
+                    },
                     onDismiss: { showingAccount = false }
                 )
             }
+        }
+        .sheet(isPresented: $showingRepairScanner) {
+            RepairScannerSheet(
+                onScan: { qrText in
+                    showingRepairScanner = false
+                    Task { await handleRepair(qrText: qrText, allowWorkspaceSwitch: false) }
+                },
+                onCancel: { showingRepairScanner = false }
+            )
+        }
+        .alert(
+            "Different workspace?",
+            isPresented: Binding(
+                get: { differentWorkspacePrompt != nil },
+                set: { if !$0 { differentWorkspacePrompt = nil } }
+            ),
+            presenting: differentWorkspacePrompt
+        ) { prompt in
+            Button("Replace pairing") {
+                let scanned = prompt.qrText
+                differentWorkspacePrompt = nil
+                Task { await handleRepair(qrText: scanned, allowWorkspaceSwitch: true) }
+            }
+            Button("Cancel", role: .cancel) {
+                differentWorkspacePrompt = nil
+            }
+        } message: { prompt in
+            Text("This QR is for \(prompt.scannedName). Continuing will sign this device into that workspace instead.")
         }
         .sheet(isPresented: $showingDocuments) {
             if let api = coordinator.captureAPI,
@@ -243,6 +302,24 @@ struct HomeContainerView: View {
                         }
                 }
                 .accessibilityLabel("Pending uploads — \(pendingUploadCount)")
+            }
+        }
+        if let expiresAt = coordinator.activeContext?.workspace.authMethod.sessionExpiresAt {
+            ToolbarItem(placement: .topBarTrailing) {
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    let status = PairingStatus(expiresAt: expiresAt, now: context.date)
+                    if status.level == .warning || status.level == .urgent {
+                        Button {
+                            showingRepairScanner = true
+                        } label: {
+                            PairingStatusChip(
+                                level: status.level,
+                                label: status.shortDescription
+                            )
+                        }
+                        .accessibilityHint("Tap to scan a fresh QR code and refresh this device's pairing.")
+                    }
+                }
             }
         }
         ToolbarItem(placement: .topBarTrailing) {
@@ -506,5 +583,157 @@ struct HomeContainerView: View {
     /// Instance shorthand for ``HomeContainerView/result(for:)``.
     private func result(for error: CaptureServiceError) -> HomeView.HomeViewResult {
         Self.result(for: error)
+    }
+
+    // MARK: - Re-pair banner
+
+    @ViewBuilder
+    private var repairBannerView: some View {
+        switch repairBanner {
+        case .none:
+            EmptyView()
+        case .success(let workspaceName, let until):
+            RepairBannerRow(
+                systemImage: "checkmark.circle.fill",
+                tint: BrandColors.statusSuccess,
+                title: "Pairing refreshed",
+                detail: "\(workspaceName) — paired until \(Self.bannerFormatter.string(from: until))",
+                onDismiss: { repairBanner = .none }
+            )
+            .transition(.move(edge: .top).combined(with: .opacity))
+        case .failure(let reason):
+            RepairBannerRow(
+                systemImage: "exclamationmark.triangle.fill",
+                tint: BrandColors.statusError,
+                title: "Couldn't re-pair",
+                detail: reason,
+                onDismiss: { repairBanner = .none }
+            )
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
+    }
+
+    private static let bannerFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        return f
+    }()
+
+    // MARK: - Re-pair handling
+
+    /// Routes a scanned QR string into ``AppCoordinator/repairCurrentDevice``
+    /// and reflects the outcome into the on-screen banner. The
+    /// `allowWorkspaceSwitch` flag is set to true only on the
+    /// confirm-dialog branch — the first attempt always defers to the
+    /// user when the QR points at a different workspace.
+    private func handleRepair(qrText: String, allowWorkspaceSwitch: Bool) async {
+        let outcome = await coordinator.repairCurrentDevice(
+            qrText: qrText,
+            allowWorkspaceSwitch: allowWorkspaceSwitch
+        )
+        await MainActor.run {
+            switch outcome {
+            case .refreshed(let credential):
+                repairBanner = .success(
+                    workspaceName: credential.workspaceName,
+                    until: credential.authMethod.sessionExpiresAt
+                )
+                // Auto-clear after 5 seconds so the banner doesn't
+                // linger forever.
+                Task {
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    await MainActor.run {
+                        if case .success = repairBanner {
+                            repairBanner = .none
+                        }
+                    }
+                }
+            case .differentWorkspace(let name, _):
+                differentWorkspacePrompt = DifferentWorkspacePrompt(
+                    qrText: qrText,
+                    scannedName: name
+                )
+            case .failed(let reason):
+                repairBanner = .failure(reason: reason)
+            }
+        }
+    }
+}
+
+/// One-line banner shown above the home navigation chrome after a
+/// re-pair attempt. Auto-dismisses on success after a few seconds via
+/// the `Task.sleep` in `handleRepair`; on failure the user has to tap
+/// the close icon (so they actually read the reason).
+private struct RepairBannerRow: View {
+    let systemImage: String
+    let tint: Color
+    let title: String
+    let detail: String
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Spacing.md) {
+            Image(systemName: systemImage)
+                .foregroundStyle(tint)
+                .font(.body.weight(.semibold))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(BrandTypography.bodyEmphasis)
+                    .foregroundStyle(BrandColors.textPrimary)
+                Text(detail)
+                    .font(BrandTypography.caption)
+                    .foregroundStyle(BrandColors.textSecondary)
+                    .multilineTextAlignment(.leading)
+            }
+            Spacer()
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(BrandColors.textSecondary)
+                    .padding(8)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, Spacing.md)
+        .padding(.vertical, Spacing.sm)
+        .background(BrandColors.surfaceSecondary)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(BrandColors.borderDefault)
+                .frame(height: 0.5)
+        }
+    }
+}
+
+/// Wraps ``QRScannerView`` in a navigation chrome with a Cancel
+/// button. Lives next to ``HomeContainerView`` because it's the only
+/// caller; if we ever surface the re-pair flow from another screen
+/// we can promote it to its own file.
+private struct RepairScannerSheet: View {
+
+    let onScan: @MainActor (String) -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            QRScannerView(
+                prompt: "Scan the QR code from the lakeLoom Databricks App to refresh this device's pairing.",
+                onCodeScanned: onScan
+            )
+            .ignoresSafeArea()
+            .navigationTitle("Re-pair device")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                        .tint(.white)
+                }
+            }
+            .toolbarBackground(.black.opacity(0.5), for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
+        }
     }
 }

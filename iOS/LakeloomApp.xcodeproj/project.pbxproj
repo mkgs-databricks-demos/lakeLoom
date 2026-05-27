@@ -71,6 +71,8 @@
 		774542041B22856F3444D49F /* RootRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = F205A3F8A7F46790E1343317 /* RootRoute.swift */; };
 		790F685BE0B1502E1BF5D6CB /* InMemoryKeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3430D5ECDB96A6DB0C04B988 /* InMemoryKeychainStore.swift */; };
 		796DD9D3DA2BA723D188D58B /* PairingPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93668DA65AA9416893D802E8 /* PairingPayload.swift */; };
+		E00020A1E001E001E001E001 /* PairingStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00010A1E001E001E001E001 /* PairingStatus.swift */; };
+		E00020A2E002E002E002E002 /* PairingStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00010A2E002E002E002E002 /* PairingStatusTests.swift */; };
 		7A7E20CACBCC55211E33BCA7 /* RequestSigner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 992CA44AB3C4FD727539DF2C /* RequestSigner.swift */; };
 		7D74F03B661421CD063B543C /* InMemoryDefaultsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C869ABB468A84F8F90533D3B /* InMemoryDefaultsStore.swift */; };
 		7FCC7D89758600340C0E4F75 /* CacheEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 361E2D490F04B45A85E9E0E9 /* CacheEntry.swift */; };
@@ -92,6 +94,7 @@
 		973B1CF4EA081E24968E4C78 /* FakeM2MTokenClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 071772235FA548B8767EBD65 /* FakeM2MTokenClient.swift */; };
 		9B73CE02744EF97ED7DB236A /* ProjectServiceDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE50805663FBD0A8ECE51BE6 /* ProjectServiceDiagnostics.swift */; };
 		9D229627CCBC860A1835FDEA /* AppCoordinator+Onboarding.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6C8A54D5498F7B543CC47CE /* AppCoordinator+Onboarding.swift */; };
+		E00020A3E003E003E003E003 /* AppCoordinator+Repair.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00010A3E003E003E003E003 /* AppCoordinator+Repair.swift */; };
 		A2306A27ADE61654B3419815 /* DatabricksIdentityClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D82D35B3F8084B212198F1B4 /* DatabricksIdentityClient.swift */; };
 		A2335FCCF1E61286BBF82B3D /* CoreDataStack+InMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7734BB9702C521CCE5ED38D /* CoreDataStack+InMemory.swift */; };
 		A2FD09D632F81D97C7AB04E7 /* DeviceKeyStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F59333585D8B83B533D71FC /* DeviceKeyStoreTests.swift */; };
@@ -323,6 +326,8 @@
 		9224F1282D2E6DB616A94AF0 /* CoreDataStackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreDataStackTests.swift; sourceTree = "<group>"; };
 		927CB0E01F0FAD3A493A5E83 /* LakeloomAppClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LakeloomAppClientTests.swift; sourceTree = "<group>"; };
 		93668DA65AA9416893D802E8 /* PairingPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingPayload.swift; sourceTree = "<group>"; };
+		E00010A1E001E001E001E001 /* PairingStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingStatus.swift; sourceTree = "<group>"; };
+		E00010A2E002E002E002E002 /* PairingStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingStatusTests.swift; sourceTree = "<group>"; };
 		95407697C9C8AB8C033F6AB2 /* AppSignposter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSignposter.swift; sourceTree = "<group>"; };
 		980201A3451EC115F3E5ED90 /* LogEntryCollectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogEntryCollectorTests.swift; sourceTree = "<group>"; };
 		9803CE79226C45FB0CA23696 /* MetricsRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricsRegistryTests.swift; sourceTree = "<group>"; };
@@ -385,6 +390,7 @@
 		F205A3F8A7F46790E1343317 /* RootRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootRoute.swift; sourceTree = "<group>"; };
 		F28EC61996F3DB48FE8C38C6 /* OutboxRecord+CoreDataClass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OutboxRecord+CoreDataClass.swift"; sourceTree = "<group>"; };
 		F6C8A54D5498F7B543CC47CE /* AppCoordinator+Onboarding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppCoordinator+Onboarding.swift"; sourceTree = "<group>"; };
+		E00010A3E003E003E003E003 /* AppCoordinator+Repair.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppCoordinator+Repair.swift"; sourceTree = "<group>"; };
 		FB390E143DB0511F80869D10 /* Spacing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Spacing.swift; sourceTree = "<group>"; };
 		FBE7480D4A2F1A24A1DD51D1 /* SessionRecord+CoreDataProperties.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionRecord+CoreDataProperties.swift"; sourceTree = "<group>"; };
 		FD573DAB2799C24220D8300E /* LakeloomApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LakeloomApp.swift; sourceTree = "<group>"; };
@@ -595,6 +601,7 @@
 				AAAD4271FA0B0838924B18D9 /* ActiveContext.swift */,
 				B34BB2207F71F6C2F834151D /* AppCoordinator.swift */,
 				F6C8A54D5498F7B543CC47CE /* AppCoordinator+Onboarding.swift */,
+				E00010A3E003E003E003E003 /* AppCoordinator+Repair.swift */,
 				B234DA439DC67685114504B1 /* AppCoordinator+SteadyState.swift */,
 				E273C220572125EC58DD8826 /* AppError.swift */,
 				9DD1C0206CBD038592374E49 /* AppPhase.swift */,
@@ -653,6 +660,7 @@
 				FDDE4DDAFD37BAB976D1C7A0 /* Pairing */,
 				7D23CC687F33D45BCFBAC181 /* AuthServiceTests.swift */,
 				C65BE391381658CE91DB8E6C /* KeychainStoreTests.swift */,
+				E00010A2E002E002E002E002 /* PairingStatusTests.swift */,
 				65650403FBD0DA24FB6CB4A4 /* SCIMMeResponseTests.swift */,
 			);
 			path = Auth;
@@ -1081,6 +1089,7 @@
 				D4E3F67AC42C6D72B111E652 /* M2MTokenClient.swift */,
 				5ACDE0D326484062FF9B27A1 /* OAuthTokenResponse.swift */,
 				93668DA65AA9416893D802E8 /* PairingPayload.swift */,
+				E00010A1E001E001E001E001 /* PairingStatus.swift */,
 				1F8C68EE40684831BCCD364B /* QRScannerView.swift */,
 				992CA44AB3C4FD727539DF2C /* RequestSigner.swift */,
 				6EF745442B55821EDB31508B /* XcodeSPNCredentials.swift */,
@@ -1346,6 +1355,7 @@
 			files = (
 				30E9AD6243747BE6CA676371 /* AppCoordinatorTests.swift in Sources */,
 				B3DB9694585016D260636697 /* AuthServiceTests.swift in Sources */,
+				E00020A2E002E002E002E002 /* PairingStatusTests.swift in Sources */,
 				67126C18774407E4CEDC24CD /* CaptureAPIClientTests.swift in Sources */,
 				F0020A11F011F011F011F011 /* CaptureContextStoreTests.swift in Sources */,
 				F0020A12F012F012F012F012 /* CaptureServicePersistenceTests.swift in Sources */,
@@ -1413,6 +1423,7 @@
 			files = (
 				3381FC8E29DFA0DE80210B9F /* ActiveContext.swift in Sources */,
 				9D229627CCBC860A1835FDEA /* AppCoordinator+Onboarding.swift in Sources */,
+				E00020A3E003E003E003E003 /* AppCoordinator+Repair.swift in Sources */,
 				FCCBE2150BA63E0247369145 /* AppCoordinator+SteadyState.swift in Sources */,
 				B131AF273FF9B8846355BFBF /* AppCoordinator.swift in Sources */,
 				166164611BC4C9BAFEF953FF /* AppEndpoint.swift in Sources */,
@@ -1523,6 +1534,7 @@
 				4D38820A40357507E36534DA /* OutboxStateChange+CoreDataProperties.swift in Sources */,
 				F7C3D65F0F2544571FA082B1 /* OutboxStateChange+DTO.swift in Sources */,
 				796DD9D3DA2BA723D188D58B /* PairingPayload.swift in Sources */,
+				E00020A1E001E001E001E001 /* PairingStatus.swift in Sources */,
 				25CE1A747997AA62A29AB5EF /* ProjectAPIClient.swift in Sources */,
 				CE39B173CF5AABAE62965160 /* ProjectCache.swift in Sources */,
 				4E0DE6BF7D9F371D617B5682 /* ProjectListStore.swift in Sources */,

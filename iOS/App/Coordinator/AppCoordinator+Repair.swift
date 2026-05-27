@@ -1,0 +1,125 @@
+import Foundation
+import UIKit
+
+/// Re-pair flow — the user is already signed in but their paired
+/// session is approaching expiry (or has already expired) and they're
+/// scanning a fresh QR code from the Databricks App to refresh it.
+///
+/// Backed by ``AuthServicing/signInViaPairing(qrText:deviceLabel:)``:
+///   * Same workspace → keychain entries (credential, session token,
+///     xcode SPN) are upserted in place. `activeWorkspaceID` stays
+///     pointing at the same workspace.
+///   * Different workspace → returned as
+///     ``RepairOutcome/differentWorkspace`` so the UI can warn the
+///     user before silently mutating their workspace list. We do NOT
+///     auto-add a second pairing here; the dedicated "Sign in to
+///     another workspace" affordance covers that case.
+extension AppCoordinator {
+
+    public enum RepairOutcome: Sendable, Equatable {
+        /// QR successfully re-paired the existing workspace; UI can
+        /// dismiss the sheet and surface a success toast.
+        case refreshed(WorkspaceCredential)
+        /// QR was valid but pointed at a workspace the user isn't
+        /// currently signed into. UI presents a confirm dialog
+        /// before proceeding (which it does by calling
+        /// `repairCurrentDevice` again with `allowWorkspaceSwitch:
+        /// true`).
+        case differentWorkspace(scannedWorkspaceName: String, scannedWorkspaceID: String)
+        /// QR decode succeeded but the server rejected the confirm
+        /// or the device key roundtrip threw. Carries a user-visible
+        /// reason string mapped the same way as the onboarding QR
+        /// flow does.
+        case failed(reason: String)
+    }
+
+    public func repairCurrentDevice(
+        qrText: String,
+        allowWorkspaceSwitch: Bool = false
+    ) async -> RepairOutcome {
+        // Decode locally first so we can short-circuit the
+        // different-workspace case without burning a network round
+        // trip. The decode logic + accepted formats live in
+        // PairingPayload (raw JSON, data: URI, base64, base64url).
+        let payload: PairingPayload
+        do {
+            payload = try PairingPayload.decode(from: qrText)
+        } catch let error as PairingPayload.DecodingError {
+            return .failed(reason: Self.message(for: error))
+        } catch {
+            return .failed(reason: error.localizedDescription)
+        }
+
+        // Compare against the active workspace ID. AuthService derives
+        // workspaceID from the workspace URL the same way; replicate
+        // the derivation locally so we don't have to expose it. The
+        // current convention is "host string" — see Module 01 §5.7.
+        let scannedWorkspaceID = payload.workspace.url.host ?? payload.workspace.id
+        let activeWorkspaceID = await auth.activeWorkspace?.id
+
+        if let activeWorkspaceID,
+           activeWorkspaceID != scannedWorkspaceID,
+           !allowWorkspaceSwitch {
+            return .differentWorkspace(
+                scannedWorkspaceName: payload.workspace.name,
+                scannedWorkspaceID: scannedWorkspaceID
+            )
+        }
+
+        let deviceLabel = await Self.currentDeviceLabel()
+        do {
+            let credential = try await auth.signInViaPairing(
+                qrText: qrText,
+                deviceLabel: deviceLabel
+            )
+            // Reseed the endpoint resolver in case the Databricks App
+            // base URL rotated (e.g., new deploy URL). The onboarding
+            // flow does this on every sign-in; same call here.
+            await endpointResolver.seed(
+                workspaceID: credential.id,
+                appBaseURL: credential.appBaseURL
+            )
+
+            // Refresh `activeContext` so views observing it (e.g.
+            // AccountSettingsView's Pairing section) re-render with
+            // the new sessionExpiresAt + identity. The .signedIn
+            // event handler in observeAuthEvents() intentionally
+            // doesn't touch activeContext — it expects the action
+            // path to own that update, which we do here.
+            if let current = activeContext, current.workspace.id == credential.id {
+                // Same workspace — keep the active project, swap the
+                // refreshed credential + user in.
+                activeContext = ActiveContext(
+                    user: credential.user,
+                    workspace: credential,
+                    project: current.project,
+                    establishedAt: nowProvider()
+                )
+            } else {
+                // Different workspace (only reachable via
+                // allowWorkspaceSwitch: true). Project selection has
+                // to redo against the new workspace — defer to
+                // routeAfterBootstrap which already handles
+                // default→firstAvailable→picker.
+                await reroute()
+            }
+
+            return .refreshed(credential)
+        } catch let error as AuthError {
+            return .failed(reason: Self.message(for: error))
+        } catch {
+            return .failed(reason: error.localizedDescription)
+        }
+    }
+
+    private static func message(for error: PairingPayload.DecodingError) -> String {
+        switch error {
+        case .invalidBase64:
+            return "This QR code is malformed. Generate a fresh one from the Databricks App."
+        case .invalidJSON(let reason):
+            return "Couldn't read this QR code (\(reason))."
+        case .unsupportedVersion(let found, let supported):
+            return "This QR was generated by a newer Databricks App (v\(found)). Update lakeLoom (this build supports v\(supported))."
+        }
+    }
+}
