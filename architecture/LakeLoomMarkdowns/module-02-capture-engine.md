@@ -383,10 +383,21 @@ TranscriberFeed and AudioRecorder each call `subscribe()` once at session start.
 
 ### 5.4 Route Change and Interruption Handling
 
-Two `NotificationCenter` observers, registered at session start and removed at end:
+**As-built (PR #73, 2026-05-26):** background recording is on. The target declares `UIBackgroundModes = ["audio"]`, so `AVAudioEngine` keeps running when the screen locks or the user swipes to another app. The lock-screen Now Playing widget shows "Recording — \<label\>" with a live timer and a Stop button.
 
-- `AVAudioSession.routeChangeNotification` — emit `.warning(.routeChanged(...))`. We do not stop the session on route changes; AirPods unplugged mid-meeting should fall back to the built-in mic seamlessly.
-- `AVAudioSession.interruptionNotification` — `.began` triggers `stopSession(reason: .interrupted)`. `.ended` is logged but we don't auto-resume — the user must explicitly restart. This matches Voice Memos' behavior and keeps consent crisp.
+Two `NotificationCenter` observers, registered inside `EngineAudioRecordingEngine.start()` and removed in `stop()` / `cancel()`:
+
+- `AVAudioSession.routeChangeNotification` — logged (`audio.session.route_changed`); engine stays running. AirPods unplugged mid-meeting falls back to the built-in mic seamlessly.
+- `AVAudioSession.interruptionNotification`:
+    - `.began` → `engine.pause()` (keep tap + writer in place), yield `true` on the interruption stream. UI surfaces a "Recording paused — waiting for system audio" chip; Now Playing flips its playback rate to `0.0` so the lock-screen widget reads as paused.
+    - `.ended` with `.shouldResume` → reactivate the audio session, `engine.start()` again, yield `false`. Logged as `audio.session.resumed`.
+    - `.ended` without `.shouldResume` → engine stays paused but the interruption window has ended; yield `false`. The user has to hit Stop and re-record. Logged as `audio.session.interrupt_ended_no_resume`.
+
+The interruption stream is published via `AudioInterruptionPublishing` (the engine conforms alongside `AudioBufferSource`; same instance fills both roles). `LiveCaptureService` subscribes after `startCapture` and broadcasts onto its own `interruptionUpdates()` stream for the recording UI.
+
+**Lock-screen / Control Center surface:** `NowPlayingController` (a `@MainActor` final class) drives `MPNowPlayingInfoCenter` and `MPRemoteCommandCenter`. Only the Stop command is enabled — Play/Pause/Skip/Seek are all disabled so the lock-screen widget doesn't show transport controls that don't apply to a recorder. The Stop command's handler calls `LiveCaptureService.stopCapture()` and runs the normal finalize → upload → patch-server path.
+
+**Out of scope (foreground-only):** photo capture. `AVCaptureSession` requires foreground; tapping "Take photo" while backgrounded would fail iOS-side. The capture flow simply doesn't surface the photo button when the cover is off-screen.
 
 `AVAudioSession.mediaServicesWereResetNotification` is the nuclear case: we tear down everything, emit a warning + error, and require the user to start a new session.
 

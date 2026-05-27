@@ -38,6 +38,14 @@ struct RecordingView: View {
     /// return a fresh independent stream per call.
     let transcriptStream: (() async -> AsyncStream<TranscriptSegment>?)?
 
+    /// Factory for the interruption-state stream. Returns nil when
+    /// the capture service hasn't wired one (older test paths). Each
+    /// yield is `true` (engine paused due to an iOS interruption like
+    /// a phone call) / `false` (resumed or interruption window
+    /// ended). Drives the "Recording paused" chip above the
+    /// state indicator.
+    var interruptionStream: (() async -> AsyncStream<Bool>?)? = nil
+
     /// Optional in-session photo capture trigger. When provided, the
     /// view shows a camera button next to Stop that awaits this
     /// closure — the closure presents the camera (via
@@ -50,6 +58,7 @@ struct RecordingView: View {
     @State private var pulseScale: CGFloat = 1.0
     @State private var segments: [TranscriptSegment] = []
     @State private var isCapturingPhoto = false
+    @State private var isInterrupted = false
 
     var body: some View {
         ZStack {
@@ -60,6 +69,7 @@ struct RecordingView: View {
                 header
                 transcriptPanel
                 Spacer(minLength: Spacing.md)
+                interruptionChip
                 stateIndicator
                 elapsedReadout
                 Spacer(minLength: Spacing.md)
@@ -82,6 +92,47 @@ struct RecordingView: View {
             }
         }
         .task { await subscribeToTranscripts() }
+        .task { await subscribeToInterruptions() }
+    }
+
+    // MARK: - Interruption chip
+
+    /// Shown only while `isInterrupted == true`. Slides in above the
+    /// state indicator so the user immediately knows iOS has paused
+    /// the recording (incoming call, Siri trigger). When the
+    /// interruption ends, the chip slides back out and the normal
+    /// recording UI returns.
+    @ViewBuilder
+    private var interruptionChip: some View {
+        if isInterrupted, case .recording = state {
+            HStack(spacing: Spacing.sm) {
+                Image(systemName: "pause.circle.fill")
+                Text("Recording paused — waiting for system audio")
+                    .font(BrandTypography.caption)
+            }
+            .foregroundStyle(BrandColors.statusWarning)
+            .padding(.horizontal, Spacing.md)
+            .padding(.vertical, Spacing.sm)
+            .background(
+                BrandColors.surfaceSecondary,
+                in: Capsule()
+            )
+            .overlay(
+                Capsule().stroke(BrandColors.statusWarning.opacity(0.4), lineWidth: 0.5)
+            )
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .accessibilityLabel("Recording paused due to a system audio interruption")
+        }
+    }
+
+    private func subscribeToInterruptions() async {
+        guard let factory = interruptionStream else { return }
+        guard let stream = await factory() else { return }
+        for await interrupted in stream {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isInterrupted = interrupted
+            }
+        }
     }
 
     // MARK: - Live transcript panel

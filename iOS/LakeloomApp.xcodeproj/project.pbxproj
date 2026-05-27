@@ -149,6 +149,8 @@
 		A0020A03A003A003A003A003 /* LiveAudioRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0010A03A003A003A003A003 /* LiveAudioRecorder.swift */; };
 		A0020A04A004A004A004A004 /* EngineAudioRecordingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0010A04A004A004A004A004 /* EngineAudioRecordingEngine.swift */; };
 		A0020A05A005A005A005A005 /* AudioBufferSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0010A05A005A005A005A005 /* AudioBufferSource.swift */; };
+		D00020A1D001D001D001D001 /* NowPlayingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00010A1D001D001D001D001 /* NowPlayingController.swift */; };
+		D00020A2D002D002D002D002 /* AudioInterruptionPublishing.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00010A2D002D002D002D002 /* AudioInterruptionPublishing.swift */; };
 		19020A0819001900190019A8 /* StreamingSpeechRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19010A0819001900190019A8 /* StreamingSpeechRecognizer.swift */; };
 		19020A0919001900190019A9 /* LiveStreamingSpeechRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19010A0919001900190019A9 /* LiveStreamingSpeechRecognizer.swift */; };
 		A0020A11A011A011A011A011 /* FakeAudioRecordingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0010A11A011A011A011A011 /* FakeAudioRecordingEngine.swift */; };
@@ -168,6 +170,9 @@
 		C0020A03C003C003C003C003 /* LiveCaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0010A03C003C003C003C003 /* LiveCaptureService.swift */; };
 		C0020A11C011C011C011C011 /* FakeCaptureAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0010A11C011C011C011C011 /* FakeCaptureAPIClient.swift */; };
 		C0020A12C012C012C012C012 /* FakeAudioRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0010A12C012C012C012C012 /* FakeAudioRecorder.swift */; };
+		D00020A3D003D003D003D003 /* FakeAudioInterruptionPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00010A3D003D003D003D003 /* FakeAudioInterruptionPublisher.swift */; };
+		D00020A4D004D004D004D004 /* SpyNowPlayingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00010A4D004D004D004D004 /* SpyNowPlayingController.swift */; };
+		D00020A5D005D005D005D005 /* LiveCaptureServiceInterruptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00010A5D005D005D005D005 /* LiveCaptureServiceInterruptionTests.swift */; };
 		C0020A13C013C013C013C013 /* FakeUploadCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0010A13C013C013C013C013 /* FakeUploadCoordinator.swift */; };
 		C0020A14C014C014C014C014 /* LiveCaptureServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0010A14C014C014C014C014 /* LiveCaptureServiceTests.swift */; };
 		D0020A01D001D001D001D001 /* EndpointSmokeTestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0010A01D001D001D001D001 /* EndpointSmokeTestView.swift */; };
@@ -383,12 +388,15 @@
 		FB390E143DB0511F80869D10 /* Spacing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Spacing.swift; sourceTree = "<group>"; };
 		FBE7480D4A2F1A24A1DD51D1 /* SessionRecord+CoreDataProperties.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionRecord+CoreDataProperties.swift"; sourceTree = "<group>"; };
 		FD573DAB2799C24220D8300E /* LakeloomApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LakeloomApp.swift; sourceTree = "<group>"; };
+		D000A0F1D0F1D0F1D0F1D0F1 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		FEB0DA2CBAF15DD19C0D2100 /* OutboxRecord+CoreDataProperties.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OutboxRecord+CoreDataProperties.swift"; sourceTree = "<group>"; };
 		A0010A01A001A001A001A001 /* AudioRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecorder.swift; sourceTree = "<group>"; };
 		A0010A02A002A002A002A002 /* AudioRecordingEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecordingEngine.swift; sourceTree = "<group>"; };
 		A0010A03A003A003A003A003 /* LiveAudioRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveAudioRecorder.swift; sourceTree = "<group>"; };
 		A0010A04A004A004A004A004 /* EngineAudioRecordingEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineAudioRecordingEngine.swift; sourceTree = "<group>"; };
 		A0010A05A005A005A005A005 /* AudioBufferSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioBufferSource.swift; sourceTree = "<group>"; };
+		D00010A1D001D001D001D001 /* NowPlayingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingController.swift; sourceTree = "<group>"; };
+		D00010A2D002D002D002D002 /* AudioInterruptionPublishing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioInterruptionPublishing.swift; sourceTree = "<group>"; };
 		19010A0819001900190019A8 /* StreamingSpeechRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamingSpeechRecognizer.swift; sourceTree = "<group>"; };
 		19010A0919001900190019A9 /* LiveStreamingSpeechRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveStreamingSpeechRecognizer.swift; sourceTree = "<group>"; };
 		A0010A11A011A011A011A011 /* FakeAudioRecordingEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeAudioRecordingEngine.swift; sourceTree = "<group>"; };
@@ -408,6 +416,9 @@
 		C0010A03C003C003C003C003 /* LiveCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveCaptureService.swift; sourceTree = "<group>"; };
 		C0010A11C011C011C011C011 /* FakeCaptureAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeCaptureAPIClient.swift; sourceTree = "<group>"; };
 		C0010A12C012C012C012C012 /* FakeAudioRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeAudioRecorder.swift; sourceTree = "<group>"; };
+		D00010A3D003D003D003D003 /* FakeAudioInterruptionPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeAudioInterruptionPublisher.swift; sourceTree = "<group>"; };
+		D00010A4D004D004D004D004 /* SpyNowPlayingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpyNowPlayingController.swift; sourceTree = "<group>"; };
+		D00010A5D005D005D005D005 /* LiveCaptureServiceInterruptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveCaptureServiceInterruptionTests.swift; sourceTree = "<group>"; };
 		C0010A13C013C013C013C013 /* FakeUploadCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeUploadCoordinator.swift; sourceTree = "<group>"; };
 		C0010A14C014C014C014C014 /* LiveCaptureServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveCaptureServiceTests.swift; sourceTree = "<group>"; };
 		D0010A01D001D001D001D001 /* EndpointSmokeTestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndpointSmokeTestView.swift; sourceTree = "<group>"; };
@@ -659,6 +670,7 @@
 				FFE6FB7D59D2D3D722AEEEE2 /* Resources */,
 				0DBF26829977F9318E46E6A5 /* Telemetry */,
 				D8D2CD6ABFE5DA02EEDD781D /* Views */,
+				D000A0F1D0F1D0F1D0F1D0F1 /* Info.plist */,
 				FD573DAB2799C24220D8300E /* LakeloomApp.swift */,
 			);
 			path = App;
@@ -832,10 +844,12 @@
 			isa = PBXGroup;
 			children = (
 				A0010A05A005A005A005A005 /* AudioBufferSource.swift */,
+				D00010A2D002D002D002D002 /* AudioInterruptionPublishing.swift */,
 				A0010A01A001A001A001A001 /* AudioRecorder.swift */,
 				A0010A02A002A002A002A002 /* AudioRecordingEngine.swift */,
 				A0010A04A004A004A004A004 /* EngineAudioRecordingEngine.swift */,
 				A0010A03A003A003A003A003 /* LiveAudioRecorder.swift */,
+				D00010A1D001D001D001D001 /* NowPlayingController.swift */,
 			);
 			path = Audio;
 			sourceTree = "<group>";
@@ -995,6 +1009,7 @@
 				F0010A12F012F012F012F012 /* CaptureServicePersistenceTests.swift */,
 				11010A01110011001100110A /* CaptureUploadDecodeTests.swift */,
 				C0010A14C014C014C014C014 /* LiveCaptureServiceTests.swift */,
+				D00010A5D005D005D005D005 /* LiveCaptureServiceInterruptionTests.swift */,
 			);
 			path = Captures;
 			sourceTree = "<group>";
@@ -1021,9 +1036,11 @@
 		C0030A01C001C001C001C001 /* Helpers */ = {
 			isa = PBXGroup;
 			children = (
+				D00010A3D003D003D003D003 /* FakeAudioInterruptionPublisher.swift */,
 				C0010A12C012C012C012C012 /* FakeAudioRecorder.swift */,
 				C0010A11C011C011C011C011 /* FakeCaptureAPIClient.swift */,
 				C0010A13C013C013C013C013 /* FakeUploadCoordinator.swift */,
+				D00010A4D004D004D004D004 /* SpyNowPlayingController.swift */,
 			);
 			path = Helpers;
 			sourceTree = "<group>";
@@ -1349,6 +1366,9 @@
 				6F51D58B5DEDCCAADCBEE9C6 /* LakeloomAppClientTests.swift in Sources */,
 				A0020A12A012A012A012A012 /* LiveAudioRecorderTests.swift in Sources */,
 				C0020A14C014C014C014C014 /* LiveCaptureServiceTests.swift in Sources */,
+				D00020A3D003D003D003D003 /* FakeAudioInterruptionPublisher.swift in Sources */,
+				D00020A4D004D004D004D004 /* SpyNowPlayingController.swift in Sources */,
+				D00020A5D005D005D005D005 /* LiveCaptureServiceInterruptionTests.swift in Sources */,
 				E0020A12E012E012E012E012 /* LivePhotoCaptureTests.swift in Sources */,
 				B0020A13B013B013B013B013 /* LiveUploadCoordinatorTests.swift in Sources */,
 				D5D1B7CA8399CCEED871E460 /* LogEntryCollectorTests.swift in Sources */,
@@ -1422,6 +1442,8 @@
 				A0020A03A003A003A003A003 /* LiveAudioRecorder.swift in Sources */,
 				A0020A04A004A004A004A004 /* EngineAudioRecordingEngine.swift in Sources */,
 				A0020A05A005A005A005A005 /* AudioBufferSource.swift in Sources */,
+				D00020A1D001D001D001D001 /* NowPlayingController.swift in Sources */,
+				D00020A2D002D002D002D002 /* AudioInterruptionPublishing.swift in Sources */,
 				19020A0819001900190019A8 /* StreamingSpeechRecognizer.swift in Sources */,
 				19020A0919001900190019A9 /* LiveStreamingSpeechRecognizer.swift in Sources */,
 				E0020A03E003E003E003E003 /* LivePhotoCapture.swift in Sources */,
@@ -1727,6 +1749,7 @@
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "lakeLoom records audio during a capture session so the Databricks side can transcribe the conversation into a project brief.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "lakeLoom runs on-device speech recognition on the audio you've just recorded to stream a live transcript to the project's session log.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -1754,6 +1777,7 @@
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "lakeLoom records audio during a capture session so the Databricks side can transcribe the conversation into a project brief.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "lakeLoom runs on-device speech recognition on the audio you've just recorded to stream a live transcript to the project's session log.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -1798,6 +1822,7 @@
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "lakeLoom records audio during a capture session so the Databricks side can transcribe the conversation into a project brief.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "lakeLoom runs on-device speech recognition on the audio you've just recorded to stream a live transcript to the project's session log.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";

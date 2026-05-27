@@ -31,7 +31,7 @@ import Foundation
 ///
 /// File-size note: a 30s recording produces ~5 MB of intermediate
 /// CAF (48 kHz Float32 mono) and ~250 KB of final AAC m4a (~64 kbps).
-actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource {
+actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, AudioInterruptionPublishing {
 
     private var engine: AVAudioEngine?
     private var cafWriter: AVAudioFile?
@@ -48,8 +48,22 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource {
     /// ``AudioBufferSource/buffers()``. Single-consumer.
     private var bufferStream: AsyncStream<PCMBufferEnvelope>?
     private var bufferContinuation: AsyncStream<PCMBufferEnvelope>.Continuation?
+    /// Interruption events: yields `true` on `.began` (engine paused)
+    /// and `false` on `.ended` (engine resumed, or paused-pending if
+    /// iOS withheld `.shouldResume`). Created on `start()`, finished
+    /// on `stop()` / `cancel()`.
+    private var interruptionStream: AsyncStream<Bool>?
+    private var interruptionContinuation: AsyncStream<Bool>.Continuation?
+    private var isInterrupted = false
+    /// `NotificationCenter` observer tokens — held so we can detach
+    /// on stop/cancel and avoid leaking observers across recordings.
+    private var interruptionObserver: NSObjectProtocol?
+    private var routeChangeObserver: NSObjectProtocol?
+    private let logger: AppLogger
 
-    init() {}
+    init(logger: AppLogger = AppLogger(category: .capture)) {
+        self.logger = logger
+    }
 
     func currentPermission() async -> Bool? {
         switch AVAudioApplication.shared.recordPermission {
@@ -146,6 +160,16 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource {
         self.intermediateURL = intermediate
         self.bufferStream = stream
         self.bufferContinuation = streamContinuation
+
+        // Build the interruption stream + register OS observers AFTER
+        // the engine is running. Doing this last means a throw in the
+        // setup above doesn't leak observers (their lifetime is bound
+        // to a successfully-started recording).
+        let (interruptStream, interruptContinuation) = AsyncStream<Bool>.makeStream()
+        self.interruptionStream = interruptStream
+        self.interruptionContinuation = interruptContinuation
+        self.isInterrupted = false
+        registerSessionObservers()
     }
 
     // MARK: - AudioBufferSource
@@ -154,12 +178,24 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource {
         bufferStream
     }
 
+    // MARK: - AudioInterruptionPublishing
+
+    func interruptionUpdates() async -> AsyncStream<Bool>? {
+        interruptionStream
+    }
+
     func stop() async throws -> Double {
         guard let avEngine = engine,
               let intermediate = intermediateURL,
               let final = finalURL else {
             throw AudioRecorderError.notRecording
         }
+
+        // Detach session observers before tearing the engine down so
+        // a late interruption notification can't sneak in while we're
+        // mid-stop. Done first because removeObserver is a synchronous
+        // O(1) op — no risk of dropping a real interruption signal.
+        unregisterSessionObservers()
 
         // Stop the audio pipeline FIRST, before any await, so no new
         // tap buffers fire while we're transcoding.
@@ -173,6 +209,8 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource {
         // on its recognition request.
         bufferContinuation?.finish()
         bufferContinuation = nil
+        interruptionContinuation?.finish()
+        interruptionContinuation = nil
 
         let frames = frameCounter?.snapshot() ?? 0
         let measuredDuration = sampleRate > 0 ? Double(frames) / sampleRate : 0
@@ -202,11 +240,14 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource {
 
     func cancel() async {
         guard let avEngine = engine else { return }
+        unregisterSessionObservers()
         avEngine.inputNode.removeTap(onBus: 0)
         avEngine.stop()
         cafWriter = nil
         bufferContinuation?.finish()
         bufferContinuation = nil
+        interruptionContinuation?.finish()
+        interruptionContinuation = nil
         if let intermediate = intermediateURL {
             try? FileManager.default.removeItem(at: intermediate)
         }
@@ -226,6 +267,141 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource {
         intermediateURL = nil
         bufferStream = nil
         bufferContinuation = nil
+        interruptionStream = nil
+        interruptionContinuation = nil
+        isInterrupted = false
+    }
+
+    // MARK: - Session observers
+
+    /// Register for `AVAudioSession.interruptionNotification` and
+    /// `routeChangeNotification`. Both observer blocks run on an
+    /// arbitrary notification thread, so they extract Sendable
+    /// values synchronously and hop back into the actor via a Task.
+    /// Tokens are stored so `unregisterSessionObservers` can detach.
+    private func registerSessionObservers() {
+        let center = NotificationCenter.default
+        interruptionObserver = center.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] notification in
+            guard
+                let typeValue = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                let type = AVAudioSession.InterruptionType(rawValue: typeValue)
+            else { return }
+            let shouldResume: Bool
+            if let optionsValue = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt {
+                shouldResume = AVAudioSession.InterruptionOptions(rawValue: optionsValue).contains(.shouldResume)
+            } else {
+                shouldResume = false
+            }
+            Task { [weak self] in
+                await self?.handleInterruption(type: type, shouldResume: shouldResume)
+            }
+        }
+        routeChangeObserver = center.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] notification in
+            guard
+                let reasonValue = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+                let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue)
+            else { return }
+            Task { [weak self] in
+                await self?.handleRouteChange(reason: reason)
+            }
+        }
+    }
+
+    private func unregisterSessionObservers() {
+        let center = NotificationCenter.default
+        if let interruptionObserver {
+            center.removeObserver(interruptionObserver)
+            self.interruptionObserver = nil
+        }
+        if let routeChangeObserver {
+            center.removeObserver(routeChangeObserver)
+            self.routeChangeObserver = nil
+        }
+    }
+
+    /// React to an interruption event.
+    ///
+    /// `.began` → pause the engine (keep tap + writer in place so the
+    /// recording resumes seamlessly), broadcast `true` on the
+    /// interruption stream.
+    ///
+    /// `.ended` with `.shouldResume` → reactivate the audio session
+    /// and restart the engine. Broadcast `false`.
+    ///
+    /// `.ended` without `.shouldResume` → iOS is signalling the
+    /// interruption is over but the OS doesn't want us auto-resuming
+    /// (typical for user-initiated alarms, Siri triggers). Stay
+    /// paused but still broadcast `false` so the UI can offer a
+    /// manual resume affordance later. Today nothing manually
+    /// resumes — captures stay paused until stop().
+    private func handleInterruption(
+        type: AVAudioSession.InterruptionType,
+        shouldResume: Bool
+    ) async {
+        guard let avEngine = engine else { return }
+        switch type {
+        case .began:
+            avEngine.pause()
+            isInterrupted = true
+            interruptionContinuation?.yield(true)
+            await logger.warning(
+                "audio.session.interrupted",
+                metadata: ["phase": .string("began")]
+            )
+        case .ended:
+            if shouldResume {
+                do {
+                    try AVAudioSession.sharedInstance().setActive(true, options: [])
+                    try avEngine.start()
+                    isInterrupted = false
+                    interruptionContinuation?.yield(false)
+                    await logger.info("audio.session.resumed")
+                } catch {
+                    // Resume failed — engine stays paused. Surface
+                    // the false transition so UI can move out of the
+                    // "interrupted" indicator, but log a warning so
+                    // it's visible in the support bundle. User will
+                    // have to stop + restart to recover the run.
+                    interruptionContinuation?.yield(false)
+                    await logger.warning(
+                        "audio.session.resume_failed",
+                        metadata: ["reason": .string(error.localizedDescription)]
+                    )
+                }
+            } else {
+                // OS withheld .shouldResume — leave the engine paused
+                // but signal the interruption window has ended.
+                interruptionContinuation?.yield(false)
+                await logger.info(
+                    "audio.session.interrupt_ended_no_resume"
+                )
+            }
+        @unknown default:
+            return
+        }
+    }
+
+    /// Route changes (headphones unplugged, BT connect/disconnect,
+    /// mic source change) don't tear the engine down — `AVAudioEngine`
+    /// rebinds to the new default input. We log for diagnostics and
+    /// keep recording on the new route.
+    ///
+    /// The one exception is `.oldDeviceUnavailable` with no fallback
+    /// available, which iOS surfaces as a separate interruption. The
+    /// interruption observer handles that path.
+    private func handleRouteChange(reason: AVAudioSession.RouteChangeReason) async {
+        await logger.info(
+            "audio.session.route_changed",
+            metadata: ["reason": .string(String(describing: reason))]
+        )
     }
 
     private func transcode(from source: URL, to destination: URL) async throws {
