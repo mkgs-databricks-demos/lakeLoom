@@ -1,5 +1,6 @@
 import Foundation
 import MediaPlayer
+import UIKit
 
 /// Drives the lock-screen + Control Center "Now Playing" surface
 /// while a capture is recording.
@@ -85,22 +86,21 @@ public final class NowPlayingController: NowPlayingControlling {
             title = "Recording"
         }
 
-        // Minimal payload: title + elapsed time + playback rate.
-        // Earlier versions of this code set `MPNowPlayingInfoPropertyIsLiveStream`,
-        // `MPNowPlayingInfoPropertyMediaType`, and an `MPMediaItemArtwork`
-        // built from `UIImage(systemName: "waveform")`. On a fresh
-        // install we saw an EXC_BREAKPOINT trap inside MediaPlayer on
-        // the Record-tap path — almost certainly an assertion when one
-        // of those richer fields was inconsistent (live-stream + finite
-        // elapsed time, or the SF-symbol-derived bounds). Strip back to
-        // the keys Apple's own sample code uses; we can layer richness
-        // back on once the basic surface is verified on device.
-        let info: [String: Any] = [
+        var info: [String: Any] = [
             MPMediaItemPropertyTitle: title,
             MPMediaItemPropertyArtist: "lakeLoom",
             MPNowPlayingInfoPropertyElapsedPlaybackTime: NSNumber(value: 0.0),
             MPNowPlayingInfoPropertyPlaybackRate: NSNumber(value: 1.0)
         ]
+        // Brand the lock-screen widget with the lakeLoom mark. The
+        // earlier attempt used `UIImage(systemName: "waveform")` which
+        // hit a MediaPlayer assertion — that path was an SF-symbol
+        // image without a concrete bitmap behind it. The asset-catalog
+        // image is a real 1024x1024 PNG, which MPMediaItemArtwork is
+        // happy to render at whatever bounds iOS asks for.
+        if let mark = UIImage(named: "LakeloomMark") {
+            info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: mark.size) { _ in mark }
+        }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
 
         configureRemoteCommands()
@@ -130,26 +130,45 @@ public final class NowPlayingController: NowPlayingControlling {
     private func configureRemoteCommands() {
         let center = MPRemoteCommandCenter.shared()
 
-        // The Stop command is what shows the (■) button on the
-        // lock-screen Now Playing widget. Bind it to our injected
-        // handler so a tap kicks LiveCaptureService.stopCapture().
+        // The lock-screen Now Playing widget renders ONE central
+        // transport button. Apple's default fallback when
+        // `pauseCommand` is disabled is a play (▶) icon — which is
+        // exactly what device testing surfaced and which feels wrong
+        // for an active recording. We bind BOTH `pauseCommand` and
+        // `stopCommand` to the same onStop closure so:
+        //   * The lock-screen widget shows the pause (▮▮) icon
+        //     (since pauseCommand is enabled), and tapping it stops
+        //     the recording — semantically "this is recording right
+        //     now, tap to end it."
+        //   * Control Center's expanded transport row also shows the
+        //     stop button (■), which fires the same path.
+        // We deliberately do NOT implement pause/resume semantics; a
+        // capture session is a single contiguous recording, and the
+        // user's only meaningful action while it's running is to
+        // finalize.
+        center.pauseCommand.isEnabled = true
         center.stopCommand.isEnabled = true
-        // Drop any prior target so toggling start/stop/start during
-        // one process doesn't end up with stacked handlers firing.
         if let prior = stopCommandTarget {
             center.stopCommand.removeTarget(prior)
+            center.pauseCommand.removeTarget(prior)
         }
         stopCommandTarget = center.stopCommand.addTarget { [weak self] _ in
             self?.onStopHandler?()
             return .success
         }
+        // pauseCommand's target list is independent from stopCommand's,
+        // so register the same closure on it too. Whichever surface the
+        // user taps, we end the recording.
+        center.pauseCommand.addTarget { [weak self] _ in
+            self?.onStopHandler?()
+            return .success
+        }
 
-        // Disable every other transport command so iOS doesn't
-        // render irrelevant Skip / Seek controls. A recorder isn't a
-        // music player; the only legal action is Stop.
+        // Disable every other transport command so iOS doesn't render
+        // irrelevant Skip / Seek controls. A recorder isn't a music
+        // player; play (resume from a stop) doesn't apply either.
         let disabled: [MPRemoteCommand] = [
             center.playCommand,
-            center.pauseCommand,
             center.togglePlayPauseCommand,
             center.nextTrackCommand,
             center.previousTrackCommand,
@@ -173,8 +192,10 @@ public final class NowPlayingController: NowPlayingControlling {
         let center = MPRemoteCommandCenter.shared()
         if let prior = stopCommandTarget {
             center.stopCommand.removeTarget(prior)
+            center.pauseCommand.removeTarget(prior)
             stopCommandTarget = nil
         }
         center.stopCommand.isEnabled = false
+        center.pauseCommand.isEnabled = false
     }
 }
