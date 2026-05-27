@@ -287,7 +287,7 @@ The ordering optimizes for: (a) unblocking iOS Module 06, (b) delivering reviewa
 | **Phase 2** | Capture Session Browser | ✅ COMPLETE (2026-05-24) | — |
 | **Phase 3** | Media Viewer & Audio Playback | ✅ COMPLETE (2026-05-24, PR #69) | — |
 | **Phase 4** | Browser-Side Uploads | ✅ COMPLETE (2026-05-25, PR #69) | — |
-| **Phase 5** | Device & Admin Panel | ✅ COMPLETE (2026-05-26) | — |
+| **Phase 5** | Device & Admin Panel | ✅ COMPLETE (2026-05-26, extended same day: admin detail modals, env card, re-pair, extend expiry) | — |
 | **Phase 6** | Transcript Viewer | ⏳ UNBLOCKED — bronze ingest validated (2026-05-21); silver SDP next | 3–4 days |
 | **Phase 7** | Genie Code Session Planning | Blocked on gold-layer tables + Agent design | 5–7 days |
 
@@ -303,10 +303,57 @@ The ordering optimizes for: (a) unblocking iOS Module 06, (b) delivering reviewa
 │   └── /projects/:id            → Project detail (sessions + documents + summary)
 │       ├── /projects/:id/captures/:cid  → Session detail (timeline + media)
 │       └── /projects/:id/generate       → AI generation status + artifacts
-├── /devices                     → Paired devices management
+├── /devices                     → Paired devices management (IMPLEMENTED)
 ├── /pair                        → QR pairing page (IMPLEMENTED)
-└── /admin                       → System health + diagnostics
+└── /admin                       → System health + diagnostics (IMPLEMENTED)
 ```
+
+---
+
+## Phase 5 — Implementation Details (2026-05-26)
+
+### `/devices` — Paired Devices Management
+
+- Device grid with status badges (Active now / Last seen / Expired / Revoked)
+- "Show my devices" toggle (on by default); "Show revoked" toggle
+- "Pair new device" button opens PairDeviceModal (QR inline)
+- Clickable cards open slide-out detail drawer with:
+  - Device stats (projects, uploads, captures breakdown by kind)
+  - Most recent project
+  - Editable device name (inline rename)
+  - Extend expiry (+7 days button)
+  - **Re-pair device** — generates inline QR to re-activate an existing device (avoids duplicates). SSE confirms in real-time.
+- Revoke with confirmation dialog
+- Username display on each card
+
+**Endpoints:**
+- `GET /api/pairing/devices` — list (with `?include_revoked`, `?all_users` params)
+- `GET /api/pairing/devices/:id/stats` — activity stats
+- `PATCH /api/pairing/devices/:id` — rename
+- `POST /api/pairing/devices/:id/extend` — extend expiry (1–30 days)
+- `POST /api/pairing/devices/:id/repair` — re-pair (returns QR payload, resets token/expiry)
+- `DELETE /api/pairing/devices/:id` — soft-revoke
+
+### `/admin` — System Health & Diagnostics
+
+- Overall status banner (healthy/degraded/unhealthy)
+- 7 subsystem cards in 2-column grid, each clickable for detail modal:
+
+| Card | Summary | Detail Modal |
+|------|---------|-------------|
+| Secrets | Key count | Present/missing keys, CLI instructions |
+| Lakebase | Latency, migrations | Stat grid + error trace |
+| Volumes | Per-volume status icons | Path, file count, last write per volume |
+| ZeroBus | Pool ratio, records, throughput | 2×2 stat grid + last activity |
+| Application | Name, Node version, uptime | 2×2 grid + environment (derived from bundle target) |
+| Orphan Sweeper | Last run status | Run details, orphan count, bytes reclaimed |
+| Environment | Variable count | Full sorted env var list (secrets masked, hover for full value) |
+
+- Auto-refresh toggle (30s interval)
+- Manual refresh button
+
+**Endpoint:** `GET /api/admin/health`
+
 
 ---
 

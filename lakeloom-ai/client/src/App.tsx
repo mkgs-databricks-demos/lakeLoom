@@ -9,9 +9,7 @@ import {
 import { Suspense, lazy } from 'react';
 import { useCurrentUser } from './hooks/useCurrentUser';
 
-// ── Route-level code splitting ────────────────────────────────────────────
-// Each page is loaded on demand. Reduces initial bundle from ~1.7 MB to the
-// shell + whichever page the user navigates to first.
+// ── Route-level code splitting ──────────────────────────────────────────
 const ProjectsPage = lazy(() => import('./pages/projects/ProjectsPage').then(m => ({ default: m.ProjectsPage })));
 const ProjectDetailPage = lazy(() => import('./pages/projects/ProjectDetailPage').then(m => ({ default: m.ProjectDetailPage })));
 const CaptureDetailPage = lazy(() => import('./pages/projects/CaptureDetailPage').then(m => ({ default: m.CaptureDetailPage })));
@@ -59,15 +57,12 @@ function Layout() {
           <NavLink to="/devices" className={navLinkClass}>
             Devices
           </NavLink>
-          <NavLink to="/pairing" className={navLinkClass}>
-            Pair Device
-          </NavLink>
           <NavLink to="/admin" className={navLinkClass}>
             Admin
           </NavLink>
         </nav>
 
-        {/* ── User identity pill ─────────────────────────────────────── */}
+        {/* ── User identity pill ─────────────────────────────── */}
         {user && (
           <div className="ml-auto flex items-center gap-2">
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-full
@@ -93,10 +88,7 @@ function Layout() {
   );
 }
 
-// ── Route-level error boundary ────────────────────────────────────────────
-// React Router v7 creates its own error boundary scope that supersedes the outer
-// class-based ErrorBoundary in main.tsx. This component catches navigation errors,
-// lazy-load failures, and unhandled throws from route loaders/actions/components.
+// ── Route-level error boundary ──────────────────────────────────────────
 function RouteErrorFallback() {
   const error = useRouteError();
 

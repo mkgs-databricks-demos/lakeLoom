@@ -75,20 +75,46 @@ export async function setupAdminRoutes(appkit: AppKitContext): Promise<void> {
         }
 
         // ── Volumes check ─────────────────────────────────────────────────
+        // Checks actual volume accessibility via Lakebase upload records,
+        // plus env var configuration as secondary signal.
         const volumeEnvVars: Record<string, string> = {
-          session_audio: 'VOLUME_SESSION_AUDIO_PATH',
-          screenshots: 'VOLUME_SCREENSHOTS_PATH',
-          documents: 'VOLUME_DOCUMENTS_PATH',
+          session_audio: 'DATABRICKS_VOLUME_SESSION_AUDIO',
+          screenshots: 'DATABRICKS_VOLUME_SCREENSHOTS',
+          documents: 'DATABRICKS_VOLUME_DOCUMENTS',
         };
-        const volumeChecks: Record<string, { status: CheckStatus; path?: string; error?: string }> = {};
+        const volumeChecks: Record<string, { status: CheckStatus; path?: string; configured: boolean; file_count?: number; last_write?: string | null; error?: string }> = {};
 
         for (const [name, envVar] of Object.entries(volumeEnvVars)) {
           const path = process.env[envVar];
-          if (path && path.startsWith('/Volumes/')) {
-            volumeChecks[name] = { status: 'ok', path };
-          } else {
-            markDegraded();
-            volumeChecks[name] = { status: 'error', error: `${envVar} not configured or invalid` };
+          const configured = !!(path && path.startsWith('/Volumes/'));
+
+          // Query upload records to verify volume is actually receiving files
+          try {
+            const { rows } = await lakebase.query(
+              `SELECT COUNT(*)::int AS file_count, MAX(uploaded_at) AS last_write
+               FROM app.uploads
+               WHERE volume_path LIKE $1 AND revoked_at IS NULL`,
+              [configured ? `${path}%` : `%${name}%`],
+            );
+            const fileCount = rows[0]?.file_count as number ?? 0;
+            const lastWrite = rows[0]?.last_write as string | null;
+
+            if (configured && fileCount > 0) {
+              volumeChecks[name] = { status: 'ok', path, configured, file_count: fileCount, last_write: lastWrite };
+            } else if (configured) {
+              volumeChecks[name] = { status: 'warning', path, configured, file_count: 0, last_write: null };
+            } else {
+              markDegraded();
+              volumeChecks[name] = { status: 'error', configured: false, file_count: fileCount, last_write: lastWrite, error: `${envVar} not configured` };
+            }
+          } catch {
+            // If query fails, fall back to env var check only
+            if (configured) {
+              volumeChecks[name] = { status: 'warning', path, configured, error: 'Could not verify file activity' };
+            } else {
+              markDegraded();
+              volumeChecks[name] = { status: 'error', configured: false, error: `${envVar} not configured` };
+            }
           }
         }
         checks.volumes = volumeChecks;
@@ -121,7 +147,7 @@ export async function setupAdminRoutes(appkit: AppKitContext): Promise<void> {
           name: process.env.DATABRICKS_APP_NAME ?? 'unknown',
           node_version: process.version,
           uptime_s: Math.round(process.uptime()),
-          environment: process.env.NODE_ENV ?? 'production',
+          environment: (() => { const n = process.env.DATABRICKS_APP_NAME ?? ''; const suffix = n.split('-').pop(); return ['dev', 'prod'].includes(suffix!) ? suffix! : n ? 'hls_fde' : process.env.NODE_ENV ?? 'unknown'; })(),
         };
 
         // ── Sweeper check ─────────────────────────────────────────────────
@@ -157,6 +183,35 @@ export async function setupAdminRoutes(appkit: AppKitContext): Promise<void> {
           // Table might not exist yet (migration 019 not applied)
           checks.sweeper = { status: 'warning', message: 'sweeper_runs table not available' };
         }
+
+
+        // ── Environment variables ────────────────────────────────────────────
+        const SENSITIVE_PATTERNS = /SECRET|TOKEN|PASSWORD|CREDENTIAL/i;
+        const envVars: Record<string, { value: string; masked: boolean }> = {};
+        for (const [key, val] of Object.entries(process.env)) {
+          // Only include LAKELOOM_*, DATABRICKS_*, NODE_ENV, LAKEBASE_*, npm_package_name/version
+          if (
+            key.startsWith('LAKELOOM_') ||
+            key.startsWith('DATABRICKS_') ||
+            key.startsWith('LAKEBASE_') ||
+            key === 'NODE_ENV' ||
+            key === 'npm_package_name' ||
+            key === 'npm_package_version'
+          ) {
+            const raw = val ?? '';
+            if (SENSITIVE_PATTERNS.test(key)) {
+              const last4 = raw.length > 4 ? raw.slice(-4) : '';
+              envVars[key] = { value: last4 ? `\u2022\u2022\u2022\u2022${last4}` : '(set)', masked: true };
+            } else {
+              envVars[key] = { value: raw, masked: false };
+            }
+          }
+        }
+        checks.environment = {
+          status: 'ok' as CheckStatus,
+          total: Object.keys(envVars).length,
+          vars: envVars,
+        };
 
         res.json({ status: overallStatus, checks, timestamp: new Date().toISOString() });
       } catch (err) {
