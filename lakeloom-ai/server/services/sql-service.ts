@@ -2,11 +2,11 @@
  * SQL warehouse query service — executes statements against Unity Catalog
  * tables via the Databricks SQL Statement Execution REST API.
  *
- * Uses the App's auto-provisioned SPN credentials (DATABRICKS_HOST + token)
- * and the SQL warehouse ID from app.yaml (DATABRICKS_WAREHOUSE_ID).
+ * Auth strategy (in priority order):
+ *   1. Caller-supplied OBO token (from x-forwarded-access-token header)
+ *   2. DATABRICKS_TOKEN env var (App SPN, if configured)
  *
- * This is the bridge between the App backend (Node.js) and UC Delta tables
- * like transcript_events_raw that aren't in Lakebase.
+ * Uses DATABRICKS_HOST + DATABRICKS_WAREHOUSE_ID from the platform.
  */
 
 interface StatementResponse {
@@ -16,18 +16,17 @@ interface StatementResponse {
   result?: { data_array: string[][] };
 }
 
-interface QueryResult {
+export interface QueryResult {
   columns: string[];
   rows: Record<string, string | null>[];
   total_rows: number;
 }
 
-// ── Configuration ───────────────────────────────────────────────────────────
+// ── Configuration ───────────────────────────────────────────────────────────────
 
 function getConfig() {
   const host = process.env.DATABRICKS_HOST ?? process.env.DATABRICKS_WORKSPACE_URL ?? '';
   const warehouseId = process.env.DATABRICKS_WAREHOUSE_ID ?? '';
-  const token = process.env.DATABRICKS_TOKEN ?? process.env.DATABRICKS_API_TOKEN ?? '';
 
   if (!host || !warehouseId) {
     throw new Error('[sql-service] Missing DATABRICKS_HOST or DATABRICKS_WAREHOUSE_ID');
@@ -35,21 +34,40 @@ function getConfig() {
 
   // Normalize host to base URL
   const baseUrl = host.startsWith('http') ? host.replace(/\/$/, '') : `https://${host}`;
-  return { baseUrl, warehouseId, token };
+  return { baseUrl, warehouseId };
 }
 
-// ── Execute Statement ───────────────────────────────────────────────────────
+// ── Execute Statement ───────────────────────────────────────────────────────────
+
+export interface ExecuteOptions {
+  /** OBO access token from the user's browser session (x-forwarded-access-token) */
+  accessToken?: string;
+}
 
 /**
  * Execute a SQL statement against the configured warehouse.
  * Waits for completion (WAIT_TIMEOUT disposition) up to 50s.
- * For parameterized queries, pass params as { name, value, type? }[].
+ *
+ * @param sql - SQL statement (use :param_name for parameters)
+ * @param params - Named parameters
+ * @param options - Execution options (accessToken for OBO auth)
  */
 export async function executeStatement(
   sql: string,
   params?: Array<{ name: string; value: string; type?: string }>,
+  options?: ExecuteOptions,
 ): Promise<QueryResult> {
-  const { baseUrl, warehouseId, token } = getConfig();
+  const { baseUrl, warehouseId } = getConfig();
+
+  // Resolve auth token: prefer caller-supplied OBO token, fallback to env var
+  const token = options?.accessToken
+    ?? process.env.DATABRICKS_TOKEN
+    ?? process.env.DATABRICKS_API_TOKEN
+    ?? '';
+
+  if (!token) {
+    throw new Error('[sql-service] No auth token available. Ensure x-forwarded-access-token header is present (browser session) or DATABRICKS_TOKEN is set.');
+  }
 
   const body: Record<string, unknown> = {
     warehouse_id: warehouseId,
@@ -69,11 +87,8 @@ export async function executeStatement(
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    'Authorization': `Bearer ${token}`,
   };
-
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
 
   const res = await fetch(`${baseUrl}/api/2.0/sql/statements/`, {
     method: 'POST',

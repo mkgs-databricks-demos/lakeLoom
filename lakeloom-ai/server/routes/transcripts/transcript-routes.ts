@@ -77,6 +77,16 @@ function getBronzeTable(): string {
   return `${catalog}.${schema}.transcript_events_raw`;
 }
 
+// ── Auth helper ────────────────────────────────────────────────────────────────
+
+/**
+ * Extract the OBO (On-Behalf-Of) access token from the AppKit auth sidecar headers.
+ * This is the user's Databricks token forwarded by the platform proxy.
+ */
+function getAccessToken(req: Request): string | undefined {
+  return (req.headers['x-forwarded-access-token'] as string) || undefined;
+}
+
 // ── Route setup ────────────────────────────────────────────────────────────────
 
 export async function setupTranscriptRoutes(appkit: AppKitContext): Promise<void> {
@@ -85,14 +95,14 @@ export async function setupTranscriptRoutes(appkit: AppKitContext): Promise<void
   appkit.server.extend((app) => {
 
     // ── GET /api/captures/:id/transcript ──────────────────────────────────
-    // Returns all transcript segments for a capture session, ordered by time.
+    // Returns transcript segments for a capture session, scoped to its time window.
     app.get('/api/captures/:id/transcript', async (req: Request, res: Response, next) => {
       try {
         const captureSessionId = req.params.id;
 
-        // Verify capture session exists and get its paired_session_id
+        // Verify capture session exists and get its paired_session_id + time window
         const { rows: captureRows } = await lakebase.query(
-          `SELECT id, created_by_paired_session_id, state, started_at
+          `SELECT id, created_by_paired_session_id, state, started_at, ended_at
            FROM app.capture_sessions WHERE id = $1`,
           [captureSessionId],
         );
@@ -104,9 +114,24 @@ export async function setupTranscriptRoutes(appkit: AppKitContext): Promise<void
 
         const capture = captureRows[0];
         const sessionId = capture.created_by_paired_session_id as string;
+        const startedAt = capture.started_at as string;
+        const endedAt = capture.ended_at as string | null;
         const table = getBronzeTable();
 
-        // Query bronze table via SQL warehouse
+        // Build time-scoped query — only return events within this capture's window.
+        // A paired session can span multiple captures; without time scoping we'd
+        // return transcripts from other sessions on the same paired device.
+        const timeFilter = endedAt
+          ? 'AND event_time >= :started_at AND event_time <= :ended_at'
+          : 'AND event_time >= :started_at';
+
+        const params = [
+          { name: 'session_id', value: sessionId },
+          { name: 'started_at', value: startedAt, type: 'TIMESTAMP' },
+          ...(endedAt ? [{ name: 'ended_at', value: endedAt, type: 'TIMESTAMP' }] : []),
+        ];
+
+        // Query bronze table via SQL warehouse (pass user's OBO token)
         const result = await executeStatement(`
           SELECT
             event_id,
@@ -121,10 +146,11 @@ export async function setupTranscriptRoutes(appkit: AppKitContext): Promise<void
           FROM ${table}
           WHERE session_id = :session_id
             AND event_type = 'final_transcript'
+            ${timeFilter}
           ORDER BY event_time ASC, body:segment_index::int ASC
-        `, [
-          { name: 'session_id', value: sessionId },
-        ]);
+        `, params, {
+          accessToken: getAccessToken(req),
+        });
 
         // Build response
         const segments = result.rows.map((row) => ({
@@ -240,7 +266,9 @@ export async function setupTranscriptRoutes(appkit: AppKitContext): Promise<void
         `, [
           { name: 'project_id', value: projectId as string },
           { name: 'search_term', value: query },
-        ]);
+        ], {
+          accessToken: getAccessToken(req),
+        });
 
         // Enrich with capture session info from Lakebase
         const sessionIds = [...new Set(result.rows.map((r) => r.session_id))];

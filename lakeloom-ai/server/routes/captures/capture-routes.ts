@@ -67,6 +67,7 @@ export async function setupCaptureRoutes(appkit: AppKitContext): Promise<void> {
   appkit.server.extend((app) => {
     // ── POST /api/projects/:project_id/captures ────────────────────────────
     // iOS-authenticated. Creates a new active capture session.
+    // Supports client_generated_id (Phase 2 offline): idempotent on (user, id).
     app.post('/api/projects/:project_id/captures', iosOnly, async (req, res, next) => {
       try {
         const parsed = CreateCaptureBody.safeParse(req.body);
@@ -74,10 +75,34 @@ export async function setupCaptureRoutes(appkit: AppKitContext): Promise<void> {
           throw validationError(parsed.error.issues.map((i) => i.message).join('; '));
         }
 
-        const { label, client_ts, device_id } = parsed.data;
+        const { label, client_ts, device_id, client_generated_id } = parsed.data;
         const projectId = req.params.project_id;
         const userId = req.user!.userId;
         const pairedSessionId = req.user!.sessionId;
+
+        // ── Phase 2: Idempotency check (Option A — client_generated_id IS the row id) ──
+        if (client_generated_id) {
+          const { rows: existingRows } = await lakebase.query(
+            `SELECT id, project_id, state, label, started_at
+             FROM app.capture_sessions
+             WHERE client_generated_id = $1 AND created_by_user_id = $2
+               AND revoked_at IS NULL`,
+            [client_generated_id, userId],
+          );
+
+          if (existingRows.length > 0) {
+            // Idempotent re-submit — return existing row (200, not 201)
+            const existing = existingRows[0];
+            res.status(200).json({
+              id: existing.id,
+              project_id: existing.project_id,
+              state: existing.state,
+              label: existing.label,
+              started_at: existing.started_at,
+            });
+            return;
+          }
+        }
 
         // Resolve device_label from the paired session
         const { rows: deviceRows } = await lakebase.query(
@@ -89,13 +114,25 @@ export async function setupCaptureRoutes(appkit: AppKitContext): Promise<void> {
         // Determine started_at: prefer client_ts if provided, else server now()
         const startedAt = client_ts ? new Date(client_ts).toISOString() : new Date().toISOString();
 
-        const { rows } = await lakebase.query(
-          `INSERT INTO app.capture_sessions
-             (project_id, created_by_user_id, created_by_paired_session_id, device_label, label, started_at, device_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7::uuid)
-           RETURNING id, project_id, state, label, started_at`,
-          [projectId, userId, pairedSessionId, deviceLabel, label ?? null, startedAt, device_id ?? null],
-        );
+        // Build INSERT — if client_generated_id supplied, use it as the row's id (Option A)
+        let rows: Record<string, unknown>[];
+        if (client_generated_id) {
+          ({ rows } = await lakebase.query(
+            `INSERT INTO app.capture_sessions
+               (id, client_generated_id, project_id, created_by_user_id, created_by_paired_session_id, device_label, label, started_at, device_id)
+             VALUES ($1::uuid, $1::uuid, $2, $3, $4, $5, $6, $7, $8::uuid)
+             RETURNING id, project_id, state, label, started_at`,
+            [client_generated_id, projectId, userId, pairedSessionId, deviceLabel, label ?? null, startedAt, device_id ?? null],
+          ));
+        } else {
+          ({ rows } = await lakebase.query(
+            `INSERT INTO app.capture_sessions
+               (project_id, created_by_user_id, created_by_paired_session_id, device_label, label, started_at, device_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::uuid)
+             RETURNING id, project_id, state, label, started_at`,
+            [projectId, userId, pairedSessionId, deviceLabel, label ?? null, startedAt, device_id ?? null],
+          ));
+        }
 
         const capture = rows[0];
         res.status(201).json({
