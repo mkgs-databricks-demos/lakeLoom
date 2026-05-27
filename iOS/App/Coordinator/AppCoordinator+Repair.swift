@@ -79,6 +79,31 @@ extension AppCoordinator {
                 workspaceID: credential.id,
                 appBaseURL: credential.appBaseURL
             )
+
+            // Refresh `activeContext` so views observing it (e.g.
+            // AccountSettingsView's Pairing section) re-render with
+            // the new sessionExpiresAt + identity. The .signedIn
+            // event handler in observeAuthEvents() intentionally
+            // doesn't touch activeContext — it expects the action
+            // path to own that update, which we do here.
+            if let current = activeContext, current.workspace.id == credential.id {
+                // Same workspace — keep the active project, swap the
+                // refreshed credential + user in.
+                activeContext = ActiveContext(
+                    user: credential.user,
+                    workspace: credential,
+                    project: current.project,
+                    establishedAt: nowProvider()
+                )
+            } else {
+                // Different workspace (only reachable via
+                // allowWorkspaceSwitch: true). Project selection has
+                // to redo against the new workspace — defer to
+                // routeAfterBootstrap which already handles
+                // default→firstAvailable→picker.
+                await reroute()
+            }
+
             return .refreshed(credential)
         } catch let error as AuthError {
             return .failed(reason: Self.message(for: error))
