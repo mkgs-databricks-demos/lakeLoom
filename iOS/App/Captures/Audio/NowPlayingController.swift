@@ -85,15 +85,15 @@ public final class NowPlayingController: NowPlayingControlling {
             title = "Recording"
         }
 
-        // Branded artwork would go here via MPMediaItemArtwork, but on
-        // device that pathway traps inside MediaPlayer's access queue
-        // (Thread 7, `com.apple.MediaPlayer.MPNowPlayingInfoCenter/
-        // accessQueue`) — likely an assertion on the @Sendable
-        // requestHandler capturing a non-Sendable UIImage. Title +
-        // artist + transport state is plenty for the v1 polish; we can
-        // revisit artwork once we have a fully Sendable image loader
-        // (or a smaller bitmap fed directly via the deprecated
-        // `MPMediaItemArtwork(image:)` initializer).
+        // Branded artwork is deferred. The non-deprecated
+        // `MPMediaItemArtwork(boundsSize:requestHandler:)` init traps
+        // inside `MPNowPlayingInfoCenter/accessQueue` on iOS 18+ for
+        // reasons that didn't yield to either a smaller pre-rendered
+        // bitmap or a Sendable image. The `(image:)` init would be the
+        // straightforward path but is deprecation-as-error in this
+        // project's Swift settings, and we don't ship deprecated APIs.
+        // The `LakeloomMark` asset stays in the catalog so we can
+        // attach artwork in a future PR once we have a clean path.
         let info: [String: Any] = [
             MPMediaItemPropertyTitle: title,
             MPMediaItemPropertyArtist: "lakeLoom",
