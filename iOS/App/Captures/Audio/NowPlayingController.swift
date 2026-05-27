@@ -1,6 +1,5 @@
 import Foundation
 import MediaPlayer
-import UIKit
 
 /// Drives the lock-screen + Control Center "Now Playing" surface
 /// while a capture is recording.
@@ -86,21 +85,21 @@ public final class NowPlayingController: NowPlayingControlling {
             title = "Recording"
         }
 
-        var info: [String: Any] = [
+        // Branded artwork would go here via MPMediaItemArtwork, but on
+        // device that pathway traps inside MediaPlayer's access queue
+        // (Thread 7, `com.apple.MediaPlayer.MPNowPlayingInfoCenter/
+        // accessQueue`) — likely an assertion on the @Sendable
+        // requestHandler capturing a non-Sendable UIImage. Title +
+        // artist + transport state is plenty for the v1 polish; we can
+        // revisit artwork once we have a fully Sendable image loader
+        // (or a smaller bitmap fed directly via the deprecated
+        // `MPMediaItemArtwork(image:)` initializer).
+        let info: [String: Any] = [
             MPMediaItemPropertyTitle: title,
             MPMediaItemPropertyArtist: "lakeLoom",
             MPNowPlayingInfoPropertyElapsedPlaybackTime: NSNumber(value: 0.0),
             MPNowPlayingInfoPropertyPlaybackRate: NSNumber(value: 1.0)
         ]
-        // Brand the lock-screen widget with the lakeLoom mark. The
-        // earlier attempt used `UIImage(systemName: "waveform")` which
-        // hit a MediaPlayer assertion — that path was an SF-symbol
-        // image without a concrete bitmap behind it. The asset-catalog
-        // image is a real 1024x1024 PNG, which MPMediaItemArtwork is
-        // happy to render at whatever bounds iOS asks for.
-        if let mark = UIImage(named: "LakeloomMark") {
-            info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: mark.size) { _ in mark }
-        }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
 
         configureRemoteCommands()
