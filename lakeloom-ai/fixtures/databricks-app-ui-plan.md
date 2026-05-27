@@ -1,7 +1,7 @@
 # Databricks App UI — Feature Plan & Implementation Order
 
-**Date:** 2026-05-14 (created) | **Last updated:** 2026-05-26
-**Status:** Phases 1–5 COMPLETE. Phase 6–7 planned.
+**Date:** 2026-05-14 (created) | **Last updated:** 2026-05-27
+**Status:** Phases 1–5 COMPLETE. Phase 6 IN PROGRESS (server routes live). Phase 7 planned.
 **Principle:** The Databricks App does everything the iOS app does EXCEPT record audio.
 
 ---
@@ -288,10 +288,48 @@ The ordering optimizes for: (a) unblocking iOS Module 06, (b) delivering reviewa
 | **Phase 3** | Media Viewer & Audio Playback | ✅ COMPLETE (2026-05-24, PR #69) | — |
 | **Phase 4** | Browser-Side Uploads | ✅ COMPLETE (2026-05-25, PR #69) | — |
 | **Phase 5** | Device & Admin Panel | ✅ COMPLETE (2026-05-26, extended same day: admin detail modals, env card, re-pair, extend expiry) | — |
-| **Phase 6** | Transcript Viewer | ⏳ UNBLOCKED — bronze ingest validated (2026-05-21); silver SDP next | 3–4 days |
+| **Phase 6** | Transcript Viewer | ⏳ IN PROGRESS — server routes live (OBO auth + time-window scoping, 2026-05-27); client panel rendering; silver SDP next | 2–3 days |
 | **Phase 7** | Genie Code Session Planning | Blocked on gold-layer tables + Agent design | 5–7 days |
 
 **Remaining estimated: ~8–11 working days for Phases 6–7.**
+
+---
+
+## Phase 6 — Implementation Progress (2026-05-27)
+
+### Server Routes — COMPLETE
+
+**Endpoints deployed:**
+- `GET /api/captures/:id/transcript` — returns time-scoped transcript segments from bronze table
+- `GET /api/captures/:id/transcript/stream` — SSE for live transcript events during active capture
+- `GET /api/projects/:id/search?q=<term>` — full-text search across project transcripts
+
+**Auth:**
+- User's OBO token forwarded via `x-forwarded-access-token` to SQL Statement Execution API
+- `user_api_scopes` updated: `sql` + `files.files` + `dashboards.genie`
+- Users must re-consent (incognito or clear session) after scope addition
+
+**Key implementation details:**
+- Transcript query scoped to capture's `started_at`→`ended_at` window (paired sessions span multiple captures)
+- Parameterized SQL with `:session_id`, `:started_at`, `:ended_at` (type TIMESTAMP)
+- In-memory SSE relay via `pushTranscriptEvent()` for live streaming
+- Bronze table: `transcript_events_raw` — directly queried (silver SDP pipeline is future enhancement)
+
+**Files:** `server/routes/transcripts/transcript-routes.ts`, `server/services/sql-service.ts`
+
+### Client — IN PROGRESS
+
+**Implemented (on branch `mg-phase6-transcript-viewer`):**
+- `TranscriptPanel.tsx` — displays segments with timestamps, confidence dots, copy button
+- `TranscriptSearch.tsx` — search bar component for project-level transcript search
+- `AudioPlayer.tsx` — forwardRef integration for transcript↔audio sync (click segment → seek)
+- `CaptureDetailPage.tsx` — integrates TranscriptPanel alongside AudioPlayer
+
+**Remaining:**
+- Live transcript SSE subscription (EventSource → DOM append during active capture)
+- Speaker diarization display (when model provides it)
+- Cross-project search results page
+- Audio↔transcript bidirectional sync refinement (highlight active segment during playback)
 
 ---
 
