@@ -238,7 +238,7 @@ export async function setupTranscriptRoutes(appkit: AppKitContext): Promise<void
           ORDER BY event_time DESC
           LIMIT 50
         `, [
-          { name: 'project_id', value: projectId },
+          { name: 'project_id', value: projectId as string },
           { name: 'search_term', value: query },
         ]);
 

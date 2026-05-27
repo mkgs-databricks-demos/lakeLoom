@@ -161,7 +161,7 @@ export async function setupEventRoutes(appkit: AppKitContext): Promise<void> {
         for (const record of records) {
           if (record.event_type === 'final_transcript' && record.session_id) {
             const rawBody = typeof record.body === 'string' ? JSON.parse(record.body) : record.body;
-            pushTranscriptEvent(record.session_id, {
+            pushTranscriptEvent(record.session_id as string, {
               event_id: record.event_id,
               event_time: record.event_time ? new Date(record.event_time / 1000).toISOString() : new Date().toISOString(),
               text: record.transcript_text || '',
