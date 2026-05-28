@@ -412,8 +412,8 @@ struct HomeContainerView: View {
     }
 
     /// True while the capture state is in an "in-session" state —
-    /// `.recording` or `.finalizing`. The fullScreenCover is bound
-    /// to this; transitions to `.completed` / `.cancelled` /
+    /// only `.recording`. The fullScreenCover is bound to this;
+    /// transitions to `.finalizing` / `.completed` / `.cancelled` /
     /// `.failed` / `.idle` automatically dismiss the cover.
     private var bindingForRecordingPresentation: Binding<Bool> {
         Binding(
@@ -426,10 +426,22 @@ struct HomeContainerView: View {
         )
     }
 
+    /// Originally returned `true` for `.recording` AND `.finalizing`,
+    /// keeping the full-screen recording cover up while uploads
+    /// drained server-side. Offline that became a wedge: uploads
+    /// can't drain, the cover stays up forever, Stop is disabled in
+    /// the finalizing UI, and the only escape is "Cancel + discard
+    /// uploads" — which throws away the user's data. For the field
+    /// engineer's "record now, upload from the hotel later" workflow
+    /// that's catastrophic. We dismiss the cover the moment recording
+    /// stops; upload progress surfaces via the pending-uploads pill
+    /// on the home view, and the result banner shows when the
+    /// capture's `.completed` transition fires. See
+    /// `architecture/hi_genie/2026-05-28_fully-offline-capture-guarantee.md` §3.1.
     private var isInSession: Bool {
         switch captureState {
-        case .recording, .finalizing: return true
-        default: return false
+        case .recording: return true
+        case .finalizing, .completed, .cancelled, .failed, .idle: return false
         }
     }
 
