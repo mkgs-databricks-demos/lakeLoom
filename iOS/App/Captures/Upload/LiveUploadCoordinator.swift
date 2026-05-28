@@ -392,11 +392,21 @@ public actor LiveUploadCoordinator: UploadCoordinator {
     /// from server-returned transient failures (404 race, 5xx, etc.)
     /// because they shouldn't count against the retry budget. The
     /// upload sits in fixed-delay re-queue until reachability returns.
+    ///
+    /// `.transport` is **not** included even though some transport
+    /// failures are genuinely network-layer (DNS, connection refused).
+    /// The `.transport` case is overloaded in `sendOnce`: it's also
+    /// thrown for "file unreadable on disk" and "no endpoint path",
+    /// which are permanent failures the user needs to clear. Counting
+    /// `.transport` toward `maxAttempts` lets those legitimate
+    /// permanent failures park after 5 attempts instead of looping
+    /// forever; the trade-off is that a truly transient transport
+    /// failure (rare) eats a budget slot.
     private func isNetworkError(_ error: LakeloomAppError) -> Bool {
         switch error {
-        case .networkUnavailable, .timeout, .transport:
+        case .networkUnavailable, .timeout:
             return true
-        case .tokenExchangeFailed, .unauthorized,
+        case .transport, .tokenExchangeFailed, .unauthorized,
              .httpError, .decodeFailed, .workspaceNotConfigured:
             return false
         }

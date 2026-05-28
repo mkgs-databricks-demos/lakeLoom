@@ -410,6 +410,56 @@ struct LiveUploadCoordinatorTests {
         await coordinator.stop()
     }
 
+    @Test("transport(file unreadable) parks terminal after maxAttempts, no infinite loop")
+    func transportFileUnreadableParksAfterMaxAttempts() async throws {
+        // Regression: `LakeloomAppError.transport` is overloaded —
+        // it's thrown by `sendOnce` for both genuinely-network-layer
+        // failures AND for "file gone from disk between enqueue and
+        // attempt" (a permanent failure). The network-error classifier
+        // must NOT treat `.transport` as offline-only, or file-missing
+        // uploads loop forever at fixed `networkRetryDelay`.
+        let sandbox = Self.makeSandbox()
+        // Delete the file AFTER constructing PendingUpload so the
+        // enqueue path passes its file-exists guard, then sendOnce
+        // hits the throw at line ~280.
+        let pending = Self.makePending(fileURL: sandbox.fileURL)
+        let app = FakeLakeloomAppClient()
+        let coordinator = LiveUploadCoordinator(
+            lakeloomApp: app,
+            queueStore: sandbox.queueStore,
+            sleep: { _ in /* skip backoff */ },
+            multipartBoundaryProvider: { "fixed-boundary" }
+        )
+
+        try await coordinator.enqueue(pending)
+        // Yank the file so sendOnce throws .transport("file unreadable: ...")
+        // on every attempt.
+        try FileManager.default.removeItem(at: sandbox.fileURL)
+
+        let stream = await coordinator.stateUpdates()
+        var iterator = stream.makeAsyncIterator()
+        await coordinator.start()
+
+        var sawPermanentFailure = false
+        // Read up to 30 state events looking for the terminal park.
+        // If we exceed without seeing it, the classifier regression
+        // is back and we're looping at 5s forever.
+        for _ in 0..<30 {
+            guard let change = await iterator.next() else { break }
+            if case .failed(_, let permanent) = change.state, permanent {
+                sawPermanentFailure = true
+                break
+            }
+        }
+        #expect(sawPermanentFailure)
+        // The transport never accepted the call because sendOnce
+        // throws before reaching `requestRaw`. Verify no spurious
+        // network attempts.
+        let calls = await app.requestCalls
+        #expect(calls.isEmpty)
+        await coordinator.stop()
+    }
+
     @Test("wake clears nextAttemptAt on queued uploads")
     func wakeClearsPendingBackoff() async throws {
         // After a network failure the upload sits in `.queued` with
