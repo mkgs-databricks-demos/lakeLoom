@@ -133,6 +133,8 @@ lakeLoom/
 * **2026-05-25: Offline capture contract DEPLOYED.** Migration 018 (`client_generated_id` UUID + partial unique index), handler idempotency (200 re-submit / 201 new), Option A (client ID = primary key). Both migrations 017+018 verified in OTel. Reply sent to Isaac. Branch: `mg-isaac-genie-interaction`.
 * **2026-05-25: Capture-completion pipeline designed.** CDF on `lb_capture_sessions_history` triggers bronze→silver→gold SDP pipeline. Gold produces 4 AI deliverables per capture: Whisper transcript, requirements doc, architecture diagram, Genie Code session plan. Latency budget: ~3–7 min. Design doc: `fixtures/phase5-document-edit-cdf-pipeline.md`.
 * **2026-05-26: Phase 5 — Device & Admin Panel IMPLEMENTED on branch `mg-phase5-device-admin-panel`.** New routes: `GET /api/admin/health` (structured health dashboard). New pages: `/devices` (paired device grid with status badges, revoke, revoked history), `/admin` (system health with auto-refresh). Migration 019: `app.sweeper_runs`. Nav updated: Devices, Pair Device (renamed), Admin. `pairing-routes.ts`: `?include_revoked=true` query param support.
+* **2026-05-27: Phase 6 — Transcript Viewer server routes DEPLOYED on branch `mg-phase6-transcript-viewer`.** Three fixes in one commit (`f1e57a0`): (1) OBO token forwarding — `transcript-routes.ts` now passes `x-forwarded-access-token` to `executeStatement()` (was 401/403); (2) `user_api_scopes` — added `sql` + `dashboards.genie` to `lakeloom_ai.app.yml` (OBO token lacked `sql` scope); (3) time-window scoping — transcript query filters by `started_at`/`ended_at` from capture row (paired sessions span multiple captures; was showing wrong data). Also wired Phase 2 `client_generated_id` handler (Isaac's May 26 bug report — destructure + idempotency check + Option A INSERT). Client components (`TranscriptPanel`, `TranscriptSearch`, `AudioPlayer` forwardRef) on branch. Isaac's PR #77 unblocked.
+
 
 ## Resolved Target Variables (dev)
 
@@ -189,6 +191,8 @@ lakeLoom/
 * **Purpose:** The Databricks App's runtime identity. Reads secrets at startup to configure ZeroBus SDK and build QR payloads.
 * **Permissions:** READ on `lakeloom_credentials` secret scope (granted via `admin_actions/update-secrets-acls` or App bundle bootstrap).
 * **Provisioned by:** Databricks App deployment (auto-created, not managed by this infra bundle).
+* **NOTE (2026-05-27):** App SPN does NOT currently have SELECT on `transcript_events_raw`. OBO (user token) handles transcript reads. If App SPN fallback is needed, grant via SQL: `GRANT SELECT ON TABLE hls_fde_dev.dev_matthew_giglia_lakeloom.transcript_events_raw TO \`686d32bf-a6a4-461b-a18b-82489eecdc15\``. Cannot be declared in bundle YAML (`uc_securable` only supports VOLUME type).
+
 
 ## Secret Scope Contract (`lakeloom_credentials`)
 

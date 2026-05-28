@@ -17,7 +17,9 @@ resources:
         Genie Code session planning for rapid Databricks MVPs.
       source_code_path: ..
       user_api_scopes:
+        - sql
         - files.files
+        - dashboards.genie
 
       # Resources the App's auto-provisioned SPN has access to.
       resources:

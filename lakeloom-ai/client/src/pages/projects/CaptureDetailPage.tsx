@@ -1,20 +1,24 @@
 /**
- * CaptureDetailPage — session detail with upload timeline.
+ * CaptureDetailPage — session detail with upload timeline + transcript.
  *
  * Route: /projects/:id/captures/:cid
  * Displays capture metadata header + chronological upload timeline.
  * State transitions available for active sessions.
  * Inline label editing (click pencil icon to rename).
  * Media preview via modal overlay (click any upload to preview).
+ * Audio-transcript sync: inline AudioPlayer feeds currentTimeMs to TranscriptPanel;
+ * clicking a transcript segment seeks the audio player.
  *
  * Brand: Databricks semantic tokens, DM Sans, motion vars, WCAG AA.
  */
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, Link } from 'react-router';
 import { ArrowLeft, Clock, Pencil, Check, X } from 'lucide-react';
 import { StatusBadge, TimeAgo, Duration, FileIconContainer, EmptyState, ConfirmDialog, DragDropZone } from '../../components';
-import { MediaModal } from '../../components/media';
+import { AudioPlayer, MediaModal } from '../../components/media';
+import type { AudioPlayerHandle } from '../../components/media';
+import { TranscriptPanel } from '../../components/transcript';
 
 // ── Types ────────────────────────────────────────────────────────────────────────────────────
 
@@ -120,6 +124,10 @@ export function CaptureDetailPage() {
   // Media modal state
   const [selectedUpload, setSelectedUpload] = useState<Upload | null>(null);
 
+  // Audio-transcript sync state
+  const [audioTimeMs, setAudioTimeMs] = useState(0);
+  const audioPlayerRef = useRef<AudioPlayerHandle>(null);
+
   useEffect(() => {
     (async () => {
       try {
@@ -141,7 +149,6 @@ export function CaptureDetailPage() {
       setConfirmLoading(true);
       await transitionCaptureState(captureId, confirmAction);
       setConfirmAction(null);
-      // Reload capture data
       const data = await fetchCapture(captureId);
       setCapture(data);
     } catch (err) {
@@ -156,7 +163,6 @@ export function CaptureDetailPage() {
   const startEditingLabel = () => {
     setEditLabelValue(capture?.label || '');
     setIsEditingLabel(true);
-    // Focus input after render
     setTimeout(() => labelInputRef.current?.focus(), 0);
   };
 
@@ -171,7 +177,6 @@ export function CaptureDetailPage() {
       cancelEditingLabel();
       return;
     }
-    // Skip save if unchanged
     if (trimmed === (capture?.label || '')) {
       cancelEditingLabel();
       return;
@@ -197,8 +202,23 @@ export function CaptureDetailPage() {
     }
   };
 
+  // ── Audio sync handlers ────────────────────────────────────────────────────────────────────
+
+  const handleAudioTimeUpdate = useCallback((timeMs: number) => {
+    setAudioTimeMs(timeMs);
+  }, []);
+
+  const handleTranscriptSeek = useCallback((timeMs: number) => {
+    audioPlayerRef.current?.seekTo(timeMs);
+  }, []);
+
   const uploads = capture?.uploads ?? [];
   const totalBytes = uploads.reduce((sum, u) => sum + (u.size_bytes || 0), 0);
+
+  // Find primary audio upload for inline player + transcript sync
+  const primaryAudio = uploads.find((u) => u.mime_type.startsWith('audio/'));
+  // Non-audio uploads for the timeline list
+  const nonAudioUploads = uploads.filter((u) => !u.mime_type.startsWith('audio/'));
 
   // ── Render ───────────────────────────────────────────────────────────────────────────────────
 
@@ -329,59 +349,80 @@ export function CaptureDetailPage() {
             )}
           </div>
 
-          {/* ── Upload timeline ────────────────────────────────────────────────────────────── */}
-          <div className="border-t border-[var(--border-default,#DCE0E2)] pt-6">
-            <h2 className="text-base font-semibold text-[var(--text-primary,#1B3139)] mb-4">
-              Uploads
-              {uploads.length > 0 && (
-                <span className="ml-2 text-sm font-normal text-[var(--text-secondary,#5A6F77)]">
-                  ({uploads.length} {uploads.length === 1 ? 'file' : 'files'} · {formatBytes(totalBytes)})
-                </span>
+          {/* ── Audio player + transcript (side-by-side on wide screens) ──────────────── */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 border-t border-[var(--border-default,#DCE0E2)] pt-6">
+            {/* Left column: Audio + uploads */}
+            <div className="space-y-6">
+              {/* Inline audio player (primary recording) */}
+              {primaryAudio && (
+                <AudioPlayer
+                  ref={audioPlayerRef}
+                  uploadId={primaryAudio.id}
+                  title={primaryAudio.original_filename ?? 'Audio recording'}
+                  sizeBytes={primaryAudio.size_bytes}
+                  onTimeUpdate={handleAudioTimeUpdate}
+                />
               )}
-            </h2>
 
-            {uploads.length === 0 ? (
-              <EmptyState
-                icon={<Clock className="w-7 h-7" />}
-                title="No uploads yet"
-                description="Files will appear here as they are captured from the paired device."
-              />
-            ) : (
-              <div className="space-y-1">
-                {uploads.map((upload) => (
-                  <div
-                    key={upload.id}
-                    onClick={() => setSelectedUpload(upload)}
-                    className="flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer
-                               transition-colors duration-100
-                               hover:bg-[var(--surface-tertiary,#EEEDE9)]"
-                  >
-                    {/* Time offset */}
-                    <span className="w-12 text-xs text-[var(--text-secondary,#5A6F77)] font-mono text-right flex-shrink-0">
-                      {formatTimeOffset(capture.started_at, upload.uploaded_at)}
+              {/* Upload timeline (non-audio files) */}
+              <div>
+                <h2 className="text-base font-semibold text-[var(--text-primary,#1B3139)] mb-4">
+                  Uploads
+                  {uploads.length > 0 && (
+                    <span className="ml-2 text-sm font-normal text-[var(--text-secondary,#5A6F77)]">
+                      ({uploads.length} {uploads.length === 1 ? 'file' : 'files'} · {formatBytes(totalBytes)})
                     </span>
+                  )}
+                </h2>
 
-                    {/* File icon */}
-                    <FileIconContainer kind={upload.kind} mimeType={upload.mime_type} size={16} />
-
-                    {/* File info */}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-[var(--text-primary,#1B3139)] truncate">
-                        {upload.original_filename || upload.volume_path.split('/').pop() || 'Unknown file'}
-                      </p>
-                      <p className="text-xs text-[var(--text-secondary,#5A6F77)]">
-                        {upload.mime_type}
-                      </p>
-                    </div>
-
-                    {/* Size */}
-                    <span className="text-xs text-[var(--text-secondary,#5A6F77)] flex-shrink-0">
-                      {formatBytes(upload.size_bytes)}
-                    </span>
+                {nonAudioUploads.length === 0 && !primaryAudio ? (
+                  <EmptyState
+                    icon={<Clock className="w-7 h-7" />}
+                    title="No uploads yet"
+                    description="Files will appear here as they are captured from the paired device."
+                  />
+                ) : nonAudioUploads.length === 0 ? null : (
+                  <div className="space-y-1">
+                    {nonAudioUploads.map((upload) => (
+                      <div
+                        key={upload.id}
+                        onClick={() => setSelectedUpload(upload)}
+                        className="flex items-center gap-3 px-4 py-3 rounded-lg cursor-pointer
+                                   transition-colors duration-100
+                                   hover:bg-[var(--surface-tertiary,#EEEDE9)]"
+                      >
+                        <span className="w-12 text-xs text-[var(--text-secondary,#5A6F77)] font-mono text-right flex-shrink-0">
+                          {formatTimeOffset(capture.started_at, upload.uploaded_at)}
+                        </span>
+                        <FileIconContainer kind={upload.kind} mimeType={upload.mime_type} size={16} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-[var(--text-primary,#1B3139)] truncate">
+                            {upload.original_filename || upload.volume_path.split('/').pop() || 'Unknown file'}
+                          </p>
+                          <p className="text-xs text-[var(--text-secondary,#5A6F77)]">
+                            {upload.mime_type}
+                          </p>
+                        </div>
+                        <span className="text-xs text-[var(--text-secondary,#5A6F77)] flex-shrink-0">
+                          {formatBytes(upload.size_bytes)}
+                        </span>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
-            )}
+            </div>
+
+            {/* Right column: Transcript */}
+            <div>
+              <TranscriptPanel
+                captureId={captureId!}
+                captureState={capture.state}
+                startedAt={capture.started_at}
+                currentTimeMs={primaryAudio ? audioTimeMs : undefined}
+                onSeek={primaryAudio ? handleTranscriptSeek : undefined}
+              />
+            </div>
           </div>
 
           {/* ── Browser upload zone (visible for active/completed sessions) ────────── */}
@@ -395,7 +436,6 @@ export function CaptureDetailPage() {
                 concurrency={3}
                 uploadUrl={`/api/captures/${captureId}/screenshots`}
                 onUploadComplete={() => {
-                  // Refresh upload list after successful upload
                   fetchCapture(captureId!).then(setCapture).catch(() => {});
                 }}
               />

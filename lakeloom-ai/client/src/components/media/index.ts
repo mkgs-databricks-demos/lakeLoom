@@ -1,4 +1,5 @@
 export { AudioPlayer } from './AudioPlayer';
+export type { AudioPlayerHandle } from './AudioPlayer';
 export { ImageViewer } from './ImageViewer';
 export { DocumentViewer } from './DocumentViewer';
 export { MediaPanel } from './MediaPanel';
