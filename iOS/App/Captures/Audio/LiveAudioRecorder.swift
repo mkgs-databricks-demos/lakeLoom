@@ -132,9 +132,9 @@ public actor LiveAudioRecorder: AudioRecorder {
             throw AudioRecorderError.notRecording
         }
 
-        let duration: Double
+        let artifact: EngineStopArtifact
         do {
-            duration = try await engine.stop()
+            artifact = try await engine.stop()
         } catch let error as AudioRecorderError {
             // Engine threw mid-stop. Drop our state — the partial
             // file may exist; leave it on disk so a debug build
@@ -147,26 +147,27 @@ public actor LiveAudioRecorder: AudioRecorder {
         }
 
         let endedAt = nowProvider()
-        let sizeBytes = fileSize(at: inFlight.url)
+        let sizeBytes = fileSize(at: artifact.fileURL)
 
         current = nil
         await logger.info(
             "audio.recorder.stopped",
             metadata: [
                 "capture_session_id": .string(inFlight.captureSessionID),
-                "duration_s": .string(String(format: "%.3f", duration)),
-                "bytes": .int(sizeBytes)
+                "duration_s": .string(String(format: "%.3f", artifact.duration)),
+                "bytes": .int(sizeBytes),
+                "mime_type": .string(artifact.mimeType)
             ]
         )
         return AudioRecording(
             captureSessionID: inFlight.captureSessionID,
-            fileURL: inFlight.url,
+            fileURL: artifact.fileURL,
             startedAt: inFlight.startedAt,
             endedAt: endedAt,
-            durationSeconds: duration,
+            durationSeconds: artifact.duration,
             sizeBytes: sizeBytes,
-            mimeType: "audio/mp4",
-            fileExtension: "m4a"
+            mimeType: artifact.mimeType,
+            fileExtension: artifact.fileExtension
         )
     }
 

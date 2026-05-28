@@ -141,6 +141,44 @@ struct LiveAudioRecorderTests {
         #expect(state == .idle)
     }
 
+    @Test("stop with CAF fallback artifact propagates mime + extension + URL to AudioRecording")
+    func stopCafFallbackPropagation() async throws {
+        // Simulates `EngineAudioRecordingEngine` falling back to the
+        // raw `.caf` intermediate after a permanent transcode failure.
+        // The engine's `EngineStopArtifact` carries a different URL
+        // than what `start(writingTo:)` was given (m4a → caf), plus
+        // `audio/x-caf` mime. `LiveAudioRecorder` must surface that
+        // through to `AudioRecording` untouched so the upload layer
+        // ships the right MIME header.
+        let engine = FakeAudioRecordingEngine()
+        let payload = Data(repeating: 0xCA, count: 4096)
+        await engine.setFakeFilePayload(payload)
+        await engine.setStopDuration(12.0)
+        let (recorder, _, _) = Self.makeRecorder(engine: engine)
+
+        let startURL = try await recorder.start(captureSessionID: Self.captureID)
+        // Engine fell back: write the CAF payload to the sibling .caf
+        // path and configure the artifact to point there.
+        let cafURL = startURL.deletingPathExtension().appendingPathExtension("caf")
+        try payload.write(to: cafURL)
+        await engine.setStopArtifact(
+            url: cafURL,
+            mimeType: "audio/x-caf",
+            fileExtension: "caf"
+        )
+
+        let result = try await recorder.stop()
+
+        #expect(result.mimeType == "audio/x-caf")
+        #expect(result.fileExtension == "caf")
+        #expect(result.fileURL == cafURL)
+        #expect(result.sizeBytes == 4096)
+        #expect(result.durationSeconds == 12.0)
+
+        let state = await recorder.state
+        #expect(state == .idle)
+    }
+
     @Test("stop throws notRecording when idle")
     func stopWhileIdle() async throws {
         let (recorder, _, _) = Self.makeRecorder()

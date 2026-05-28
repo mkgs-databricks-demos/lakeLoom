@@ -60,9 +60,19 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, Audio
     private var interruptionObserver: NSObjectProtocol?
     private var routeChangeObserver: NSObjectProtocol?
     private let logger: AppLogger
+    /// Maximum number of `AVAssetExportSession.export()` attempts
+    /// before falling back to CAF. Interruption is the most common
+    /// failure mode and typically clears within a second; three
+    /// attempts with a 500ms gap covers the realistic transient
+    /// window.
+    private let transcodeAttempts: Int
 
-    init(logger: AppLogger = AppLogger(category: .capture)) {
+    init(
+        logger: AppLogger = AppLogger(category: .capture),
+        transcodeAttempts: Int = 3
+    ) {
         self.logger = logger
+        self.transcodeAttempts = transcodeAttempts
     }
 
     func currentPermission() async -> Bool? {
@@ -184,7 +194,7 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, Audio
         interruptionStream
     }
 
-    func stop() async throws -> Double {
+    func stop() async throws -> EngineStopArtifact {
         guard let avEngine = engine,
               let intermediate = intermediateURL,
               let final = finalURL else {
@@ -215,27 +225,77 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, Audio
         let frames = frameCounter?.snapshot() ?? 0
         let measuredDuration = sampleRate > 0 ? Double(frames) / sampleRate : 0
         let savedStartedAt = startedAt
+        let duration: Double = measuredDuration > 0
+            ? measuredDuration
+            : max(0.001, Date().timeIntervalSince(savedStartedAt ?? Date()))
 
-        do {
-            try await transcode(from: intermediate, to: final)
-        } catch {
+        // Attempt the transcode up to `transcodeAttempts` times. The
+        // most common cause of `AVAssetExportSession` failure is an
+        // AVAudioSession interruption mid-export — typically transient,
+        // so a couple of retries handles it. On terminal failure we
+        // fall back to returning the raw CAF rather than losing the
+        // user's audio (Genie's server-side accepts `audio/x-caf`).
+        var lastTranscodeError: Error?
+        for attempt in 1...transcodeAttempts {
+            do {
+                try await transcode(from: intermediate, to: final)
+                lastTranscodeError = nil
+                break
+            } catch {
+                lastTranscodeError = error
+                await logger.warning(
+                    "audio.transcode.attempt_failed",
+                    metadata: [
+                        "attempt": .int(Int64(attempt)),
+                        "of": .int(Int64(transcodeAttempts)),
+                        "reason": .string(error.localizedDescription)
+                    ]
+                )
+                if attempt < transcodeAttempts {
+                    // Brief sleep before next attempt — interruptions
+                    // usually clear within a second.
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                }
+            }
+        }
+
+        if lastTranscodeError == nil {
+            // Happy path: M4A on disk at `final`, drop the CAF.
+            try? FileManager.default.removeItem(at: intermediate)
             cleanupState()
             try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
-            throw AudioRecorderError.engineFailure(reason: "transcode: \(error.localizedDescription)")
+            return EngineStopArtifact(
+                fileURL: final,
+                duration: duration,
+                mimeType: "audio/mp4",
+                fileExtension: "m4a"
+            )
         }
 
-        try? FileManager.default.removeItem(at: intermediate)
+        // Permanent transcode failure → CAF fallback.
+        // Keep the CAF; that IS the user's audio now. Don't touch
+        // `final` because there's no valid M4A there — server will
+        // get the CAF instead.
+        await logger.error(
+            "audio.transcode.fallback_to_caf",
+            metadata: [
+                "caf_path": .string(intermediate.lastPathComponent),
+                "reason": .string(lastTranscodeError?.localizedDescription ?? "unknown")
+            ],
+            errorCode: "transcode_fallback"
+        )
+        // Delete the partial/missing M4A at `final` so nothing else
+        // tries to upload it. AVAssetExportSession may have left a
+        // partial file behind on failure.
+        try? FileManager.default.removeItem(at: final)
         cleanupState()
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
-
-        // Fallback to wall-clock if the frame counter never fired
-        // (e.g., very-short capture where the tap had no chance to
-        // deliver a buffer). Mirrors LiveAudioRecordingEngine's
-        // 0.001s floor so we never report a zero-duration recording.
-        if measuredDuration > 0 {
-            return measuredDuration
-        }
-        return max(0.001, Date().timeIntervalSince(savedStartedAt ?? Date()))
+        return EngineStopArtifact(
+            fileURL: intermediate,
+            duration: duration,
+            mimeType: "audio/x-caf",
+            fileExtension: "caf"
+        )
     }
 
     func cancel() async {
