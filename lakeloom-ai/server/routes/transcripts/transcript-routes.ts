@@ -38,6 +38,24 @@ interface TranscriptEvent {
 
 const sessionListeners = new Map<string, Set<TranscriptListener>>();
 
+// Track all active SSE response objects for graceful shutdown
+const activeSSEConnections = new Set<import('express').Response>();
+
+/**
+ * Gracefully close all active SSE connections.
+ * Called during SIGTERM to unblock the HTTP server close.
+ */
+export function closeAllTranscriptSSE(): void {
+  for (const res of activeSSEConnections) {
+    try {
+      res.write(': server shutting down\n\n');
+      res.end();
+    } catch { /* already closed */ }
+  }
+  activeSSEConnections.clear();
+  sessionListeners.clear();
+}
+
 /**
  * Push a transcript event to all connected SSE clients watching this session.
  * Called from the ingest route when a final_transcript event passes through.
@@ -118,6 +136,10 @@ export async function setupTranscriptRoutes(appkit: AppKitContext): Promise<void
         const endedAt = capture.ended_at as string | null;
         const table = getBronzeTable();
 
+        // Pagination: limit segments returned (default 500, max 2000)
+        const limitParam = parseInt(req.query.limit as string) || 500;
+        const segmentLimit = Math.min(Math.max(1, limitParam), 2000);
+
         // Build time-scoped query — only return events within this capture's window.
         // A paired session can span multiple captures; without time scoping we'd
         // return transcripts from other sessions on the same paired device.
@@ -148,6 +170,7 @@ export async function setupTranscriptRoutes(appkit: AppKitContext): Promise<void
             AND event_type = 'final_transcript'
             ${timeFilter}
           ORDER BY event_time ASC, body:segment_index::int ASC
+          LIMIT ${segmentLimit}
         `, params, {
           accessToken: getAccessToken(req),
         });
@@ -208,6 +231,7 @@ export async function setupTranscriptRoutes(appkit: AppKitContext): Promise<void
         res.setHeader('Connection', 'keep-alive');
         res.setHeader('X-Accel-Buffering', 'no');
         res.flushHeaders();
+        activeSSEConnections.add(res);
 
         res.write(': connected\n\n');
 
@@ -227,6 +251,7 @@ export async function setupTranscriptRoutes(appkit: AppKitContext): Promise<void
         req.on('close', () => {
           clearInterval(keepalive);
           removeTranscriptListener(sessionId, listener);
+          activeSSEConnections.delete(res);
         });
       } catch (err) {
         console.error('[transcript/stream] error:', err);

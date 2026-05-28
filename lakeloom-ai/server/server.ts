@@ -7,7 +7,7 @@ import { setupProjectRoutes } from './routes/projects/project-routes';
 import { setupZerobusRoutes } from './routes/zerobus/zerobus-routes';
 import { setupMediaRoutes } from './routes/media/media-routes';
 import { setupAdminRoutes } from './routes/admin/admin-routes';
-import { setupTranscriptRoutes } from './routes/transcripts/transcript-routes';
+import { setupTranscriptRoutes, closeAllTranscriptSSE } from './routes/transcripts/transcript-routes';
 import { runMigrations } from './migrations/migrate';
 import { initSecrets } from './services/secrets-service';
 import { zeroBusService } from './services/zerobus-service';
@@ -142,6 +142,14 @@ createApp({
         process.exit(1);
       }, 12_000);
       forceExitTimer.unref();
+
+      // Close all active SSE connections first (unblocks HTTP server)
+      try {
+        closeAllTranscriptSSE();
+        console.log('[shutdown] SSE connections closed.');
+      } catch (err) {
+        console.error('[shutdown] SSE cleanup error:', err);
+      }
 
       try {
         await zeroBusService.close();

@@ -137,39 +137,60 @@ export function TranscriptPanel({
     return () => { cancelled = true; };
   }, [captureId]);
 
-  // ── SSE live stream (active captures only) ───────────────────────
+  // ── SSE live stream (active captures only, with auto-reconnect) ──
 
   useEffect(() => {
     if (captureState !== 'active') return;
 
-    const eventSource = new EventSource(`/api/captures/${captureId}/transcript/stream`);
-    
-    eventSource.onopen = () => {
-      setLiveConnected(true);
-    };
+    let eventSource: EventSource | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let reconnectAttempts = 0;
+    let cancelled = false;
 
-    eventSource.addEventListener('transcript', (e) => {
-      try {
-        const segment: TranscriptSegment = JSON.parse(e.data);
-        setSegments((prev) => [...prev, segment]);
-        // Auto-scroll to bottom for live
-        if (autoScrollRef.current) {
-          setTimeout(() => {
-            scrollRef.current?.scrollTo({
-              top: scrollRef.current.scrollHeight,
-              behavior: 'smooth',
-            });
-          }, 50);
+    function connect() {
+      if (cancelled) return;
+      eventSource = new EventSource(`/api/captures/${captureId}/transcript/stream`);
+
+      eventSource.onopen = () => {
+        setLiveConnected(true);
+        reconnectAttempts = 0; // Reset on successful connect
+      };
+
+      eventSource.addEventListener('transcript', (e) => {
+        try {
+          const segment: TranscriptSegment = JSON.parse(e.data);
+          setSegments((prev) => [...prev, segment]);
+          // Auto-scroll to bottom for live
+          if (autoScrollRef.current) {
+            setTimeout(() => {
+              scrollRef.current?.scrollTo({
+                top: scrollRef.current.scrollHeight,
+                behavior: 'smooth',
+              });
+            }, 50);
+          }
+        } catch { /* ignore malformed events */ }
+      });
+
+      eventSource.onerror = () => {
+        setLiveConnected(false);
+        eventSource?.close();
+        eventSource = null;
+        // Exponential backoff reconnect: 1s, 2s, 4s, 8s, max 30s
+        if (!cancelled && reconnectAttempts < 10) {
+          const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30_000);
+          reconnectAttempts++;
+          reconnectTimer = setTimeout(connect, delay);
         }
-      } catch { /* ignore malformed events */ }
-    });
+      };
+    }
 
-    eventSource.onerror = () => {
-      setLiveConnected(false);
-    };
+    connect();
 
     return () => {
-      eventSource.close();
+      cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      eventSource?.close();
       setLiveConnected(false);
     };
   }, [captureId, captureState]);
