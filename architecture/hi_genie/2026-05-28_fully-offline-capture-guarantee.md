@@ -27,7 +27,7 @@ What actually happened on-device:
 
 1. **LiveCaptureView didn't dismiss on Stop while offline.** The user tapped Stop, the recording animation stayed, the UI re-presented "uploading 1 file..." with a spinner, and the elapsed-time counter kept incrementing (jumped from ~1 minute to 3:21 over the course of investigation). The user couldn't tell whether the session was still recording or just stuck.
 2. **The operation queue went silent.** After Stop, no `operation.attempt.start` events appeared in OSLog. We expected the worker to be retrying the `.createCaptureSession` op against the offline network and failing periodically; instead the queue was producing no events at all. I don't have a confident root cause yet — possibilities include: Stop never reached `LiveCaptureService.stopCapture` cleanly, the worker task was cancelled by some other lifecycle event, or my `.running → .queued` recovery isn't covering whatever state the op ended up in.
-3. **The audio file we got back from an earlier wedged session was unreadable** ("the file couldn't be opened because there is no such file" / "file unreadable" depending on which queue surfaced it). AVAudioRecorder's `.m4a` writer needs a proper `stop()` call to flush the moov atom; if the app dies mid-recording without that call, the file on disk is unrecoverable. For a 30-minute customer session, that's catastrophic.
+3. **The audio file we got back from an earlier wedged session was unreadable** ("the file couldn't be opened because there is no such file" / "file unreadable" depending on which queue surfaced it). AVAudioRecorder's `.m4a` writer needs a proper `stop()` call to flush the moov atom; if the app dies mid-recording without that call, the file on disk is unrecoverable. For a 30-minute customer session, that's catastrophic. **Late-breaking update from a live session this afternoon:** even online happy path stop can fail with `engineFailure(reason: "transcode: Operation Interrupted")` — `AVAssetExportSession.export(to:as:)` throws `AVError.operationInterrupted` on stop, presumably from an AVAudioSession interruption mid-export. The intermediate `.caf` survives on disk (the delete is after the throw on `EngineAudioRecordingEngine.swift:227`), but the in-memory reference is nilled, so the app loses track of the recoverable audio. Three audio reliability failure modes in one day — strongly suggests the recording path needs hardening as a single workstream.
 4. **No diagnostic surface for the user.** There's no "you have N items queued and they're safe" UI. The user has to trust the spinner. If the spinner looks frozen — which it did for us, for legitimate-but-confusing reasons — there's no way to confirm the data is preserved.
 
 The fixes I shipped today onto PR #77 are real but bounded:
@@ -50,7 +50,7 @@ This is the iOS-side checklist I want to work through. I'd appreciate a sanity c
 
 ### 3.2 AVAudioRecorder lifecycle vs app lifecycle
 
-The current implementation finalizes the .m4a only when `stopCapture()` is called explicitly. That's not robust enough — the user can:
+The current implementation finalizes the .m4a only when `stopCapture()` is called explicitly, and even when it does, the CAF→M4A transcode via AVAssetExportSession can throw "Operation Interrupted" on stop (the third failure mode noted in §2). The user can also:
 
 - Force-quit while recording (no `stopCapture` ever runs)
 - Get backgrounded by an incoming call / Siri / etc. and never return
@@ -65,6 +65,8 @@ For each, the audio file should be **recoverable**. Options I'm weighing:
 - **Periodic moov-atom rewrites**: AVAudioRecorder supports incremental file writes; we could trigger periodic flushes. Investigating.
 
 I'm leaning toward chunked recording (option 3) because it's the only one that survives jetsam mid-session. Open to other approaches if you've thought about this.
+
+**Transcode failure handling** is a separate sub-piece in PR A: when `AVAssetExportSession` throws on stop, today we throw `engineFailure` and the in-memory CAF reference is nilled. We should instead: (a) retry the export 2-3 times with brief backoff (often interruption is transient), (b) on permanent transcode failure, surface the orphaned CAF to the upload queue as-is (or transcoded asynchronously in the background), (c) never silently lose the user's audio. We may also want to upload the raw CAF and let the server transcode if the on-device export fails — would be useful to know if your side can handle a CAF audio upload as a fallback, or if we should keep the transcode strictly on-device.
 
 ### 3.3 File integrity at enqueue time
 
@@ -118,6 +120,8 @@ PR #77 stays as-is on its branch with today's fixes — once PR A merges, I'll r
 Things I'd appreciate your read on before I start implementing:
 
 1. **Resumable uploads.** Right now `POST /api/captures/:id/audio` is single-shot multipart. For a 60-minute session that's potentially hundreds of MB shipped in one request — if it fails halfway over hotel Wi-Fi it starts from zero. Is there appetite for a chunked/resumable contract? I'm imagining something like `POST .../audio/init`, `POST .../audio/chunk?offset=N`, `POST .../audio/complete`, with the App side reassembling on UC Volume write. Not blocking on this — single-shot is fine for the first cut — but worth knowing if you've thought about it.
+
+  **Related question** from §3.2 above: would you accept a raw CAF upload as a fallback when iOS-side transcode fails? If the App's audio path is `.m4a`-only on UC Volume that's fine, we keep the transcode strictly on-device with the retry/recovery story; but if the App could accept CAF and lazily transcode server-side, that would eliminate an entire class of audio-loss bugs on iOS.
 
 2. **Pending-sessions surface in the Databricks App.** Today the App only knows about sessions that have an `app.capture_sessions` row. Pre-create-lands, the App sees nothing. Would a "pending" surface be useful — fed by ZeroBus events tagged with the iOS-generated capture session ID — so the App shows "FDE has 3 captures pending upload from the Acme onsite, ETA when they're back on Wi-Fi"? Or is that overkill and we just wait for the create to land?
 
