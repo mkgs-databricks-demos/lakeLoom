@@ -53,6 +53,13 @@ public protocol UploadCoordinator: Sendable {
     /// still persist to disk but won't be uploaded until the next
     /// `start()`.
     func stop() async
+
+    /// Nudge the worker to re-check the queue immediately. Used by
+    /// the reachability monitor on `offline → online` transitions:
+    /// uploads that were sitting in their post-network-error backoff
+    /// get re-attempted right away instead of waiting out the timer.
+    /// Mirrors ``OperationQueueing/wake()``.
+    func wake() async
 }
 
 /// Typed errors surfaced by ``UploadCoordinator/enqueue(_:)``.

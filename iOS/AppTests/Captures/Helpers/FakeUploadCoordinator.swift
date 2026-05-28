@@ -15,6 +15,7 @@ public actor FakeUploadCoordinator: UploadCoordinator {
         case retry(uploadID: String)
         case start
         case stop
+        case wake
     }
 
     public private(set) var calls: [Call] = []
@@ -85,6 +86,10 @@ public actor FakeUploadCoordinator: UploadCoordinator {
 
     public func stop() async {
         calls.append(.stop)
+    }
+
+    public func wake() async {
+        calls.append(.wake)
     }
 
     private func unsubscribe(id: UUID) {

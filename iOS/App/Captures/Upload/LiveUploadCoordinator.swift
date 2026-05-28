@@ -28,6 +28,11 @@ public actor LiveUploadCoordinator: UploadCoordinator {
     private let multipartBoundaryProvider: @Sendable () -> String
     private let maxAttempts: Int
     private let backoff: [TimeInterval]
+    /// Fixed retry delay used for "no network" failures so we don't
+    /// burn the maxAttempts retry budget against pure offline-state.
+    /// Short enough that the upload drains promptly after reachability
+    /// returns; long enough not to thrash CPU while offline.
+    private let networkRetryDelay: TimeInterval
 
     // MARK: State
 
@@ -55,6 +60,7 @@ public actor LiveUploadCoordinator: UploadCoordinator {
         self.multipartBoundaryProvider = { MultipartFormBuilder.makeBoundary() }
         self.maxAttempts = 5
         self.backoff = [2, 4, 8, 16, 32]
+        self.networkRetryDelay = 5
     }
 
     /// Test-friendly init: lets unit tests stub the clock, the sleep
@@ -68,7 +74,8 @@ public actor LiveUploadCoordinator: UploadCoordinator {
         sleep: @Sendable @escaping (TimeInterval) async throws -> Void,
         multipartBoundaryProvider: @Sendable @escaping () -> String = { MultipartFormBuilder.makeBoundary() },
         maxAttempts: Int = 5,
-        backoff: [TimeInterval] = [2, 4, 8, 16, 32]
+        backoff: [TimeInterval] = [2, 4, 8, 16, 32],
+        networkRetryDelay: TimeInterval = 5
     ) {
         self.lakeloomApp = lakeloomApp
         self.queueStore = queueStore
@@ -78,6 +85,7 @@ public actor LiveUploadCoordinator: UploadCoordinator {
         self.multipartBoundaryProvider = multipartBoundaryProvider
         self.maxAttempts = maxAttempts
         self.backoff = backoff
+        self.networkRetryDelay = networkRetryDelay
     }
 
     // MARK: Public surface
@@ -102,7 +110,7 @@ public actor LiveUploadCoordinator: UploadCoordinator {
             ]
         )
         broadcast(uploadID: pending.id, state: pending.state)
-        wake()
+        resumeWake()
     }
 
     public func currentUploads() async -> [PendingUpload] {
@@ -129,7 +137,7 @@ public actor LiveUploadCoordinator: UploadCoordinator {
         uploads[uploadID] = upload
         try? await persist()
         broadcast(uploadID: uploadID, state: .queued)
-        wake()
+        resumeWake()
     }
 
     public func discard(uploadID: String) async {
@@ -312,6 +320,35 @@ public actor LiveUploadCoordinator: UploadCoordinator {
     }
 
     private func handleFailure(upload: PendingUpload, error: LakeloomAppError) async {
+        // "No network reached the server" failures shouldn't burn the
+        // retry budget — otherwise an offline session longer than
+        // (sum of `backoff`) seconds parks the upload terminal-failed
+        // forever, and reachability returning doesn't recover it.
+        // Decrement the attempt counter (it was incremented at the top
+        // of `attempt()`) and use a fixed short backoff so we don't
+        // CPU-thrash while offline. `wake()` (wired to reachability
+        // .online in LakeloomApp) and `enqueue()` both prod the worker
+        // for any queued-and-waiting uploads.
+        if isNetworkError(error) {
+            let reason = String(describing: error)
+            var updated = upload
+            updated.attempts = max(0, upload.attempts - 1)
+            updated.state = .queued
+            updated.nextAttemptAt = nowProvider().addingTimeInterval(networkRetryDelay)
+            updated.lastError = reason
+            uploads[upload.id] = updated
+            try? await persist()
+            broadcast(uploadID: upload.id, state: .queued)
+            await logger.warning(
+                "upload.attempt.failed_network",
+                metadata: [
+                    "upload_id": .uuidPrefix(upload.id),
+                    "retry_in_s": .double(networkRetryDelay),
+                    "reason": .string(reason)
+                ]
+            )
+            return
+        }
         let permanent = isPermanent(error: error)
         let reason = String(describing: error)
         var updated = upload
@@ -348,6 +385,20 @@ public actor LiveUploadCoordinator: UploadCoordinator {
                     "reason": .string(reason)
                 ]
             )
+        }
+    }
+
+    /// Errors that mean "no network reached the server" — distinct
+    /// from server-returned transient failures (404 race, 5xx, etc.)
+    /// because they shouldn't count against the retry budget. The
+    /// upload sits in fixed-delay re-queue until reachability returns.
+    private func isNetworkError(_ error: LakeloomAppError) -> Bool {
+        switch error {
+        case .networkUnavailable, .timeout, .transport:
+            return true
+        case .tokenExchangeFailed, .unauthorized,
+             .httpError, .decodeFailed, .workspaceNotConfigured:
+            return false
         }
     }
 
@@ -413,7 +464,23 @@ public actor LiveUploadCoordinator: UploadCoordinator {
 
     // MARK: - Wake / persist / broadcast
 
-    private func wake() {
+    /// External nudge — used by LakeloomApp's reachability subscription
+    /// to retry queued uploads immediately when the device comes back
+    /// online. Clears any pending `nextAttemptAt` so the worker doesn't
+    /// honor a stale offline-era backoff timer.
+    public func wake() async {
+        var changed = false
+        for id in order {
+            guard var upload = uploads[id] else { continue }
+            if case .queued = upload.state, upload.nextAttemptAt != nil {
+                upload.nextAttemptAt = nil
+                uploads[id] = upload
+                changed = true
+            }
+        }
+        if changed {
+            try? await persist()
+        }
         resumeWake()
     }
 

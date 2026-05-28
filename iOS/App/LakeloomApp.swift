@@ -221,18 +221,24 @@ struct LakeloomApp: App {
                     }
                 }
                 .task {
-                    // PR 21 (Phase 3): nudge the operation queue
-                    // whenever the device transitions back online so
-                    // a backlog of capture-create / state-PATCH ops
-                    // drains right away instead of waiting out the
-                    // current backoff window.
-                    guard
-                        let reachability = coordinator.reachability,
-                        let operationQueue = coordinator.operationQueue
-                    else { return }
+                    // PR 21 (Phase 3): nudge the operation queue AND
+                    // the upload coordinator whenever the device
+                    // transitions back online so a backlog of
+                    // capture-create / state-PATCH ops + data-plane
+                    // multipart uploads drains right away instead of
+                    // waiting out the current backoff window.
+                    // Without the uploadCoordinator wake, an offline
+                    // session longer than `sum(backoff)` seconds would
+                    // park audio uploads terminal-failed permanent
+                    // before reachability returned — see the network-
+                    // error handling in `LiveUploadCoordinator.handleFailure`.
+                    guard let reachability = coordinator.reachability else { return }
+                    let operationQueue = coordinator.operationQueue
+                    let uploadCoordinator = coordinator.uploadCoordinator
                     for await state in reachability.stateUpdates() {
                         if state == .online {
-                            await operationQueue.wake()
+                            if let operationQueue { await operationQueue.wake() }
+                            if let uploadCoordinator { await uploadCoordinator.wake() }
                         }
                     }
                 }

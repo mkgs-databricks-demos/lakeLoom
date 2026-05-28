@@ -354,6 +354,124 @@ struct LiveUploadCoordinatorTests {
         await coordinator.stop()
     }
 
+    @Test("networkUnavailable never parks terminal even past maxAttempts")
+    func networkErrorsDontExhaustRetryBudget() async throws {
+        // Reproduces the Phase 3 scenario-3 bug: an offline session
+        // longer than `sum(backoff)` seconds used to park the upload
+        // terminal-failed permanent before reachability returned,
+        // because each network failure counted against maxAttempts.
+        // After the fix, network errors don't exhaust the budget —
+        // the upload waits on a fixed networkRetryDelay until it
+        // finally lands (or until a real server-side failure does
+        // count against the limit).
+        let sandbox = Self.makeSandbox()
+        let app = FakeLakeloomAppClient()
+        // Queue more failures than maxAttempts: 10 offline-style
+        // failures followed by one success. Pre-fix this would have
+        // parked permanent at attempt 5; post-fix the 11th attempt
+        // succeeds because the retry budget was never spent.
+        for _ in 0..<10 {
+            await app.enqueueResponse(.failure(.networkUnavailable))
+        }
+        await app.enqueueResponse(.success(Data("{\"id\":\"remote-net\"}".utf8)))
+
+        let coordinator = LiveUploadCoordinator(
+            lakeloomApp: app,
+            queueStore: sandbox.queueStore,
+            sleep: { _ in /* skip backoff in tests */ },
+            multipartBoundaryProvider: { "fixed-boundary" }
+        )
+
+        let stream = await coordinator.stateUpdates()
+        var iterator = stream.makeAsyncIterator()
+
+        let pending = Self.makePending(fileURL: sandbox.fileURL)
+        try await coordinator.enqueue(pending)
+        await coordinator.start()
+
+        // Drain state events until either succeeded or permanent
+        // failure — fail the test if we hit permanent.
+        var sawSucceeded = false
+        for _ in 0..<60 {
+            guard let change = await iterator.next() else { break }
+            if change.state == .succeeded {
+                sawSucceeded = true
+                break
+            }
+            if case .failed(_, let permanent) = change.state, permanent {
+                Issue.record("Upload parked terminal-permanent despite network-only failures")
+                break
+            }
+        }
+        #expect(sawSucceeded)
+        let calls = await app.requestCalls
+        #expect(calls.count == 11)
+
+        await coordinator.stop()
+    }
+
+    @Test("wake clears nextAttemptAt on queued uploads")
+    func wakeClearsPendingBackoff() async throws {
+        // After a network failure the upload sits in `.queued` with
+        // `nextAttemptAt` set to (now + networkRetryDelay). Reachability
+        // returning calls wake(), which should clear that timer so the
+        // next worker iteration picks the upload up immediately rather
+        // than honoring a stale offline-era backoff.
+        let sandbox = Self.makeSandbox()
+        let app = FakeLakeloomAppClient()
+        await app.enqueueResponse(.failure(.networkUnavailable))
+        await app.enqueueResponse(.success(Data("{\"id\":\"remote-wake\"}".utf8)))
+
+        let coordinator = LiveUploadCoordinator(
+            lakeloomApp: app,
+            queueStore: sandbox.queueStore,
+            sleep: { _ in },
+            multipartBoundaryProvider: { "fixed-boundary" },
+            networkRetryDelay: 600 // generous so the test never relies on it elapsing
+        )
+
+        let stream = await coordinator.stateUpdates()
+        var iterator = stream.makeAsyncIterator()
+
+        let pending = Self.makePending(fileURL: sandbox.fileURL)
+        try await coordinator.enqueue(pending)
+        await coordinator.start()
+
+        // Wait for the network failure to land the upload back in .queued.
+        var sawQueuedAfterFailure = false
+        for _ in 0..<6 {
+            guard let change = await iterator.next() else { break }
+            if change.state == .queued {
+                // First .queued is the initial enqueue; second is post-failure.
+                if sawQueuedAfterFailure { break }
+                sawQueuedAfterFailure = true
+            }
+        }
+
+        // Verify nextAttemptAt was set to the far-future delay.
+        let snapshotBefore = await coordinator.currentUploads()
+        #expect(snapshotBefore.first?.nextAttemptAt != nil)
+
+        // Wake — should clear nextAttemptAt and resume the worker.
+        await coordinator.wake()
+
+        let snapshotAfter = await coordinator.currentUploads()
+        #expect(snapshotAfter.first?.nextAttemptAt == nil)
+
+        // The worker re-attempts and succeeds.
+        var sawSucceeded = false
+        for _ in 0..<6 {
+            guard let change = await iterator.next() else { break }
+            if change.state == .succeeded {
+                sawSucceeded = true
+                break
+            }
+        }
+        #expect(sawSucceeded)
+
+        await coordinator.stop()
+    }
+
     @Test("discard removes upload from queue and deletes local file")
     func discardRemovesEverything() async throws {
         let sandbox = Self.makeSandbox()
