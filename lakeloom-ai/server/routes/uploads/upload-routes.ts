@@ -89,6 +89,9 @@ const MIME_TO_EXT: Record<string, string> = {
   'audio/wav': 'wav',
   'audio/m4a': 'm4a',
   'audio/mp4': 'm4a',
+  'audio/x-caf': 'caf',
+  'audio/x-aiff': 'aiff',
+  'audio/aiff': 'aiff',
   'image/png': 'png',
   'image/jpeg': 'jpg',
   'application/pdf': 'pdf',
@@ -985,7 +988,7 @@ export default function registerUploads(ctx: AppKitContext): void {
       '/api/captures/:capture_session_id/audio',
       iosAuth({ lakebase }),
       createUploadHandler(
-        { kind: 'audio', volumeKey: 'session_audio', volumeEnvVar: 'LAKELOOM_AUDIO_VOLUME_PATH', allowedMimes: ['audio/wav', 'audio/m4a', 'audio/mp4'], resolveContext: resolveCaptureContextIos },
+        { kind: 'audio', volumeKey: 'session_audio', volumeEnvVar: 'LAKELOOM_AUDIO_VOLUME_PATH', allowedMimes: ['audio/wav', 'audio/m4a', 'audio/mp4', 'audio/x-caf', 'audio/x-aiff', 'audio/aiff'], resolveContext: resolveCaptureContextIos },
         lakebase, appkitFiles,
       ),
     );
