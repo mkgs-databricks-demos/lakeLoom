@@ -5,6 +5,7 @@
 #   - All API routes registered (captures, uploads, pairing, zerobus)
 #   - Health endpoint responds
 #   - ZeroBus env configured, pool health, history endpoints
+#   - CAF/AIFF upload acceptance + server-side transcode to M4A
 # Triggered by deploy.sh after successful app deploy + migration.
 # Raises AssertionError (non-zero exit) on any test failure.
 
@@ -31,6 +32,13 @@ resources:
               app_name: ${var.app_name}
               catalog_use: ${var.catalog}
               schema_use: ${var.schema}
+          environment_key: default
+
+        - task_key: caf_transcode_validation
+          depends_on:
+            - task_key: api_endpoint_tests
+          notebook_task:
+            notebook_path: ../src/tests/caf-transcode-test.ipynb
           environment_key: default
 
       environments:
