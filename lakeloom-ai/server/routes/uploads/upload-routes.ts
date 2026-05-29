@@ -1109,6 +1109,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
               is_final_chunk: existing.is_final_chunk,
               uploaded_at: existing.uploaded_at,
               _dedup: true,
+              dedup_sha_mismatch: (existing.sha256_hex && existing.sha256_hex !== sha256Hash) || false,
             });
             return;
           }
