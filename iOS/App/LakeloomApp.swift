@@ -74,16 +74,20 @@ struct LakeloomApp: App {
         // owner, two consumers (file writer + recognizer) feeding
         // off the same input tap.
         //
-        // PR A piece 4: rotation mechanics live in the engine (commit
-        // 9636eaf) but `chunkDuration` is kept `nil` for now —
-        // production stays single-chunk until Genie's migration 021
-        // (`chunk_index`/`is_final_chunk` columns + partial unique
-        // index) and the concat playback endpoint land. Flipping
-        // this to `300` is a one-line follow-up that ships alongside
-        // the `chunk_index` wire-field plumbing on `PendingUpload`.
-        // See architecture/hi_genie/2026-05-29_chunked-recording-design.md
-        // and architecture/hey_isaac/2026-05-29_caf-deployed-chunked-recording-answers.md.
-        let engineRecordingEngine = EngineAudioRecordingEngine(chunkDuration: nil)
+        // PR A piece 4: chunked recording is LIVE. The engine rotates
+        // the AVAudioFile every `chunkDuration` seconds, finalizing each
+        // closed chunk (CAF→M4A transcode + CAF fallback) in parallel
+        // with continued recording. Each chunk uploads independently
+        // with its `chunk_index` / `is_final_chunk` / `total_chunks`
+        // fields against Genie's migration 021 (deployed to dev
+        // 2026-05-29 — `hey_isaac/.../2026-05-29_mig021-live-dedup-sha-flag.md`),
+        // and the chunks-list + concat endpoints serve playback.
+        //
+        // 5-minute chunks (Genie §7.5): a 5-hour recording is 60 chunks,
+        // well under her `chunk_index < 1000` guard, and bounds the
+        // worst-case re-upload window on a network blip to one chunk.
+        // See architecture/hi_genie/2026-05-29_chunked-recording-design.md.
+        let engineRecordingEngine = EngineAudioRecordingEngine(chunkDuration: 300)
         let streamingRecognizer = LiveStreamingSpeechRecognizer()
 
         // Upload pipeline. Worker loop is started from the App's
