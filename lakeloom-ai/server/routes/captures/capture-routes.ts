@@ -392,5 +392,137 @@ export async function setupCaptureRoutes(appkit: AppKitContext): Promise<void> {
         next(err);
       }
     });
+
+    // ── Chunked audio: list chunks ─────────────────────────────────────────────
+    // GET /api/captures/:capture_session_id/audio/chunks
+    // Returns ordered chunk metadata for a capture session's audio uploads.
+    app.get('/api/captures/:capture_session_id/audio/chunks', dual, async (req, res, next) => {
+      try {
+        const captureSessionId = req.params.capture_session_id;
+        if (!captureSessionId) {
+          return res.status(400).json({ error: 'capture_session_id is required' });
+        }
+
+        const { rows } = await lakebase.query(
+          `SELECT id, chunk_index, is_final_chunk, volume_path, mime_type, size_bytes, sha256_hex, uploaded_at
+           FROM app.uploads
+           WHERE capture_session_id = $1 AND kind = 'audio' AND revoked_at IS NULL
+           ORDER BY chunk_index ASC`,
+          [captureSessionId],
+        );
+
+        res.json({
+          capture_session_id: captureSessionId,
+          chunk_count: rows.length,
+          is_complete: rows.some((r) => r.is_final_chunk === true),
+          chunks: rows.map((r) => ({
+            upload_id: r.id,
+            chunk_index: r.chunk_index,
+            is_final_chunk: r.is_final_chunk,
+            volume_path: r.volume_path,
+            mime_type: r.mime_type,
+            size_bytes: r.size_bytes,
+            sha256_hex: r.sha256_hex,
+            uploaded_at: r.uploaded_at,
+          })),
+        });
+      } catch (err) {
+        next(err);
+      }
+    });
+
+    // ── Chunked audio: concatenated stream ─────────────────────────────────────
+    // GET /api/captures/:capture_session_id/audio/stream
+    // Streams concatenated M4A for all audio chunks in a capture session.
+    // Single chunk: pipes file directly. Multiple chunks: ffmpeg concat demuxer.
+    app.get('/api/captures/:capture_session_id/audio/stream', dual, async (req, res, next) => {
+      try {
+        const captureSessionId = req.params.capture_session_id;
+        if (!captureSessionId) {
+          return res.status(400).json({ error: 'capture_session_id is required' });
+        }
+
+        const { rows } = await lakebase.query(
+          `SELECT volume_path, mime_type, chunk_index
+           FROM app.uploads
+           WHERE capture_session_id = $1 AND kind = 'audio' AND revoked_at IS NULL
+           ORDER BY chunk_index ASC`,
+          [captureSessionId],
+        );
+
+        if (rows.length === 0) {
+          return res.status(404).json({ error: 'No audio chunks found for this capture session' });
+        }
+
+        const { createReadStream } = await import('node:fs');
+        const { stat } = await import('node:fs/promises');
+
+        // Single chunk: direct file proxy (no concat overhead)
+        if (rows.length === 1) {
+          const volumePath = rows[0].volume_path as string;
+          const mimeType = (rows[0].mime_type as string) || 'audio/mp4';
+
+          try {
+            const fileStat = await stat(volumePath);
+            res.setHeader('Content-Type', mimeType);
+            res.setHeader('Content-Length', fileStat.size);
+            res.setHeader('Accept-Ranges', 'bytes');
+            createReadStream(volumePath).pipe(res);
+          } catch {
+            return res.status(404).json({ error: 'Audio file not found on volume' });
+          }
+          return;
+        }
+
+        // Multiple chunks: ffmpeg concat demuxer (stream-copy, no re-encode)
+        const { spawn } = await import('node:child_process');
+        const { writeFile: writeTemp, unlink } = await import('node:fs/promises');
+        const { join } = await import('node:path');
+
+        // Build concat list file
+        const concatListPath = join('/tmp', `concat-${captureSessionId}-${Date.now()}.txt`);
+        const concatEntries = rows.map((r) => {
+          const vp = (r.volume_path as string).replace(/'/g, "'\''");
+          return `file '${vp}'`;
+        });
+        await writeTemp(concatListPath, concatEntries.join('\n'));
+
+        // Determine if any chunks need transcode (CAF mixed with M4A)
+        const allM4A = rows.every((r) => r.mime_type === 'audio/mp4' || r.mime_type === 'audio/m4a');
+
+        const ffmpegArgs = allM4A
+          ? ['-f', 'concat', '-safe', '0', '-i', concatListPath, '-c', 'copy', '-movflags', '+faststart', '-f', 'mp4', 'pipe:1']
+          : ['-f', 'concat', '-safe', '0', '-i', concatListPath, '-codec:a', 'aac', '-b:a', '128k', '-ac', '1', '-movflags', '+faststart', '-f', 'mp4', 'pipe:1'];
+
+        const ffmpeg = spawn('/tmp/ffmpeg', ffmpegArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
+
+        res.setHeader('Content-Type', 'audio/mp4');
+        res.setHeader('Transfer-Encoding', 'chunked');
+
+        ffmpeg.stdout.pipe(res);
+
+        ffmpeg.stderr.on('data', (data: Buffer) => {
+          // ffmpeg progress/info — log but don't send to client
+          console.log(`[audio-stream] ffmpeg: ${data.toString().slice(0, 200)}`);
+        });
+
+        ffmpeg.on('error', async (err) => {
+          console.error('[audio-stream] ffmpeg spawn error:', err);
+          try { await unlink(concatListPath); } catch { /* ignore */ }
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Audio concatenation failed' });
+          }
+        });
+
+        ffmpeg.on('close', async (code) => {
+          try { await unlink(concatListPath); } catch { /* ignore */ }
+          if (code !== 0 && !res.headersSent) {
+            res.status(500).json({ error: `ffmpeg exited with code ${code}` });
+          }
+        });
+      } catch (err) {
+        next(err);
+      }
+    });
   });
 }
