@@ -226,6 +226,7 @@
 		F25A9984A81AE2093A8AE308 /* ProjectDocumentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11E108F2A4CFC62478177D30 /* ProjectDocumentsView.swift */; };
 		F332C83944E75B5946D45ECC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 03E8FE79AE4D85C07FAADD0D /* Assets.xcassets */; };
 		F349F1B054CF3F2C200E4C91 /* MultipartFormBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45688C266A696941D3149C84 /* MultipartFormBuilderTests.swift */; };
+		1A2B3C4D5E6F708192A3B4C5 /* PendingUploadChunkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5B4A39281706F5E4D3C2B1A /* PendingUploadChunkTests.swift */; };
 		F5D10BC4F0319AE24A8A47C5 /* AudioRecordingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6927D0046E2AC63DBEC4F585 /* AudioRecordingEngine.swift */; };
 		F738F3D9E671C1BFD1168F1A /* DefaultsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DA037C98A25E0AD2B05A6E7 /* DefaultsStore.swift */; };
 		F7C3D65F0F2544571FA082B1 /* OutboxStateChange+DTO.swift in Sources */ = {isa = PBXBuildFile; fileRef = B963155E7AFF0A42B5B6F5EE /* OutboxStateChange+DTO.swift */; };
@@ -304,6 +305,7 @@
 		40344A832CDF952EDF17DD42 /* LiveCaptureServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveCaptureServiceTests.swift; sourceTree = "<group>"; };
 		43C5D0A53C19D150BF519E41 /* PendingUploadsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingUploadsView.swift; sourceTree = "<group>"; };
 		45688C266A696941D3149C84 /* MultipartFormBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultipartFormBuilderTests.swift; sourceTree = "<group>"; };
+		C5B4A39281706F5E4D3C2B1A /* PendingUploadChunkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingUploadChunkTests.swift; sourceTree = "<group>"; };
 		470124F4A089D30F26044AA8 /* ProjectMetadataCache+CoreDataClass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ProjectMetadataCache+CoreDataClass.swift"; sourceTree = "<group>"; };
 		488CC02E5AC5E5FA53FDFC00 /* LakeloomStore.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = LakeloomStore.xcdatamodel; sourceTree = "<group>"; };
 		4A232809AC2D399D4F4F8750 /* LiveStreamingSpeechRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveStreamingSpeechRecognizer.swift; sourceTree = "<group>"; };
@@ -797,6 +799,7 @@
 			children = (
 				527F3EA3784AF76277A43DFB /* LiveUploadCoordinatorTests.swift */,
 				45688C266A696941D3149C84 /* MultipartFormBuilderTests.swift */,
+				C5B4A39281706F5E4D3C2B1A /* PendingUploadChunkTests.swift */,
 				A4B059E67C6CF38FE2607A2E /* PendingUploadRoutingTests.swift */,
 				5105E0C3A1B4FD22196B3B48 /* UploadErrorCodeTests.swift */,
 				7A9FE8BD612F14B20023C6CC /* UploadQueueStoreTests.swift */,
@@ -1410,6 +1413,7 @@
 				B4A7BEB0114B8C09F9DDDC76 /* MetricsRegistryTests.swift in Sources */,
 				1830BDEB53899E42C3A6DB07 /* MockAuthService.swift in Sources */,
 				F349F1B054CF3F2C200E4C91 /* MultipartFormBuilderTests.swift in Sources */,
+				1A2B3C4D5E6F708192A3B4C5 /* PendingUploadChunkTests.swift in Sources */,
 				D3CE931B569191B79E851084 /* OperationQueueStoreTests.swift in Sources */,
 				C9F8D3AA9C7F393A16ADC0FA /* PairingPayloadTests.swift in Sources */,
 				D5FF0F89DEBF5988B9F2F0B3 /* PairingStatusTests.swift in Sources */,

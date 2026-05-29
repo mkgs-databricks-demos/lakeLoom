@@ -393,7 +393,14 @@ public actor LiveUploadCoordinator: UploadCoordinator {
                 clientTimestamp: upload.clientTimestamp,
                 clientFilename: upload.originalFilename,
                 sha256Hex: upload.sha256Hex,
-                deviceID: upload.deviceID
+                deviceID: upload.deviceID,
+                // Chunk metadata is only meaningful for audio recordings
+                // (PR A piece 4). Photos / screenshots / documents are
+                // single whole files — leave the fields off so their
+                // multipart bodies stay byte-identical to today.
+                chunkIndex: upload.kind == .audio ? upload.chunkIndex : nil,
+                isFinalChunk: upload.kind == .audio ? upload.isFinalChunk : nil,
+                totalChunks: upload.kind == .audio ? upload.totalChunks : nil
             )
         } catch {
             // File disappeared from under us between enqueue and
