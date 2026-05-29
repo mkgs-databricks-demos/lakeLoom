@@ -512,9 +512,9 @@ public actor LiveCaptureService: CaptureService {
             throw CaptureServiceError.notRecording
         }
 
-        let recording: AudioRecording
+        let completed: CompletedRecording
         do {
-            recording = try await recorder.stop()
+            completed = try await recorder.stop()
         } catch let error as AudioRecorderError {
             // Recorder failed mid-stop. Leave the server-side session
             // `.active` and surface `.failed` — caller can invoke
@@ -532,34 +532,8 @@ public actor LiveCaptureService: CaptureService {
             throw CaptureServiceError.recorderStopFailed(reason: error.localizedDescription)
         }
 
-        let sha: String
-        do {
-            sha = try fileHasher(recording.fileURL)
-        } catch {
-            transition(to: .failed(reason: "hash: \(error.localizedDescription)"))
-            await contextStore?.clear()
-            await tearDownInSessionResources()
-            throw CaptureServiceError.hashingFailed(reason: error.localizedDescription)
-        }
-
-        let audioDeviceID = await resolvedDeviceID()
-        let pending = PendingUpload(
-            id: uploadIDProvider(),
-            workspaceID: context.workspaceID,
-            captureSessionID: context.captureSessionID,
-            kind: .audio,
-            localFileURL: recording.fileURL,
-            mimeType: recording.mimeType,
-            sizeBytes: recording.sizeBytes,
-            sha256Hex: sha,
-            clientTimestamp: recording.startedAt,
-            originalFilename: recording.fileURL.lastPathComponent,
-            deviceID: audioDeviceID,
-            createdAt: nowProvider()
-        )
-
         // Subscribe to the upload coordinator's state stream BEFORE
-        // calling `enqueue`. The coordinator's `stateUpdates()` is
+        // enqueueing any chunk. The coordinator's `stateUpdates()` is
         // not buffered — once `enqueue` fires its initial `.queued`
         // event (and the worker loop continues straight into
         // `.uploading` / `.succeeded`), any of those transitions
@@ -577,19 +551,62 @@ public actor LiveCaptureService: CaptureService {
         // counts we observed on real device).
         let uploadStream = await uploadCoordinator.stateUpdates()
 
-        do {
-            try await uploadCoordinator.enqueue(pending)
-        } catch let error as UploadCoordinatorError {
-            transition(to: .failed(reason: "enqueue: \(String(describing: error))"))
-            await contextStore?.clear()
-            await tearDownInSessionResources()
-            throw CaptureServiceError.enqueueFailed(reason: String(describing: error))
-        } catch {
-            transition(to: .failed(reason: "enqueue: \(error.localizedDescription)"))
-            await contextStore?.clear()
-            await tearDownInSessionResources()
-            throw CaptureServiceError.enqueueFailed(reason: error.localizedDescription)
+        let audioDeviceID = await resolvedDeviceID()
+
+        // One `PendingUpload` per chunk. Today the engine always
+        // produces exactly one chunk, so this loop runs once and
+        // behavior is identical to the pre-refactor single-file path.
+        // PR A piece 4's rotation will produce N chunks; each
+        // becomes its own queued upload. `chunkIndex` /
+        // `isFinalChunk` will surface on `PendingUpload` (and on the
+        // wire) once Genie answers §7.1 of the chunked-recording
+        // design doc — gated to keep this commit pure data shape,
+        // zero behavior change.
+        for chunk in completed.chunks {
+            let sha: String
+            do {
+                sha = try fileHasher(chunk.fileURL)
+            } catch {
+                transition(to: .failed(reason: "hash: \(error.localizedDescription)"))
+                await contextStore?.clear()
+                await tearDownInSessionResources()
+                throw CaptureServiceError.hashingFailed(reason: error.localizedDescription)
+            }
+
+            let pending = PendingUpload(
+                id: uploadIDProvider(),
+                workspaceID: context.workspaceID,
+                captureSessionID: context.captureSessionID,
+                kind: .audio,
+                localFileURL: chunk.fileURL,
+                mimeType: chunk.mimeType,
+                sizeBytes: chunk.sizeBytes,
+                sha256Hex: sha,
+                clientTimestamp: chunk.startedAt,
+                originalFilename: chunk.fileURL.lastPathComponent,
+                deviceID: audioDeviceID,
+                createdAt: nowProvider()
+            )
+
+            do {
+                try await uploadCoordinator.enqueue(pending)
+            } catch let error as UploadCoordinatorError {
+                transition(to: .failed(reason: "enqueue: \(String(describing: error))"))
+                await contextStore?.clear()
+                await tearDownInSessionResources()
+                throw CaptureServiceError.enqueueFailed(reason: String(describing: error))
+            } catch {
+                transition(to: .failed(reason: "enqueue: \(error.localizedDescription)"))
+                await contextStore?.clear()
+                await tearDownInSessionResources()
+                throw CaptureServiceError.enqueueFailed(reason: error.localizedDescription)
+            }
         }
+
+        // The final chunk's metadata stands in for the session for
+        // the recognizer-handoff fallback below: it carries the
+        // session-wide `endedAt` and the wall-clock end of audio.
+        let finalChunk = completed.final
 
         // Transcription handoff. PR 9b: when the live recognizer was
         // wired and started in startCapture (`liveStreamingActive`
@@ -611,12 +628,19 @@ public actor LiveCaptureService: CaptureService {
             liveStreamingTask = nil
             liveStreamingActive = false
         } else {
+            // File-based transcription fallback (older test paths,
+            // permission-denied at start). For multi-chunk sessions
+            // we transcribe the final chunk's file — Whisper runs
+            // server-side on every chunk anyway via the upload pipeline,
+            // so this is purely a belt-and-suspenders path for legacy
+            // callers and will be dropped when the live recognizer is
+            // mandatory.
             transcribeAudioInBackground(
-                fileURL: recording.fileURL,
+                fileURL: finalChunk.fileURL,
                 workspaceID: context.workspaceID,
                 projectID: context.projectID,
                 deviceID: audioDeviceID,
-                startedAt: recording.startedAt
+                startedAt: completed.first.startedAt
             )
         }
 

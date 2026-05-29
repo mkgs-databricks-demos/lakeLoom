@@ -38,29 +38,72 @@ protocol AudioRecordingEngine: Sendable {
     func cancel() async
 }
 
-/// Finalized output of an engine `stop()` call. Carries the actual
-/// on-disk artifact and its format identity so the recorder /
-/// upload layer doesn't have to guess.
+/// Finalized output of an engine `stop()` call. Carries every chunk
+/// the engine produced for this recording, along with the total
+/// duration of the session.
+///
+/// **Chunk model:** today, every engine produces exactly one chunk
+/// per recording — `chunks.count == 1`, `chunks[0].chunkIndex == 0`,
+/// behavior identical to pre-chunking. PR A piece 4's `AVAudioFile`
+/// rotation will produce multi-chunk artifacts (chunks 0..N-1) when
+/// the engine is configured with a chunk duration. The array always
+/// has at least one element; an engine that produces nothing throws
+/// `AudioRecorderError.notRecording` instead.
 ///
 /// **CAF fallback contract:** when an engine that transcodes
 /// CAF→M4A internally (currently ``EngineAudioRecordingEngine``)
-/// hits a permanent transcode failure, it falls back to returning
-/// the raw `.caf` intermediate as the artifact rather than throwing
-/// — losing the user's audio is never acceptable. Genie's server-
-/// side handler accepts `audio/x-caf` and stores the CAF on UC
-/// Volume; silver/gold pipeline transcodes later. See
+/// hits a permanent transcode failure, it falls back to producing
+/// the raw `.caf` intermediate as the chunk artifact rather than
+/// throwing — losing the user's audio is never acceptable. Genie's
+/// server-side handler accepts `audio/x-caf` and stores the CAF on
+/// UC Volume; silver/gold pipeline transcodes later. See
 /// `architecture/hey_isaac/2026-05-28_offline-guarantee-answers.md` §Q1.
 public struct EngineStopArtifact: Sendable, Equatable, Hashable {
-    public let fileURL: URL
-    public let duration: Double
-    public let mimeType: String
-    public let fileExtension: String
+    public let chunks: [Chunk]
+    public let totalDuration: Double
 
+    public init(chunks: [Chunk], totalDuration: Double) {
+        precondition(!chunks.isEmpty, "EngineStopArtifact must have at least one chunk")
+        self.chunks = chunks
+        self.totalDuration = totalDuration
+    }
+
+    /// Convenience init for the single-chunk happy path. Builds a
+    /// one-element `chunks` array with `chunkIndex = 0`. Behavior
+    /// identical to the pre-refactor single-file shape.
     public init(fileURL: URL, duration: Double, mimeType: String, fileExtension: String) {
-        self.fileURL = fileURL
-        self.duration = duration
-        self.mimeType = mimeType
-        self.fileExtension = fileExtension
+        self.init(
+            chunks: [Chunk(
+                fileURL: fileURL,
+                chunkIndex: 0,
+                duration: duration,
+                mimeType: mimeType,
+                fileExtension: fileExtension
+            )],
+            totalDuration: duration
+        )
+    }
+
+    public struct Chunk: Sendable, Equatable, Hashable {
+        public let fileURL: URL
+        public let chunkIndex: Int
+        public let duration: Double
+        public let mimeType: String
+        public let fileExtension: String
+
+        public init(
+            fileURL: URL,
+            chunkIndex: Int,
+            duration: Double,
+            mimeType: String,
+            fileExtension: String
+        ) {
+            self.fileURL = fileURL
+            self.chunkIndex = chunkIndex
+            self.duration = duration
+            self.mimeType = mimeType
+            self.fileExtension = fileExtension
+        }
     }
 }
 

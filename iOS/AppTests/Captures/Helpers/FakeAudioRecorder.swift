@@ -44,12 +44,12 @@ public actor FakeAudioRecorder: AudioRecorder {
         return fakeURL
     }
 
-    public func stop() async throws -> AudioRecording {
+    public func stop() async throws -> CompletedRecording {
         calls.append(.stop)
         if let stopError { throw stopError }
         internalState = .idle
-        if let fakeRecording { return fakeRecording }
-        return AudioRecording(
+        if let fakeRecording { return CompletedRecording(fakeRecording) }
+        return CompletedRecording(AudioRecording(
             captureSessionID: "unknown",
             fileURL: fakeURL,
             startedAt: Date(),
@@ -58,7 +58,7 @@ public actor FakeAudioRecorder: AudioRecorder {
             sizeBytes: 1024,
             mimeType: "audio/mp4",
             fileExtension: "m4a"
-        )
+        ))
     }
 
     public func cancel() async {

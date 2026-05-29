@@ -117,7 +117,7 @@ struct LiveAudioRecorderTests {
 
     // MARK: stop
 
-    @Test("stop returns AudioRecording with duration + size + mime")
+    @Test("stop returns CompletedRecording with one chunk carrying duration + size + mime")
     func stopHappyPath() async throws {
         let engine = FakeAudioRecordingEngine()
         let payload = Data(repeating: 0xAB, count: 1024)
@@ -126,13 +126,17 @@ struct LiveAudioRecorderTests {
         let (recorder, _, _) = Self.makeRecorder(engine: engine)
 
         _ = try await recorder.start(captureSessionID: Self.captureID)
-        let result = try await recorder.stop()
+        let completed = try await recorder.stop()
 
+        #expect(completed.chunks.count == 1)
+        let result = completed.final
         #expect(result.captureSessionID == Self.captureID)
         #expect(result.durationSeconds == 7.5)
         #expect(result.sizeBytes == 1024)
         #expect(result.mimeType == "audio/mp4")
         #expect(result.fileExtension == "m4a")
+        #expect(result.chunkIndex == 0)
+        #expect(result.isFinalChunk == true)
         #expect(result.startedAt == Self.fixedStart)
         // endedAt comes from second nowProvider() call → +105s
         #expect(result.endedAt == Self.fixedStart.addingTimeInterval(105))
@@ -167,8 +171,10 @@ struct LiveAudioRecorderTests {
             fileExtension: "caf"
         )
 
-        let result = try await recorder.stop()
+        let completed = try await recorder.stop()
 
+        #expect(completed.chunks.count == 1)
+        let result = completed.final
         #expect(result.mimeType == "audio/x-caf")
         #expect(result.fileExtension == "caf")
         #expect(result.fileURL == cafURL)

@@ -711,10 +711,11 @@ struct EndpointSmokeTestView: View {
         guard let recorder = audioRecorder, let captureID = lastCaptureID,
               let uploads = uploadCoordinator else { return }
 
-        // Stop the recorder.
+        // Stop the recorder. Smoke test path is single-chunk only —
+        // grab the final chunk's metadata to drive the upload below.
         let recording: AudioRecording
         do {
-            recording = try await recorder.stop()
+            recording = try await recorder.stop().final
         } catch let error as AudioRecorderError {
             isRecording = false
             audioRecorder = nil

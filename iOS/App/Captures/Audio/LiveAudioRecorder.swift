@@ -127,7 +127,7 @@ public actor LiveAudioRecorder: AudioRecorder {
         return url
     }
 
-    public func stop() async throws -> AudioRecording {
+    public func stop() async throws -> CompletedRecording {
         guard let inFlight = current else {
             throw AudioRecorderError.notRecording
         }
@@ -147,28 +147,50 @@ public actor LiveAudioRecorder: AudioRecorder {
         }
 
         let endedAt = nowProvider()
-        let sizeBytes = fileSize(at: artifact.fileURL)
-
         current = nil
+
+        // Build one `AudioRecording` per engine chunk. Per-chunk
+        // `startedAt` / `endedAt` are derived from the session start
+        // plus accumulated chunk durations — exact for the current
+        // single-chunk case and a good-enough approximation for the
+        // future multi-chunk case (PR A piece 4's rotation will
+        // carry real per-chunk timestamps in the engine; we'll feed
+        // those through here when they land). The final chunk's
+        // `endedAt` is pinned to `nowProvider()` so the session's
+        // wall-clock end matches what callers expect.
+        let lastIndex = artifact.chunks.count - 1
+        var cumulative: Double = 0
+        let chunks: [AudioRecording] = artifact.chunks.enumerated().map { offset, chunk in
+            let chunkStartedAt = inFlight.startedAt.addingTimeInterval(cumulative)
+            cumulative += chunk.duration
+            let chunkEndedAt = offset == lastIndex
+                ? endedAt
+                : inFlight.startedAt.addingTimeInterval(cumulative)
+            return AudioRecording(
+                captureSessionID: inFlight.captureSessionID,
+                fileURL: chunk.fileURL,
+                startedAt: chunkStartedAt,
+                endedAt: chunkEndedAt,
+                durationSeconds: chunk.duration,
+                sizeBytes: fileSize(at: chunk.fileURL),
+                mimeType: chunk.mimeType,
+                fileExtension: chunk.fileExtension,
+                chunkIndex: chunk.chunkIndex,
+                isFinalChunk: offset == lastIndex
+            )
+        }
+
         await logger.info(
             "audio.recorder.stopped",
             metadata: [
                 "capture_session_id": .string(inFlight.captureSessionID),
-                "duration_s": .string(String(format: "%.3f", artifact.duration)),
-                "bytes": .int(sizeBytes),
-                "mime_type": .string(artifact.mimeType)
+                "duration_s": .string(String(format: "%.3f", artifact.totalDuration)),
+                "chunks": .int(Int64(chunks.count)),
+                "bytes": .int(chunks.reduce(into: Int64(0)) { $0 += $1.sizeBytes }),
+                "mime_type": .string(chunks.last?.mimeType ?? "")
             ]
         )
-        return AudioRecording(
-            captureSessionID: inFlight.captureSessionID,
-            fileURL: artifact.fileURL,
-            startedAt: inFlight.startedAt,
-            endedAt: endedAt,
-            durationSeconds: artifact.duration,
-            sizeBytes: sizeBytes,
-            mimeType: artifact.mimeType,
-            fileExtension: artifact.fileExtension
-        )
+        return CompletedRecording(chunks: chunks)
     }
 
     public func cancel() async {
