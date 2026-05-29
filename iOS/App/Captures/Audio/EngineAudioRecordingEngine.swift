@@ -34,7 +34,13 @@ import Foundation
 actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, AudioInterruptionPublishing {
 
     private var engine: AVAudioEngine?
-    private var cafWriter: AVAudioFile?
+    /// Thread-safe holder for the current `AVAudioFile` the tap is
+    /// writing into. Wrapped (rather than holding the `AVAudioFile`
+    /// directly) so the rotation logic in PR A piece 4 can swap the
+    /// underlying writer atomically without racing the real-time tap
+    /// thread. Currently always holds a single writer for the entire
+    /// session; rotation is a follow-up.
+    private var writerHolder: AudioWriterHolder?
     private var frameCounter: FrameCounter?
     private var sampleRate: Double = 0
     private var startedAt: Date?
@@ -133,6 +139,7 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, Audio
             try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
             throw AudioRecorderError.fileSystemError(reason: "AVAudioFile init: \(error.localizedDescription)")
         }
+        let holder = AudioWriterHolder(initial: writer)
 
         let counter = FrameCounter()
         // PR 9b: also fan out audio buffers to a live stream so the
@@ -141,13 +148,13 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, Audio
         // race condition that bit PR 8d.
         let (stream, streamContinuation) = AsyncStream<PCMBufferEnvelope>.makeStream()
         // The tap closure runs on a real-time audio thread. Capture
-        // only Sendable references; the AVAudioFile + FrameCounter
-        // are both safe to access from the tap (AVAudioFile.write is
-        // documented as thread-safe for serial writes; FrameCounter
-        // wraps an NSLock; AsyncStream.Continuation.yield is
-        // documented as thread-safe).
+        // only Sendable references. The writer holder is lock-
+        // protected internally so rotation in PR A piece 4 can swap
+        // the underlying `AVAudioFile` without racing tap writes; the
+        // `FrameCounter` wraps an NSLock; `AsyncStream.Continuation.yield`
+        // is documented as thread-safe.
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { buffer, _ in
-            try? writer.write(from: buffer)
+            holder.write(buffer)
             counter.add(buffer.frameLength)
             streamContinuation.yield(PCMBufferEnvelope(buffer))
         }
@@ -162,7 +169,7 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, Audio
         }
 
         self.engine = avEngine
-        self.cafWriter = writer
+        self.writerHolder = holder
         self.frameCounter = counter
         self.sampleRate = inputFormat.sampleRate
         self.startedAt = Date()
@@ -213,7 +220,8 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, Audio
         avEngine.stop()
         // Dropping the AVAudioFile reference flushes + closes the
         // CAF file. AVAudioFile's destructor handles this.
-        cafWriter = nil
+        writerHolder?.close()
+        writerHolder = nil
         // Finish the buffer stream so any consumer (live speech
         // recognizer) drains naturally and calls request.endAudio()
         // on its recognition request.
@@ -303,7 +311,8 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, Audio
         unregisterSessionObservers()
         avEngine.inputNode.removeTap(onBus: 0)
         avEngine.stop()
-        cafWriter = nil
+        writerHolder?.close()
+        writerHolder = nil
         bufferContinuation?.finish()
         bufferContinuation = nil
         interruptionContinuation?.finish()
@@ -319,7 +328,8 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, Audio
 
     private func cleanupState() {
         engine = nil
-        cafWriter = nil
+        writerHolder?.close()
+        writerHolder = nil
         frameCounter = nil
         sampleRate = 0
         startedAt = nil
@@ -475,6 +485,63 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, Audio
         // iOS 18+ async API. Throws on failure; replaces the older
         // completion-handler + status-polling dance.
         try await exporter.export(to: destination, as: .m4a)
+    }
+}
+
+/// Lock-protected holder for the current `AVAudioFile` writer.
+/// Sits between the real-time tap thread (which writes buffers
+/// into the active file) and the actor's rotation path (which
+/// swaps the active file for a fresh one at chunk boundaries).
+///
+/// `AVAudioFile.write(from:)` is documented as thread-safe for
+/// writes from a single thread; concurrent writes from multiple
+/// threads need external synchronization. The tap is one thread,
+/// the rotation Task is another — so we wrap with an NSLock and
+/// gate every write/swap behind it. Lock contention is on the
+/// order of hundreds of nanoseconds; the tap's buffer interval
+/// at 4096 samples / 48 kHz is ~85 ms. Six orders of magnitude
+/// of headroom, no audible impact.
+///
+/// `@unchecked Sendable` because the lock is the only mutable
+/// state and is explicitly thread-safe.
+final class AudioWriterHolder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var writer: AVAudioFile?
+
+    init(initial: AVAudioFile) {
+        self.writer = initial
+    }
+
+    /// Write a buffer to the currently-held writer. Called from
+    /// the real-time tap thread. Errors are silently swallowed —
+    /// matches the prior `try? writer.write(from: buffer)` behavior
+    /// (write failures during a recording session are not
+    /// actionable in real time; they surface later via the file's
+    /// final size or transcode result).
+    func write(_ buffer: AVAudioPCMBuffer) {
+        lock.lock()
+        defer { lock.unlock() }
+        try? writer?.write(from: buffer)
+    }
+
+    /// Atomically swap the held writer. Returns the previous writer
+    /// so the caller can let its destructor flush the CAF tail.
+    /// Used by the rotation path: open the new file, then swap.
+    func swap(_ new: AVAudioFile) -> AVAudioFile? {
+        lock.lock()
+        defer { lock.unlock() }
+        let old = writer
+        writer = new
+        return old
+    }
+
+    /// Drop the held writer. AVAudioFile's destructor flushes and
+    /// closes the CAF when the last reference goes away. Called
+    /// from `stop()` / `cancel()` / `cleanupState()`.
+    func close() {
+        lock.lock()
+        defer { lock.unlock() }
+        writer = nil
     }
 }
 
