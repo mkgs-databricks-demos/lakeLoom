@@ -163,6 +163,7 @@
 		B32B2A6FB457C0F4501AB70C /* AccountSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E987E32CD3331F45B9FD0E4A /* AccountSettingsView.swift */; };
 		B37F69C8902758965FD093B1 /* SessionRecord+CoreDataProperties.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBE7480D4A2F1A24A1DD51D1 /* SessionRecord+CoreDataProperties.swift */; };
 		B3AA787C977BF8EF84E323C1 /* PhotoCaptureEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE7775A8A394AC2477CCD726 /* PhotoCaptureEngine.swift */; };
+		B3C95FBA6542661A228CEF01 /* EngineAudioRecordingEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B56146FBEA97818B9A7676FD /* EngineAudioRecordingEngineTests.swift */; };
 		B3DB9694585016D260636697 /* AuthServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D23CC687F33D45BCFBAC181 /* AuthServiceTests.swift */; };
 		B4A7BEB0114B8C09F9DDDC76 /* MetricsRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9803CE79226C45FB0CA23696 /* MetricsRegistryTests.swift */; };
 		B91CD29132AFCEC614F6120C /* OAuthTokenResponse.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ACDE0D326484062FF9B27A1 /* OAuthTokenResponse.swift */; };
@@ -417,6 +418,7 @@
 		B4C1F133256805A7DEE0CD33 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 		B4F44FB9DC8933C4BECAD01D /* LiveAudioRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveAudioRecorder.swift; sourceTree = "<group>"; };
 		B510973AA4634C1A10C91680 /* LakeloomAppUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = LakeloomAppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B56146FBEA97818B9A7676FD /* EngineAudioRecordingEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineAudioRecordingEngineTests.swift; sourceTree = "<group>"; };
 		B56E306F569107CBA0CCFB87 /* RecordingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingView.swift; sourceTree = "<group>"; };
 		B6AC82BB3B2B1AA511D76B7C /* LakeloomAppClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LakeloomAppClient.swift; sourceTree = "<group>"; };
 		B6F40820AD837CECA73569C2 /* CreateProjectPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateProjectPayload.swift; sourceTree = "<group>"; };
@@ -867,6 +869,7 @@
 		649F604CE7FF1DC9DB8955E9 /* Audio */ = {
 			isa = PBXGroup;
 			children = (
+				B56146FBEA97818B9A7676FD /* EngineAudioRecordingEngineTests.swift */,
 				93959A0509F76FBADB6E0D0B /* FakeAudioRecordingEngine.swift */,
 				C67D086E8FFF00D1BD6E05A4 /* LiveAudioRecorderTests.swift */,
 			);
@@ -1375,6 +1378,7 @@
 				29FE539BA4973366EA47CFCA /* DeviceIdentityStoreTests.swift in Sources */,
 				A2FD09D632F81D97C7AB04E7 /* DeviceKeyStoreTests.swift in Sources */,
 				5BD906E965D055639E505714 /* ElapsedTimerTests.swift in Sources */,
+				B3C95FBA6542661A228CEF01 /* EngineAudioRecordingEngineTests.swift in Sources */,
 				571A999C7E8036A9A8FE564C /* EntityRoundTripTests.swift in Sources */,
 				FA0E57613A831F6CB8A60520 /* FakeAudioInterruptionPublisher.swift in Sources */,
 				2345033255B883F7BF690031 /* FakeAudioRecorder.swift in Sources */,
