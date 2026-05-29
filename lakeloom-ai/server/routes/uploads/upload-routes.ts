@@ -54,6 +54,9 @@ import { Readable, PassThrough } from 'node:stream';
 import type { Application, Request, Response, NextFunction } from 'express';
 import Busboy from 'busboy';
 import { v7 as uuidv7 } from 'uuid';
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { requiresTranscode, isTranscodeAvailable, transcodeToM4A, cleanupTempFiles } from '../../services/transcode-service';
 import { iosAuth } from '../../middleware/ios-auth';
 import { dualAuth } from '../../middleware/browser-auth';
 import { AppError, ErrorTypes } from '../../lib/errors';
@@ -755,6 +758,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
       let sizeBytes: number;
       let sha256Hash: string;
       let fileName: string | undefined;
+      let rawFileBuffer: Buffer | null = null; // Retained for transcode (iOS buffered path only)
 
       if (clientType === 'web') {
         const parsed = await parseMultipartStreaming(req, {
@@ -810,6 +814,7 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
         deviceId = parsed.deviceId;
         clientTs = parsed.clientTs;
         sizeBytes = parsed.fileBuffer.length;
+        rawFileBuffer = parsed.fileBuffer; // Retain for potential transcode
         sha256Hash = createHash('sha256').update(parsed.fileBuffer).digest('hex');
 
         logUploadEvent('[upload] volume.write_attempt', diagnostics, {
@@ -900,6 +905,80 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
         );
       }
 
+      // ── Step 6b: Server-side transcode (CAF/AIFF → M4A) ───────────────
+      let originalVolumePath: string | null = null;
+      let originalMimeType: string | null = null;
+
+      if (requiresTranscode(fileMimeType)) {
+        if (!isTranscodeAvailable()) {
+          logUploadEvent('[upload] transcode.skipped', diagnostics, {
+            reason: 'ffmpeg_not_available',
+            mime_type: fileMimeType,
+          });
+        } else if (!rawFileBuffer && clientType === 'web') {
+          // Web streaming uploads don't retain the buffer — transcode not supported
+          // (CAF uploads are exclusively from iOS, so this shouldn't happen in practice)
+          logUploadEvent('[upload] transcode.skipped', diagnostics, {
+            reason: 'no_buffer_streaming_upload',
+            mime_type: fileMimeType,
+          });
+        } else if (rawFileBuffer) {
+          const inputExt = MIME_TO_EXT[fileMimeType] ?? 'caf';
+          const tempInputPath = join('/tmp', `upload-${diagnostics.uploadId}-input.${inputExt}`);
+          const tempOutputPath = join('/tmp', `upload-${diagnostics.uploadId}-output.m4a`);
+
+          try {
+            // Write raw buffer to temp file for ffmpeg
+            await writeFile(tempInputPath, rawFileBuffer);
+
+            logUploadEvent('[upload] transcode.started', diagnostics, {
+              from_mime: fileMimeType,
+              input_size_bytes: rawFileBuffer.length,
+              temp_input: tempInputPath,
+            });
+
+            const result = await transcodeToM4A(tempInputPath, tempOutputPath);
+
+            // Upload the transcoded M4A to volume (same directory, .m4a extension)
+            const m4aRelativePath = relativePath!.replace(/\.[^.]+$/, '.m4a');
+            await appkitFiles(opts.volumeKey).upload(m4aRelativePath, await readFile(tempOutputPath), { overwrite: false });
+
+            // Track originals before overwriting
+            originalVolumePath = volumeFilePath!;
+            originalMimeType = fileMimeType;
+
+            // Update references to point to transcoded file
+            const m4aCanonicalPath = volumeFilePath!.replace(/\.[^.]+$/, '.m4a');
+            volumeFilePath = m4aCanonicalPath;
+            relativePath = m4aRelativePath;
+            fileMimeType = 'audio/mp4';
+            sizeBytes = result.outputSizeBytes;
+            // Recompute SHA-256 of the transcoded file
+            const transcodeBuffer = await readFile(tempOutputPath);
+            sha256Hash = createHash('sha256').update(transcodeBuffer).digest('hex');
+
+            logUploadEvent('[upload] transcode.completed', diagnostics, {
+              from_mime: originalMimeType,
+              to_mime: 'audio/mp4',
+              duration_ms: result.durationMs,
+              original_size_bytes: rawFileBuffer.length,
+              transcoded_size_bytes: result.outputSizeBytes,
+              original_volume_path: originalVolumePath,
+              transcoded_volume_path: volumeFilePath,
+            });
+          } catch (transcodeErr) {
+            // Transcode failure is non-fatal — raw file already on volume
+            logUploadError('[upload] transcode.failed', diagnostics, transcodeErr, {
+              from_mime: fileMimeType,
+              note: 'raw file preserved on volume; browser playback may be limited',
+            });
+            // originalVolumePath/originalMimeType stay null — metadata will reflect raw file
+          } finally {
+            await cleanupTempFiles(tempInputPath, tempOutputPath);
+          }
+        }
+      }
+
       // ── Step 7: INSERT INTO app.uploads ──────────────────────────
       logUploadEvent('[upload] metadata.insert_attempt', diagnostics, {
         insert_target: 'app.uploads',
@@ -913,8 +992,9 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
         await lakebase.query(
           `INSERT INTO app.uploads
              (id, kind, project_id, capture_session_id, paired_session_id, user_id,
-              volume_path, mime_type, size_bytes, sha256_hex, original_filename, client_ts, device_id, client_type)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13::uuid, $14)`,
+              volume_path, mime_type, size_bytes, sha256_hex, original_filename, client_ts, device_id, client_type,
+              original_volume_path, original_mime_type)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13::uuid, $14, $15, $16)`,
           [
             uploadId,
             opts.kind,
@@ -930,6 +1010,8 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
             normalizedTimestamp.isoTimestamp,
             deviceId ?? null,
             clientType,
+            originalVolumePath,
+            originalMimeType,
           ],
         );
         logUploadEvent('[upload] metadata.insert_succeeded', diagnostics, { insert_target: 'app.uploads', insert_volume_path: volumeFilePath });
