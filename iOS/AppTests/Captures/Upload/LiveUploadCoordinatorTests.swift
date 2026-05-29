@@ -540,4 +540,35 @@ struct LiveUploadCoordinatorTests {
         #expect(snapshot.isEmpty)
         #expect(!FileManager.default.fileExists(atPath: sandbox.fileURL.path))
     }
+
+    @Test("discard broadcasts on stateUpdates so subscribers re-snapshot")
+    func discardBroadcastsStateUpdate() async throws {
+        // The home-page pending-upload pill subscribes to
+        // `stateUpdates()` and re-snapshots `currentUploads().count`
+        // on every yield. If `discard()` doesn't broadcast, the
+        // pill renders a stale count after manual cleanup. This
+        // test pins the contract: discard MUST emit on the stream.
+        let sandbox = Self.makeSandbox()
+        let app = FakeLakeloomAppClient()
+        let coordinator = LiveUploadCoordinator(
+            lakeloomApp: app,
+            queueStore: sandbox.queueStore,
+            sleep: { _ in }
+        )
+
+        let pending = Self.makePending(fileURL: sandbox.fileURL)
+        try await coordinator.enqueue(pending)
+
+        // Subscribe AFTER enqueue so the initial `.queued` yield is
+        // already consumed by other subscribers — we only want the
+        // discard-driven yield to land in our stream.
+        let stream = await coordinator.stateUpdates()
+        var iterator = stream.makeAsyncIterator()
+
+        await coordinator.discard(uploadID: pending.id)
+
+        let change = await iterator.next()
+        #expect(change != nil)
+        #expect(change?.uploadID == pending.id)
+    }
 }

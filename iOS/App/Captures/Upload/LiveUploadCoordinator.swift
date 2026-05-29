@@ -149,6 +149,18 @@ public actor LiveUploadCoordinator: UploadCoordinator {
             "upload.queue.discarded",
             metadata: ["upload_id": .uuidPrefix(uploadID)]
         )
+        // Re-broadcast the upload's pre-discard state so subscribers
+        // that mirror `currentUploads().count` (the home-page
+        // pending-upload pill) re-snapshot and observe the entry's
+        // removal. We deliberately don't add a `.discarded` case to
+        // the enum — listeners that care about *presence/absence*
+        // already snapshot the queue on every yield, and the
+        // in-flight `LiveCaptureService.watchUploads` watcher's
+        // `switch` over `.queued`/`.uploading`/`.failed` is a no-op
+        // / safe-refresh on each, so re-broadcasting the pre-discard
+        // state can't trick it into completing a session
+        // prematurely.
+        broadcast(uploadID: uploadID, state: upload.state)
     }
 
     public func start() async {

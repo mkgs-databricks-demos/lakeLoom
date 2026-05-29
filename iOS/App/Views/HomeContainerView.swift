@@ -61,8 +61,19 @@ struct HomeContainerView: View {
     /// Live count of `UploadCoordinator.currentUploads()`. Drives a
     /// badge on the toolbar so the user can tell at a glance when
     /// there's anything in flight or stuck. Re-snapshots on every
-    /// upload-state transition.
+    /// upload-state transition AND every foreground (scenePhase →
+    /// .active) so a stale snapshot from a backgrounded session
+    /// gets refreshed without requiring the user to discover the
+    /// retry/discard sheet.
     @State private var pendingUploadCount = 0
+
+    /// Foreground/background observer. Used to re-snapshot the
+    /// pending-upload count when the user pulls the app back into
+    /// the foreground — covers the case where a queue mutation
+    /// (e.g., the auto-discard on a background-completed upload, or
+    /// a manual discard from the sheet) happens while the home
+    /// `.task`'s `stateUpdates()` subscription is paused.
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack {
@@ -140,6 +151,18 @@ struct HomeContainerView: View {
             }
         }
         .task { await observePendingUploadCount() }
+        .onChange(of: scenePhase) { _, newPhase in
+            // Foreground re-snapshot of the upload queue count.
+            // Covers staleness from any queue mutation that
+            // happened while the app was backgrounded (the
+            // `stateUpdates()` `for await` above continues consuming
+            // when the scene resumes, but events emitted during the
+            // pause aren't replayed — `AsyncStream` doesn't buffer
+            // for paused subscribers).
+            if newPhase == .active {
+                Task { await refreshPendingUploadCount() }
+            }
+        }
         .sheet(isPresented: $showingAccount) {
             if let context = coordinator.activeContext {
                 AccountSettingsView(
@@ -378,15 +401,27 @@ struct HomeContainerView: View {
     /// Mirror `UploadCoordinator.currentUploads().count` into local
     /// state so the toolbar badge updates live. Re-snapshots on
     /// every `stateUpdates()` yield — covers enqueues, transitions,
-    /// and the now-automatic discard on `.succeeded` (which arrives
-    /// as a final stream event before the entry vanishes).
+    /// the auto-discard on `.succeeded`, AND manual discards (which
+    /// re-broadcast the upload's pre-discard state so this loop sees
+    /// the event and re-snapshots the now-empty queue).
     private func observePendingUploadCount() async {
         guard let uploads = coordinator.uploadCoordinator else { return }
-        pendingUploadCount = await uploads.currentUploads().count
+        await refreshPendingUploadCount()
         let stream = await uploads.stateUpdates()
         for await _ in stream {
-            pendingUploadCount = await uploads.currentUploads().count
+            await refreshPendingUploadCount()
         }
+    }
+
+    /// Standalone re-snapshot of `currentUploads().count`. Used by
+    /// `observePendingUploadCount` on every state yield and by the
+    /// scenePhase observer on foreground transitions. Safe to call
+    /// from any actor — `currentUploads()` is an actor-isolated read
+    /// and we only mutate `pendingUploadCount` from the MainActor
+    /// context this view runs in.
+    private func refreshPendingUploadCount() async {
+        guard let uploads = coordinator.uploadCoordinator else { return }
+        pendingUploadCount = await uploads.currentUploads().count
     }
 
     // MARK: - Derived context
