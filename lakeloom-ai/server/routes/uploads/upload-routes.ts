@@ -337,6 +337,9 @@ interface ParsedUpload {
   clientFilename?: string;
   clientSha256?: string;
   deviceId?: string;
+  chunkIndexStr?: string;
+  isFinalChunkStr?: string;
+  totalChunksStr?: string;
 }
 
 interface ParsedStreamingUpload {
@@ -345,6 +348,9 @@ interface ParsedStreamingUpload {
   clientFilename?: string;
   clientSha256?: string;
   deviceId?: string;
+  chunkIndexStr?: string;
+  isFinalChunkStr?: string;
+  totalChunksStr?: string;
   sizeBytes: number;
   sha256Hex: string;
   relativePath: string;
@@ -373,6 +379,9 @@ function parseMultipart(req: Request): Promise<ParsedUpload> {
     let clientFilename: string | undefined;
     let clientSha256: string | undefined;
     let deviceId: string | undefined;
+    let chunkIndexStr: string | undefined;
+    let isFinalChunkStr: string | undefined;
+    let totalChunksStr: string | undefined;
     let fileReceived = false;
 
     busboy.on('file', (_fieldname, stream, info) => {
@@ -391,6 +400,9 @@ function parseMultipart(req: Request): Promise<ParsedUpload> {
       if (fieldname === 'client_filename') clientFilename = value;
       if (fieldname === 'sha256_hex') clientSha256 = value;
       if (fieldname === 'device_id') deviceId = value;
+      if (fieldname === 'chunk_index') chunkIndexStr = value;
+      if (fieldname === 'is_final_chunk') isFinalChunkStr = value;
+      if (fieldname === 'total_chunks') totalChunksStr = value;
     });
 
     busboy.on('error', (parseErr) => {
@@ -402,7 +414,7 @@ function parseMultipart(req: Request): Promise<ParsedUpload> {
         reject(buildUploadAppError(400, 'Missing upload file', 'A non-empty file field is required.', { error_code: 'UPLOAD_FILE_REQUIRED' }));
         return;
       }
-      resolve({ fileBuffer: Buffer.concat(chunks), fileMimeType, clientTs, clientFilename, clientSha256, deviceId });
+      resolve({ fileBuffer: Buffer.concat(chunks), fileMimeType, clientTs, clientFilename, clientSha256, deviceId, chunkIndexStr, isFinalChunkStr, totalChunksStr });
     });
 
     if (bufferedBody) {
@@ -441,6 +453,9 @@ async function parseMultipartStreaming(
     let clientFilename: string | undefined;
     let clientSha256: string | undefined;
     let deviceId: string | undefined;
+    let chunkIndexStr: string | undefined;
+    let isFinalChunkStr: string | undefined;
+    let totalChunksStr: string | undefined;
 
     let fileReceived = false;
     let sizeBytes = 0;
@@ -574,6 +589,9 @@ async function parseMultipartStreaming(
       if (fieldname === 'client_filename') clientFilename = value;
       if (fieldname === 'sha256_hex') clientSha256 = value;
       if (fieldname === 'device_id') deviceId = value;
+      if (fieldname === 'chunk_index') chunkIndexStr = value;
+      if (fieldname === 'is_final_chunk') isFinalChunkStr = value;
+      if (fieldname === 'total_chunks') totalChunksStr = value;
     });
 
     busboy.on('error', (parseErr) => {
@@ -637,6 +655,9 @@ async function parseMultipartStreaming(
           clientFilename,
           clientSha256,
           deviceId,
+          chunkIndexStr,
+          isFinalChunkStr,
+          totalChunksStr,
           sizeBytes,
           sha256Hex: hash.digest('hex'),
           relativePath,
@@ -754,11 +775,16 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
       let clientFilename: string | undefined;
       let clientSha256: string | undefined;
       let deviceId: string | undefined;
+    let chunkIndexStr: string | undefined;
+    let isFinalChunkStr: string | undefined;
+    let totalChunksStr: string | undefined;
       let clientTs: string | undefined;
       let sizeBytes: number;
       let sha256Hash: string;
       let fileName: string | undefined;
       let rawFileBuffer: Buffer | null = null; // Retained for transcode (iOS buffered path only)
+      let chunkIndex = 0;
+      let isFinalChunk = false;
 
       if (clientType === 'web') {
         const parsed = await parseMultipartStreaming(req, {
@@ -776,6 +802,11 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
         clientSha256 = parsed.clientSha256;
         deviceId = parsed.deviceId;
         clientTs = parsed.clientTs;
+        // Parse chunk fields
+        chunkIndex = parsed.chunkIndexStr ? parseInt(parsed.chunkIndexStr, 10) : 0;
+        if (isNaN(chunkIndex) || chunkIndex < 0) chunkIndex = 0;
+        isFinalChunk = parsed.isFinalChunkStr === 'true' || parsed.isFinalChunkStr === '1';
+        const totalChunks = parsed.totalChunksStr ? parseInt(parsed.totalChunksStr, 10) : undefined;
         sizeBytes = parsed.sizeBytes;
         sha256Hash = parsed.sha256Hex;
         relativePath = parsed.relativePath;
@@ -813,6 +844,15 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
         clientSha256 = parsed.clientSha256;
         deviceId = parsed.deviceId;
         clientTs = parsed.clientTs;
+        chunkIndex = parsed.chunkIndexStr ? parseInt(parsed.chunkIndexStr, 10) : 0;
+        if (isNaN(chunkIndex) || chunkIndex < 0) chunkIndex = 0;
+        isFinalChunk = parsed.isFinalChunkStr === 'true' || parsed.isFinalChunkStr === '1';
+        if (parsed.totalChunksStr) {
+          const totalChunks = parseInt(parsed.totalChunksStr, 10);
+          if (!isNaN(totalChunks) && chunkIndex >= totalChunks) {
+            console.warn(`[upload] chunk_index ${chunkIndex} >= total_chunks ${totalChunks}`);
+          }
+        }
         sizeBytes = parsed.fileBuffer.length;
         rawFileBuffer = parsed.fileBuffer; // Retain for potential transcode
         sha256Hash = createHash('sha256').update(parsed.fileBuffer).digest('hex');
@@ -986,6 +1026,8 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
         insert_volume_path: volumeFilePath,
         insert_size_bytes: sizeBytes,
         insert_client_ts: normalizedTimestamp.isoTimestamp,
+        chunk_index: chunkIndex,
+        is_final_chunk: isFinalChunk,
       });
 
       try {
@@ -993,8 +1035,8 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
           `INSERT INTO app.uploads
              (id, kind, project_id, capture_session_id, paired_session_id, user_id,
               volume_path, mime_type, size_bytes, sha256_hex, original_filename, client_ts, device_id, client_type,
-              original_volume_path, original_mime_type)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13::uuid, $14, $15, $16)`,
+              original_volume_path, original_mime_type, chunk_index, is_final_chunk)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13::uuid, $14, $15, $16, $17, $18)`,
           [
             uploadId,
             opts.kind,
@@ -1012,10 +1054,71 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
             clientType,
             originalVolumePath,
             originalMimeType,
+            chunkIndex,
+            isFinalChunk,
           ],
         );
         logUploadEvent('[upload] metadata.insert_succeeded', diagnostics, { insert_target: 'app.uploads', insert_volume_path: volumeFilePath });
-      } catch (insertErr) {
+      } catch (insertErr: unknown) {
+        // ── Dedup: handle unique constraint violation (chunk retry) ──
+        const pgCode = (insertErr as { code?: string })?.code;
+        if (pgCode === '23505' && opts.kind === 'audio') {
+          // Chunk dedup: iOS retried a chunk upload that already succeeded.
+          // Return the existing row as if the insert succeeded (idempotent).
+          logUploadEvent('[upload] chunk.dedup', diagnostics, {
+            chunk_index: chunkIndex,
+            capture_session_id: captureSessionId,
+            reason: 'unique_violation_23505',
+          });
+
+          const { rows: existingRows } = await lakebase.query(
+            `SELECT id, kind, volume_path, mime_type, size_bytes, sha256_hex, client_ts, chunk_index, is_final_chunk, uploaded_at
+             FROM app.uploads
+             WHERE capture_session_id = $1 AND chunk_index = $2 AND kind = 'audio'
+             LIMIT 1`,
+            [captureSessionId, chunkIndex],
+          );
+
+          if (existingRows.length > 0) {
+            const existing = existingRows[0];
+            // Warn if SHA differs (indicates a different file for same chunk — likely a bug)
+            if (existing.sha256_hex && existing.sha256_hex !== sha256Hash) {
+              console.warn(`[upload] chunk.dedup.sha_mismatch`, {
+                upload_id: existing.id,
+                existing_sha: existing.sha256_hex,
+                new_sha: sha256Hash,
+                chunk_index: chunkIndex,
+                capture_session_id: captureSessionId,
+              });
+            }
+            // Clean up the duplicate file we just uploaded
+            try {
+              if (relativePath) {
+                await appkitFiles(opts.volumeKey).delete(relativePath);
+              }
+            } catch { /* best-effort cleanup */ }
+
+            res.status(201).json({
+              id: existing.id,
+              kind: existing.kind,
+              client_type: clientType,
+              project_id: projectId,
+              capture_session_id: captureSessionId,
+              volume_path: existing.volume_path,
+              mime_type: existing.mime_type,
+              size_bytes: existing.size_bytes,
+              sha256_hex: existing.sha256_hex,
+              client_ts: existing.client_ts,
+              chunk_index: existing.chunk_index,
+              is_final_chunk: existing.is_final_chunk,
+              uploaded_at: existing.uploaded_at,
+              _dedup: true,
+            });
+            return;
+          }
+        }
+
+        // Non-dedup insert failure — original error handling
         logUploadError('[upload] metadata.insert_failed', diagnostics, insertErr);
         try {
           if (relativePath) {
@@ -1046,6 +1149,8 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
         sha256_hex: sha256Hash,
         client_ts: normalizedTimestamp.isoTimestamp,
         client_ts_source: normalizedTimestamp.source,
+        chunk_index: chunkIndex,
+        is_final_chunk: isFinalChunk,
         uploaded_at: new Date().toISOString(),
       });
     } catch (error) {
