@@ -39,6 +39,10 @@ resources:
             - task_key: api_endpoint_tests
           notebook_task:
             notebook_path: ../src/tests/caf-transcode-test.ipynb
+            base_parameters:
+              app_name: ${var.app_name}
+              catalog_use: ${var.catalog}
+              schema_use: ${var.schema}
           environment_key: default
 
       environments:
