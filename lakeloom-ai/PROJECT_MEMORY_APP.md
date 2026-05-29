@@ -133,6 +133,8 @@ lakeLoom/
 * **2026-05-25: Offline capture contract DEPLOYED.** Migration 018 (`client_generated_id` UUID + partial unique index), handler idempotency (200 re-submit / 201 new), Option A (client ID = primary key). Both migrations 017+018 verified in OTel. Reply sent to Isaac. Branch: `mg-isaac-genie-interaction`.
 * **2026-05-25: Capture-completion pipeline designed.** CDF on `lb_capture_sessions_history` triggers bronze→silver→gold SDP pipeline. Gold produces 4 AI deliverables per capture: Whisper transcript, requirements doc, architecture diagram, Genie Code session plan. Latency budget: ~3–7 min. Design doc: `fixtures/phase5-document-edit-cdf-pipeline.md`.
 * **2026-05-26: Phase 5 — Device & Admin Panel IMPLEMENTED on branch `mg-phase5-device-admin-panel`.** New routes: `GET /api/admin/health` (structured health dashboard). New pages: `/devices` (paired device grid with status badges, revoke, revoked history), `/admin` (system health with auto-refresh). Migration 019: `app.sweeper_runs`. Nav updated: Devices, Pair Device (renamed), Admin. `pairing-routes.ts`: `?include_revoked=true` query param support.
+
+* **2026-05-28: Phase 6 COMPLETE + CAF/AIFF upload support.** All 6 Phase 6 success criteria met. Branch `mg-genie-caf-upload-support`: accepts `audio/x-caf`, `audio/x-aiff`, `audio/aiff` uploads. On-upload ffmpeg transcode to M4A (AAC 128k mono faststart). Non-fatal — raw file preserved if transcode fails. Migration 020 adds `original_volume_path` + `original_mime_type`. AudioPlayer graceful degradation. ffmpeg via `scripts/install-ffmpeg.sh` prestart hook.
 * **2026-05-27: Phase 6 — Transcript Viewer server routes DEPLOYED on branch `mg-phase6-transcript-viewer`.** Three fixes in one commit (`f1e57a0`): (1) OBO token forwarding — `transcript-routes.ts` now passes `x-forwarded-access-token` to `executeStatement()` (was 401/403); (2) `user_api_scopes` — added `sql` + `dashboards.genie` to `lakeloom_ai.app.yml` (OBO token lacked `sql` scope); (3) time-window scoping — transcript query filters by `started_at`/`ended_at` from capture row (paired sessions span multiple captures; was showing wrong data). Also wired Phase 2 `client_generated_id` handler (Isaac's May 26 bug report — destructure + idempotency check + Option A INSERT). Client components (`TranscriptPanel`, `TranscriptSearch`, `AudioPlayer` forwardRef) on branch. Isaac's PR #77 unblocked.
 
 
@@ -171,6 +173,8 @@ lakeLoom/
 ## Service Principals
 
 ### ZeroBus SPN (`lakeloom-{schema}`)
+
+* **2026-05-28: Phase 6 COMPLETE + CAF/AIFF upload support.** All 6 Phase 6 success criteria met (audio sync, auto-scroll follow mode, graceful shutdown, SSE auto-reconnect, test plan). New branch `mg-genie-caf-upload-support`: accepts `audio/x-caf`, `audio/x-aiff`, `audio/aiff` uploads. On-upload ffmpeg transcode to M4A (AAC 128k mono faststart, 60s timeout). Non-fatal — raw file preserved on volume if transcode fails. Migration 020 adds `original_volume_path` + `original_mime_type` to `app.uploads`. AudioPlayer shows "format not playable" + download link for non-transcoded files. ffmpeg installed via `scripts/install-ffmpeg.sh` npm prestart hook.
 
 * **Purpose:** Streams data from the AppKit server to the bronze `transcript_events_raw` table via ZeroBus SDK.
 * **Permissions:**
