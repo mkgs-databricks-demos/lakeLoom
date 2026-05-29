@@ -59,7 +59,7 @@ public actor LiveAudioRecorder: AudioRecorder {
     }
 
     @Sendable
-    private static func defaultApplicationSupportDirectory() throws -> URL {
+    public static func defaultApplicationSupportDirectory() throws -> URL {
         try FileManager.default.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
@@ -206,16 +206,30 @@ public actor LiveAudioRecorder: AudioRecorder {
 
     // MARK: - File layout
 
+    /// Resolve the on-disk directory for a given capture session's
+    /// audio files. Exposed `static` so the orphan-recovery path
+    /// (`LiveCaptureService.recoverInFlightCapture`) can list any
+    /// stranded audio files for a force-quit session without
+    /// depending on a `LiveAudioRecorder` instance. Does NOT create
+    /// the directory — caller decides whether mkdir-on-miss is the
+    /// right policy (recorder does; recovery doesn't).
+    public static func capturesDirectory(
+        for captureSessionID: String,
+        base baseProvider: @Sendable () throws -> URL = LiveAudioRecorder.defaultApplicationSupportDirectory
+    ) throws -> URL {
+        let base = try baseProvider()
+        return base
+            .appendingPathComponent("Captures", isDirectory: true)
+            .appendingPathComponent(captureSessionID, isDirectory: true)
+    }
+
     private func makeRecordingURL(captureSessionID: String, startedAt: Date) throws -> URL {
-        let base: URL
+        let dir: URL
         do {
-            base = try baseDirectoryProvider()
+            dir = try Self.capturesDirectory(for: captureSessionID, base: baseDirectoryProvider)
         } catch {
             throw AudioRecorderError.fileSystemError(reason: "appSupport: \(error.localizedDescription)")
         }
-        let dir = base
-            .appendingPathComponent("Captures", isDirectory: true)
-            .appendingPathComponent(captureSessionID, isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             // Exclude from iCloud backup — recordings are uploaded

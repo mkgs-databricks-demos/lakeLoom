@@ -86,6 +86,13 @@ public actor LiveCaptureService: CaptureService {
     private let nowProvider: @Sendable () -> Date
     private let uploadIDProvider: @Sendable () -> String
     private let fileHasher: @Sendable (URL) throws -> String
+    /// Resolves the on-disk Application Support directory for a
+    /// given capture session's audio files. Defaults to
+    /// `LiveAudioRecorder.capturesDirectory(for:)` (real
+    /// Application Support); tests inject a sandbox-rooted resolver
+    /// so the recovery flow can find fixture audio files without
+    /// touching the real filesystem.
+    private let capturesDirectoryProvider: @Sendable (String) throws -> URL
     /// Optional disk-persistent capture-context snapshot. Production
     /// wiring sets this; older tests that don't exercise the rehydrate
     /// path pass `nil` so they keep working unchanged.
@@ -166,6 +173,9 @@ public actor LiveCaptureService: CaptureService {
         self.nowProvider = Date.init
         self.uploadIDProvider = { UUID().uuidString }
         self.fileHasher = { url in try FileSHA256.hex(of: url) }
+        self.capturesDirectoryProvider = { sessionID in
+            try LiveAudioRecorder.capturesDirectory(for: sessionID)
+        }
     }
 
     /// Test-friendly init. Lets unit tests pin the clock, generate
@@ -189,7 +199,10 @@ public actor LiveCaptureService: CaptureService {
         logger: AppLogger = AppLogger(category: .capture),
         nowProvider: @Sendable @escaping () -> Date,
         uploadIDProvider: @Sendable @escaping () -> String,
-        fileHasher: @Sendable @escaping (URL) throws -> String
+        fileHasher: @Sendable @escaping (URL) throws -> String,
+        capturesDirectoryProvider: @Sendable @escaping (String) throws -> URL = { sessionID in
+            try LiveAudioRecorder.capturesDirectory(for: sessionID)
+        }
     ) {
         self.captureAPI = captureAPI
         self.recorder = recorder
@@ -209,6 +222,7 @@ public actor LiveCaptureService: CaptureService {
         self.nowProvider = nowProvider
         self.uploadIDProvider = uploadIDProvider
         self.fileHasher = fileHasher
+        self.capturesDirectoryProvider = capturesDirectoryProvider
     }
 
     // MARK: Public surface
@@ -295,17 +309,45 @@ public actor LiveCaptureService: CaptureService {
         )
         switch snapshot.phase {
         case .recording:
-            // App died with the recorder active. No uploads were
-            // enqueued (the audio file may exist on disk but is
-            // unfinalized and unsigned). Patch the server-side
-            // session to `.cancelled` so the row never lingers
-            // `.active` and clear the snapshot.
-            await patchServerCancelled(context: context)
-            await store.clear()
-            await logger.info(
-                "capture.recover.recording_orphan_cancelled",
-                metadata: ["capture_session_id": .uuidPrefix(context.captureSessionID)]
-            )
+            // App died with the recorder active. The audio files on
+            // disk (CAF intermediate + transcoded M4A — and, with
+            // rotation, every closed chunk) are the only artifact of
+            // the session. Pre-rotation behavior was to patch the
+            // server to `.cancelled` and walk away — fine for the
+            // 30-second smoke test, but a data-loss bug for the
+            // FDE-in-the-field use case where a force-quit during a
+            // 2-hour offline recording must NOT lose audio.
+            //
+            // New behavior: scan the session's captures directory
+            // for any audio files, enqueue them as PendingUploads
+            // against the same `.active` server-side session, and
+            // transition the snapshot to `.finalizing` so the upload
+            // watcher drives the session to `.completed` once
+            // everything drains. Fall back to the old cancel-on-
+            // detect path only when there's nothing on disk to
+            // recover.
+            let recovered = await recoverRecordingPhaseAudio(context: context)
+            if recovered.isEmpty {
+                await patchServerCancelled(context: context)
+                await store.clear()
+                await logger.info(
+                    "capture.recover.recording_no_files_cancelled",
+                    metadata: ["capture_session_id": .uuidPrefix(context.captureSessionID)]
+                )
+            } else {
+                let pending = Set(recovered)
+                let stream = await uploadCoordinator.stateUpdates()
+                transition(to: .finalizing(context, pendingUploadIDs: pending))
+                await persistFinalizingIfNeeded(context: context, pending: pending)
+                spawnWatcher(stream: stream, for: context, pendingUploadIDs: pending)
+                await logger.info(
+                    "capture.recover.recording_audio_resurrected",
+                    metadata: [
+                        "capture_session_id": .uuidPrefix(context.captureSessionID),
+                        "recovered_uploads": .int(Int64(pending.count))
+                    ]
+                )
+            }
 
         case .finalizing:
             // App died after the recorder finalized + the uploads
@@ -351,6 +393,172 @@ public actor LiveCaptureService: CaptureService {
                 )
             }
         }
+    }
+
+    /// Walk the captures directory for `context.captureSessionID`,
+    /// build a `PendingUpload` for every audio file we find, and
+    /// enqueue each. Returns the newly-minted upload IDs so the
+    /// caller can set up the finalize watcher.
+    ///
+    /// Files we recover:
+    /// - `audio-<stamp>.m4a` — single-chunk transcoded output
+    /// - `audio-<stamp>.caf` — single-chunk CAF fallback / orphaned
+    ///   intermediate (engine died before transcode)
+    /// - `audio-<stamp>-chunk<N>.m4a` / `.caf` — chunked-recording
+    ///   per-chunk outputs / intermediates
+    ///
+    /// We don't bother distinguishing CAF-intermediate from CAF-
+    /// fallback at recovery time: if a CAF is on disk, it represents
+    /// audio the user expects to be uploaded. Server accepts
+    /// `audio/x-caf` and transcodes via ffmpeg, so either way the
+    /// data lands. Files smaller than the 256-byte transcode floor
+    /// (see EngineAudioRecordingEngine.transcode) are dropped —
+    /// they're empty headers from a force-quit before any frames
+    /// were written.
+    ///
+    /// SHA-256 + size are computed fresh from disk; we don't try to
+    /// match against any pre-stop in-memory state because there
+    /// isn't any reliable one after a force-quit.
+    private func recoverRecordingPhaseAudio(context: CaptureContext) async -> [String] {
+        let captureDir: URL
+        do {
+            captureDir = try capturesDirectoryProvider(context.captureSessionID)
+        } catch {
+            await logger.warning(
+                "capture.recover.dir_resolve_failed",
+                metadata: [
+                    "capture_session_id": .uuidPrefix(context.captureSessionID),
+                    "reason": .string(error.localizedDescription)
+                ]
+            )
+            return []
+        }
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: captureDir.path) else {
+            return []
+        }
+        let entries: [URL]
+        do {
+            entries = try fileManager.contentsOfDirectory(
+                at: captureDir,
+                includingPropertiesForKeys: [.fileSizeKey, .creationDateKey],
+                options: [.skipsHiddenFiles]
+            )
+        } catch {
+            await logger.warning(
+                "capture.recover.dir_list_failed",
+                metadata: [
+                    "capture_session_id": .uuidPrefix(context.captureSessionID),
+                    "reason": .string(error.localizedDescription)
+                ]
+            )
+            return []
+        }
+        // Filter to audio files. Sort so chunk N+1 enqueues after
+        // chunk N — keeps the upload coordinator's worker draining
+        // in recording order (the order the user spoke into the
+        // mic), which is also what server-side `ORDER BY uploaded_at`
+        // expects as a proxy for chunk ordering until mig 021's
+        // `chunk_index` lands.
+        let audioExtensions: Set<String> = ["m4a", "caf"]
+        let audioFiles = entries
+            .filter { audioExtensions.contains($0.pathExtension.lowercased()) }
+            .filter { $0.lastPathComponent.hasPrefix("audio-") }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+
+        guard !audioFiles.isEmpty else { return [] }
+
+        let audioDeviceID = await resolvedDeviceID()
+        var recovered: [String] = []
+        for fileURL in audioFiles {
+            let sizeBytes: Int64
+            let createdAt: Date
+            do {
+                let attrs = try fileManager.attributesOfItem(atPath: fileURL.path)
+                sizeBytes = (attrs[.size] as? NSNumber)?.int64Value ?? 0
+                createdAt = (attrs[.creationDate] as? Date) ?? context.startedAt
+            } catch {
+                await logger.warning(
+                    "capture.recover.file_stat_failed",
+                    metadata: [
+                        "capture_session_id": .uuidPrefix(context.captureSessionID),
+                        "filename": .string(fileURL.lastPathComponent),
+                        "reason": .string(error.localizedDescription)
+                    ]
+                )
+                continue
+            }
+            // Match the post-transcode floor (256 bytes); below that,
+            // the file is a stub header from a force-quit before
+            // any frames landed. Uploading would just waste bytes
+            // and the user's time staring at a "Failed" pill.
+            if sizeBytes < 256 {
+                try? fileManager.removeItem(at: fileURL)
+                await logger.info(
+                    "capture.recover.stub_file_purged",
+                    metadata: [
+                        "capture_session_id": .uuidPrefix(context.captureSessionID),
+                        "filename": .string(fileURL.lastPathComponent),
+                        "bytes": .int(sizeBytes)
+                    ]
+                )
+                continue
+            }
+            let sha: String
+            do {
+                sha = try fileHasher(fileURL)
+            } catch {
+                await logger.warning(
+                    "capture.recover.hash_failed",
+                    metadata: [
+                        "capture_session_id": .uuidPrefix(context.captureSessionID),
+                        "filename": .string(fileURL.lastPathComponent),
+                        "reason": .string(error.localizedDescription)
+                    ]
+                )
+                continue
+            }
+            let ext = fileURL.pathExtension.lowercased()
+            let mime: String = ext == "caf" ? "audio/x-caf" : "audio/mp4"
+            let pending = PendingUpload(
+                id: uploadIDProvider(),
+                workspaceID: context.workspaceID,
+                captureSessionID: context.captureSessionID,
+                kind: .audio,
+                localFileURL: fileURL,
+                mimeType: mime,
+                sizeBytes: sizeBytes,
+                sha256Hex: sha,
+                clientTimestamp: createdAt,
+                originalFilename: fileURL.lastPathComponent,
+                deviceID: audioDeviceID,
+                createdAt: nowProvider()
+            )
+            do {
+                try await uploadCoordinator.enqueue(pending)
+                recovered.append(pending.id)
+                await logger.info(
+                    "capture.recover.audio_enqueued",
+                    metadata: [
+                        "capture_session_id": .uuidPrefix(context.captureSessionID),
+                        "upload_id": .uuidPrefix(pending.id),
+                        "filename": .string(fileURL.lastPathComponent),
+                        "bytes": .int(sizeBytes),
+                        "mime": .string(mime)
+                    ]
+                )
+            } catch {
+                await logger.warning(
+                    "capture.recover.enqueue_failed",
+                    metadata: [
+                        "capture_session_id": .uuidPrefix(context.captureSessionID),
+                        "filename": .string(fileURL.lastPathComponent),
+                        "reason": .string(error.localizedDescription)
+                    ]
+                )
+            }
+        }
+        return recovered
     }
 
     public func startCapture(
