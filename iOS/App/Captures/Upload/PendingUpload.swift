@@ -264,6 +264,32 @@ public struct UploadStateChange: Sendable, Equatable {
     }
 }
 
+/// Decodes the chunk-dedup signal Genie's audio upload route attaches
+/// to a *successful* response when an upload hit the
+/// `(capture_session_id, chunk_index)` unique index (migration 021).
+///
+/// Both fields default to `false` when absent, so this safely decodes
+/// any upload response — non-dedup inserts simply carry neither key.
+/// Per Genie's 2026-05-29 reply (option b): the status stays 2xx and
+/// the existing row is returned; `dedupSHAMismatch` is the loud signal
+/// that two *different* files claimed the same chunk slot (a recovery
+/// bug), as opposed to a clean idempotent retry of the same file.
+struct DedupSignal: Decodable, Equatable {
+    let isDedup: Bool
+    let shaMismatch: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case isDedup = "_dedup"
+        case shaMismatch = "dedup_sha_mismatch"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        isDedup = (try? c.decodeIfPresent(Bool.self, forKey: .isDedup)) ?? false
+        shaMismatch = (try? c.decodeIfPresent(Bool.self, forKey: .shaMismatch)) ?? false
+    }
+}
+
 /// Server-typed error codes the upload routes can return in the
 /// RFC 9457 Problem Details `type` URI. Documented in
 /// `architecture/hey_isaac/2026-05-20_audio-uploads-working.md`.

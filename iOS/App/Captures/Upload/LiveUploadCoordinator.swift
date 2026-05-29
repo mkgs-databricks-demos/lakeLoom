@@ -438,6 +438,27 @@ public actor LiveUploadCoordinator: UploadCoordinator {
                 uploads[upload.id] = live
             }
         }
+        // Genie's chunk dedup (migration 021) returns the existing row
+        // with `dedup_sha_mismatch: true` when a *different* file already
+        // occupies this (capture_session_id, chunk_index) slot — the
+        // server keeps the first file and drops ours. The HTTP status is
+        // still a success (idempotent by design, her 2026-05-29 reply,
+        // option b), but a SHA divergence means two genuinely different
+        // files claimed one chunk slot — a recovery bug we want loud, not
+        // silent. Clean idempotent retries (same file) carry the flag as
+        // false and log nothing.
+        if let signal = try? JSONDecoder().decode(DedupSignal.self, from: data),
+           signal.shaMismatch {
+            await logger.error(
+                "upload.dedup.sha_mismatch",
+                metadata: [
+                    "upload_id": .uuidPrefix(upload.id),
+                    "capture_session_id": .uuidPrefix(upload.captureSessionID),
+                    "chunk_index": .int(Int64(upload.chunkIndex)),
+                    "local_sha256": .string(upload.sha256Hex)
+                ]
+            )
+        }
     }
 
     private func handleFailure(upload: PendingUpload, error: LakeloomAppError) async {

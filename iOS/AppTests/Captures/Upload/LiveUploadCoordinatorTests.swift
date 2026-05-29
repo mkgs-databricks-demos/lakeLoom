@@ -185,6 +185,108 @@ struct LiveUploadCoordinatorTests {
         await coordinator.stop()
     }
 
+    @Test("dedup response with dedup_sha_mismatch is treated as success, not retried")
+    func dedupShaMismatchIsNonFatal() async throws {
+        let sandbox = Self.makeSandbox()
+        let app = FakeLakeloomAppClient()
+        // Genie's idempotent dedup row: 200 with the existing upload id,
+        // _dedup + dedup_sha_mismatch flags alongside the normal fields.
+        // iOS must treat this as a success (file accepted, just dedup'd),
+        // not choke on the extra keys.
+        await app.enqueueResponse(.success(Data("""
+        {"id":"remote-existing-1","kind":"audio","volume_path":"/Volumes/cat/sch/vol/audio-chunk2.m4a",\
+        "mime_type":"audio/mp4","size_bytes":1024,"sha256_hex":"deadbeef",\
+        "client_ts":"2026-05-15T12:00:00Z","uploaded_at":"2026-05-15T12:00:01Z",\
+        "chunk_index":2,"is_final_chunk":false,"_dedup":true,"dedup_sha_mismatch":true}
+        """.utf8)))
+        let coordinator = LiveUploadCoordinator(
+            lakeloomApp: app,
+            queueStore: sandbox.queueStore,
+            sleep: { _ in },
+            multipartBoundaryProvider: { "fixed-boundary" }
+        )
+
+        let stream = await coordinator.stateUpdates()
+        var iterator = stream.makeAsyncIterator()
+
+        let pending = Self.makePending(fileURL: sandbox.fileURL)
+        try await coordinator.enqueue(pending)
+        await coordinator.start()
+
+        // The dedup row is an idempotent SUCCESS, not a retryable error:
+        // the upload reaches .succeeded, its file is cleaned up, and it
+        // leaves the queue — exactly the happy path. The extra _dedup /
+        // dedup_sha_mismatch keys must not derail any of that.
+        var seenStates: [PendingUpload.State] = []
+        for _ in 0..<3 {
+            if let change = await iterator.next() {
+                seenStates.append(change.state)
+                if change.state == .succeeded { break }
+            }
+        }
+        #expect(seenStates.last == .succeeded)
+        #expect(!FileManager.default.fileExists(atPath: sandbox.fileURL.path))
+
+        // Succeeded uploads are removed from the queue by design.
+        let snapshot = await coordinator.currentUploads()
+        #expect(snapshot.first(where: { $0.id == pending.id }) == nil)
+
+        // One request only — a dedup response is terminal, never retried.
+        let calls = await app.requestCalls
+        #expect(calls.count == 1)
+
+        await coordinator.stop()
+    }
+
+    @Test("audio upload body carries chunk_index + is_final_chunk form fields")
+    func audioBodyCarriesChunkFields() async throws {
+        let sandbox = Self.makeSandbox()
+        let app = FakeLakeloomAppClient()
+        await app.enqueueResponse(.success(Data("{\"id\":\"remote-c\"}".utf8)))
+        let coordinator = LiveUploadCoordinator(
+            lakeloomApp: app,
+            queueStore: sandbox.queueStore,
+            sleep: { _ in },
+            multipartBoundaryProvider: { "fixed-boundary" }
+        )
+
+        let stream = await coordinator.stateUpdates()
+        var iterator = stream.makeAsyncIterator()
+
+        // A non-final chunk #1 of a multi-chunk recording.
+        let pending = PendingUpload(
+            id: "u-chunk-1",
+            workspaceID: Self.workspaceID,
+            captureSessionID: Self.captureID,
+            kind: .audio,
+            localFileURL: sandbox.fileURL,
+            mimeType: "audio/mp4",
+            sizeBytes: 3,
+            sha256Hex: "deadbeef",
+            clientTimestamp: Date(timeIntervalSince1970: 1_747_152_120),
+            originalFilename: sandbox.fileURL.lastPathComponent,
+            chunkIndex: 1,
+            isFinalChunk: false,
+            totalChunks: nil,
+            createdAt: Date(timeIntervalSince1970: 1_747_152_120)
+        )
+        try await coordinator.enqueue(pending)
+        await coordinator.start()
+
+        for _ in 0..<3 {
+            if let change = await iterator.next(), change.state == .succeeded { break }
+        }
+
+        let calls = await app.requestCalls
+        let body = try #require(calls.first?.body)
+        let ascii = String(data: body, encoding: .isoLatin1) ?? ""
+        #expect(ascii.contains("name=\"chunk_index\"\r\n\r\n1\r\n"))
+        #expect(ascii.contains("name=\"is_final_chunk\"\r\n\r\nfalse\r\n"))
+        #expect(!ascii.contains("total_chunks"))
+
+        await coordinator.stop()
+    }
+
     // MARK: Retry policy
 
     @Test("5xx → transient retry with exponential backoff")

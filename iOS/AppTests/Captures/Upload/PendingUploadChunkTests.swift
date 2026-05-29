@@ -107,4 +107,31 @@ struct PendingUploadChunkTests {
         #expect(LiveCaptureService.chunkIndex(fromFilename: "audio.caf") == 0)
         #expect(LiveCaptureService.chunkIndex(fromFilename: "weird-name-no-index.m4a") == 0)
     }
+
+    // MARK: - DedupSignal (Genie's chunk-dedup response flag, option b)
+
+    @Test("DedupSignal decodes _dedup + dedup_sha_mismatch when present")
+    func dedupSignalPresent() throws {
+        let json = Data(#"{"id":"x","_dedup":true,"dedup_sha_mismatch":true}"#.utf8)
+        let signal = try JSONDecoder().decode(DedupSignal.self, from: json)
+        #expect(signal.isDedup)
+        #expect(signal.shaMismatch)
+    }
+
+    @Test("DedupSignal: clean idempotent retry has mismatch false")
+    func dedupSignalCleanRetry() throws {
+        let json = Data(#"{"id":"x","_dedup":true,"dedup_sha_mismatch":false}"#.utf8)
+        let signal = try JSONDecoder().decode(DedupSignal.self, from: json)
+        #expect(signal.isDedup)
+        #expect(!signal.shaMismatch)
+    }
+
+    @Test("DedupSignal defaults both flags false on a normal (non-dedup) response")
+    func dedupSignalAbsent() throws {
+        // A first-insert response carries neither flag.
+        let json = Data(#"{"id":"x","kind":"audio","size_bytes":1024}"#.utf8)
+        let signal = try JSONDecoder().decode(DedupSignal.self, from: json)
+        #expect(!signal.isDedup)
+        #expect(!signal.shaMismatch)
+    }
 }
