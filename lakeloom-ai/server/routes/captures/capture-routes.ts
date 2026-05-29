@@ -400,7 +400,8 @@ export async function setupCaptureRoutes(appkit: AppKitContext): Promise<void> {
       try {
         const captureSessionId = req.params.capture_session_id;
         if (!captureSessionId) {
-          return res.status(400).json({ error: 'capture_session_id is required' });
+          res.status(400).json({ error: 'capture_session_id is required' });
+          return;
         }
 
         const { rows } = await lakebase.query(
@@ -439,7 +440,8 @@ export async function setupCaptureRoutes(appkit: AppKitContext): Promise<void> {
       try {
         const captureSessionId = req.params.capture_session_id;
         if (!captureSessionId) {
-          return res.status(400).json({ error: 'capture_session_id is required' });
+          res.status(400).json({ error: 'capture_session_id is required' });
+          return;
         }
 
         const { rows } = await lakebase.query(
@@ -451,7 +453,8 @@ export async function setupCaptureRoutes(appkit: AppKitContext): Promise<void> {
         );
 
         if (rows.length === 0) {
-          return res.status(404).json({ error: 'No audio chunks found for this capture session' });
+          res.status(404).json({ error: 'No audio chunks found for this capture session' });
+          return;
         }
 
         const { createReadStream } = await import('node:fs');
@@ -469,7 +472,7 @@ export async function setupCaptureRoutes(appkit: AppKitContext): Promise<void> {
             res.setHeader('Accept-Ranges', 'bytes');
             createReadStream(volumePath).pipe(res);
           } catch {
-            return res.status(404).json({ error: 'Audio file not found on volume' });
+            res.status(404).json({ error: 'Audio file not found on volume' });
           }
           return;
         }

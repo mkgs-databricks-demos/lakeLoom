@@ -775,9 +775,6 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
       let clientFilename: string | undefined;
       let clientSha256: string | undefined;
       let deviceId: string | undefined;
-    let chunkIndexStr: string | undefined;
-    let isFinalChunkStr: string | undefined;
-    let totalChunksStr: string | undefined;
       let clientTs: string | undefined;
       let sizeBytes: number;
       let sha256Hash: string;
@@ -806,7 +803,6 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
         chunkIndex = parsed.chunkIndexStr ? parseInt(parsed.chunkIndexStr, 10) : 0;
         if (isNaN(chunkIndex) || chunkIndex < 0) chunkIndex = 0;
         isFinalChunk = parsed.isFinalChunkStr === 'true' || parsed.isFinalChunkStr === '1';
-        const totalChunks = parsed.totalChunksStr ? parseInt(parsed.totalChunksStr, 10) : undefined;
         sizeBytes = parsed.sizeBytes;
         sha256Hash = parsed.sha256Hex;
         relativePath = parsed.relativePath;
@@ -848,9 +844,9 @@ function createUploadHandler(opts: UploadHandlerOpts, lakebase: LakebaseClient, 
         if (isNaN(chunkIndex) || chunkIndex < 0) chunkIndex = 0;
         isFinalChunk = parsed.isFinalChunkStr === 'true' || parsed.isFinalChunkStr === '1';
         if (parsed.totalChunksStr) {
-          const totalChunks = parseInt(parsed.totalChunksStr, 10);
-          if (!isNaN(totalChunks) && chunkIndex >= totalChunks) {
-            console.warn(`[upload] chunk_index ${chunkIndex} >= total_chunks ${totalChunks}`);
+          const _totalChunks = parseInt(parsed.totalChunksStr, 10);
+          if (!isNaN(_totalChunks) && chunkIndex >= _totalChunks) {
+            console.warn(`[upload] chunk_index ${chunkIndex} >= total_chunks ${_totalChunks}`);
           }
         }
         sizeBytes = parsed.fileBuffer.length;
