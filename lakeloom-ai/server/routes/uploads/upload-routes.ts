@@ -54,7 +54,7 @@ import { Readable, PassThrough } from 'node:stream';
 import type { Application, Request, Response, NextFunction } from 'express';
 import Busboy from 'busboy';
 import { v7 as uuidv7 } from 'uuid';
-import { writeFile } from 'node:fs/promises';
+import { writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { requiresTranscode, isTranscodeAvailable, transcodeToM4A, cleanupTempFiles } from '../../services/transcode-service';
 import { iosAuth } from '../../middleware/ios-auth';
