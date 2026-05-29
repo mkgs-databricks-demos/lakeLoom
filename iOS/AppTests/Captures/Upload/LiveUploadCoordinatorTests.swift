@@ -541,6 +541,72 @@ struct LiveUploadCoordinatorTests {
         #expect(!FileManager.default.fileExists(atPath: sandbox.fileURL.path))
     }
 
+    @Test("start() integrity sweep parks restored uploads with missing files as terminal-failed")
+    func startSweepsMissingFiles() async throws {
+        // Persist a queue entry whose file does NOT exist on disk —
+        // simulates the "file went missing between sessions"
+        // scenario the user hit on the wedged session ("unreadable
+        // (new error)"). The integrity sweep should mark it
+        // terminal-failed with reason="file_missing" so the user
+        // sees a clear actionable failure in PendingUploadsView
+        // instead of an endless retry that burns the budget.
+        let sandbox = Self.makeSandbox()
+        let pending = Self.makePending(fileURL: sandbox.fileURL)
+        // Pre-persist directly into the store so the next coordinator
+        // restores it on start().
+        try await sandbox.queueStore.save([pending])
+        // Delete the file BEFORE the coordinator starts — this is
+        // exactly the pathology the sweep is designed to catch.
+        try FileManager.default.removeItem(at: sandbox.fileURL)
+
+        let app = FakeLakeloomAppClient()
+        let coordinator = LiveUploadCoordinator(
+            lakeloomApp: app,
+            queueStore: sandbox.queueStore,
+            sleep: { _ in }
+        )
+        await coordinator.start()
+
+        let snapshot = await coordinator.currentUploads()
+        #expect(snapshot.count == 1)
+        guard case .failed(let reason, let permanent) = snapshot.first?.state else {
+            Issue.record("Expected terminal-failed; got \(String(describing: snapshot.first?.state))")
+            return
+        }
+        #expect(reason == "file_missing")
+        #expect(permanent == true)
+
+        await coordinator.stop()
+    }
+
+    @Test("start() integrity sweep parks restored uploads with empty files as terminal-failed")
+    func startSweepsEmptyFiles() async throws {
+        let sandbox = Self.makeSandbox()
+        let pending = Self.makePending(fileURL: sandbox.fileURL)
+        try await sandbox.queueStore.save([pending])
+        // Truncate the file to 0 bytes before restore.
+        try Data().write(to: sandbox.fileURL)
+
+        let app = FakeLakeloomAppClient()
+        let coordinator = LiveUploadCoordinator(
+            lakeloomApp: app,
+            queueStore: sandbox.queueStore,
+            sleep: { _ in }
+        )
+        await coordinator.start()
+
+        let snapshot = await coordinator.currentUploads()
+        #expect(snapshot.count == 1)
+        guard case .failed(let reason, let permanent) = snapshot.first?.state else {
+            Issue.record("Expected terminal-failed; got \(String(describing: snapshot.first?.state))")
+            return
+        }
+        #expect(reason == "file_empty")
+        #expect(permanent == true)
+
+        await coordinator.stop()
+    }
+
     @Test("discard broadcasts on stateUpdates so subscribers re-snapshot")
     func discardBroadcastsStateUpdate() async throws {
         // The home-page pending-upload pill subscribes to

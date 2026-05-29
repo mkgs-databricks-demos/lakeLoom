@@ -179,12 +179,104 @@ public actor LiveUploadCoordinator: UploadCoordinator {
                     metadata: ["count": .int(Int64(restored.count))]
                 )
             }
+            // File-integrity sweep over the just-restored set.
+            // Uploads whose on-disk file is missing or empty after
+            // restore are unrecoverable — `Data(contentsOf:)` would
+            // throw at every retry and burn the budget for nothing.
+            // Mark them terminal-failed with a typed reason so the
+            // user sees an actionable "Discard" affordance in
+            // PendingUploadsView instead of a row that keeps trying
+            // forever. This is the most-likely root cause of the
+            // "unreadable (new error)" the user hit on the wedged
+            // session — pre-PR-#77 fixes, an interrupted upload was
+            // restored, its file had been GC'd somewhere along the
+            // way, and the retry kept failing with
+            // `transport(reason: "file unreadable: ...")` until the
+            // user manually discarded.
+            await sweepMissingFiles()
         }
         if workerTask == nil {
             workerTask = Task { [weak self] in
                 await self?.workerLoop()
             }
         }
+    }
+
+    /// Walk every restored upload still in `.queued` and validate
+    /// its on-disk file. Missing or empty files get parked as
+    /// terminal-failed with a typed reason. Files that exist but
+    /// have shrunk since enqueue (truncated mid-write?) are logged
+    /// but kept queued — the server's SHA-256 verification will
+    /// catch any actual tampering, and we'd rather attempt the
+    /// upload than discard data the user might want.
+    private func sweepMissingFiles() async {
+        let candidates = uploads.values.filter {
+            if case .queued = $0.state { return true }
+            return false
+        }
+        guard !candidates.isEmpty else { return }
+        var missing = 0
+        var empty = 0
+        var shrunk = 0
+        for upload in candidates {
+            let path = upload.localFileURL.path
+            let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+            if attrs == nil {
+                missing += 1
+                await markTerminalCorrupt(upload: upload, reason: "file_missing")
+                continue
+            }
+            let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+            if size == 0 {
+                empty += 1
+                await markTerminalCorrupt(upload: upload, reason: "file_empty")
+                continue
+            }
+            if size < upload.sizeBytes {
+                shrunk += 1
+                await logger.warning(
+                    "upload.restore.file_shrunk",
+                    metadata: [
+                        "upload_id": .uuidPrefix(upload.id),
+                        "persisted_bytes": .int(upload.sizeBytes),
+                        "current_bytes": .int(size)
+                    ]
+                )
+            }
+        }
+        if missing + empty + shrunk > 0 {
+            await logger.info(
+                "upload.restore.integrity_sweep",
+                metadata: [
+                    "missing": .int(Int64(missing)),
+                    "empty": .int(Int64(empty)),
+                    "shrunk": .int(Int64(shrunk))
+                ]
+            )
+        }
+    }
+
+    /// Park `upload` as terminal-failed permanent with a structured
+    /// reason. Helper for ``sweepMissingFiles`` so the failure shape
+    /// is uniform: same `permanent: true` so the worker won't retry,
+    /// same typed reason string for support-bundle grep.
+    private func markTerminalCorrupt(upload: PendingUpload, reason: String) async {
+        var updated = upload
+        updated.state = .failed(reason: reason, permanent: true)
+        updated.nextAttemptAt = nil
+        updated.lastError = reason
+        uploads[upload.id] = updated
+        try? await persist()
+        broadcast(uploadID: upload.id, state: updated.state)
+        await logger.error(
+            "upload.restore.file_corrupt",
+            metadata: [
+                "upload_id": .uuidPrefix(upload.id),
+                "reason": .string(reason),
+                "path": .string(upload.localFileURL.lastPathComponent)
+            ],
+            errorCode: reason
+        )
     }
 
     public func stop() async {
@@ -232,11 +324,21 @@ public actor LiveUploadCoordinator: UploadCoordinator {
         try? await persist()
         broadcast(uploadID: uploadID, state: .uploading)
 
+        // Snapshot the file's current on-disk state at the start of
+        // each attempt. Diagnostic for the "unreadable" failure mode
+        // we're chasing — if the file goes missing or shrinks
+        // between attempts, the next support-bundle grep on
+        // `upload.attempt.start` shows exactly when.
+        let attrs = try? FileManager.default.attributesOfItem(atPath: upload.localFileURL.path)
+        let currentSize = (attrs?[.size] as? NSNumber)?.int64Value ?? -1
         await logger.info(
             "upload.attempt.start",
             metadata: [
                 "upload_id": .uuidPrefix(uploadID),
-                "attempt": .int(Int64(upload.attempts))
+                "attempt": .int(Int64(upload.attempts)),
+                "file_exists": .bool(attrs != nil),
+                "current_bytes": .int(currentSize),
+                "persisted_bytes": .int(upload.sizeBytes)
             ]
         )
 

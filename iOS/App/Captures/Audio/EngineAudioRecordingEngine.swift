@@ -803,6 +803,26 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, Audio
         // iOS 18+ async API. Throws on failure; replaces the older
         // completion-handler + status-polling dance.
         try await exporter.export(to: destination, as: .m4a)
+
+        // Post-transcode size guard: AVAssetExportSession has been
+        // observed to silently produce a 0-byte / tiny output for
+        // edge-case inputs without throwing. A valid AAC/M4A file
+        // has at least an `ftyp` box (~32 bytes) and metadata; we
+        // pick a generous 256-byte floor to catch the obviously-bad
+        // case without false-positiving on legitimately short
+        // recordings (1s of 64 kbps AAC is ~8 KB, so the floor never
+        // fires on a real recording). Throwing here drops us into
+        // the retry / CAF-fallback path one level up — uploading
+        // the lossless CAF beats uploading a malformed M4A that
+        // can't be decoded server-side or in the React player.
+        let attrs = try? FileManager.default.attributesOfItem(atPath: destination.path)
+        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+        if size < 256 {
+            try? FileManager.default.removeItem(at: destination)
+            throw AudioRecorderError.engineFailure(
+                reason: "transcode produced \(size)-byte output (expected ≥256)"
+            )
+        }
     }
 }
 
