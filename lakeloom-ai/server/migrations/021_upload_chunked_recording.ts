@@ -14,6 +14,6 @@ export const migration021: Migration = {
 
     CREATE UNIQUE INDEX IF NOT EXISTS uploads_session_chunk_unique
       ON app.uploads (capture_session_id, chunk_index)
-      WHERE kind = ''audio'';
+      WHERE kind = 'audio';
   `,
 };
