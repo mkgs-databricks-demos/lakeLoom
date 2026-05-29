@@ -1,5 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { Download, Pause, Play, RotateCcw, Volume2, VolumeX } from 'lucide-react';
+import { AlertCircle, Download, Pause, Play, RotateCcw, Volume2, VolumeX } from 'lucide-react';
 
 export interface AudioPlayerHandle {
   /** Seek to a specific time in milliseconds */
@@ -177,7 +177,14 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
     };
     const handlePlay = () => setIsPlaying(true);
     const handlePause = () => setIsPlaying(false);
-    const handleError = () => setError('Failed to load audio');
+    const handleError = () => {
+      const audio = audioRef.current;
+      if (audio?.error?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
+        setError('format-unsupported');
+      } else {
+        setError('Failed to load audio');
+      }
+    };
     const handleCanPlay = () => setIsLoading(false);
 
     const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
@@ -286,7 +293,22 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
         </div>
 
         {/* Error state */}
-        {error && (
+        {error === 'format-unsupported' && (
+          <div className="px-4 pb-3">
+            <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-[var(--surface-secondary,#F5F5F2)] text-sm text-[var(--text-secondary,#5A6F77)]">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <span>Audio format not playable in browser.</span>
+              <a
+                href={streamUrl}
+                download={title}
+                className="ml-auto text-[var(--accent-primary,#FF3621)] underline text-xs font-medium"
+              >
+                Download
+              </a>
+            </div>
+          </div>
+        )}
+        {error && error !== 'format-unsupported' && (
           <div className="px-4 pb-3">
             <p className="text-xs text-[var(--accent-error,#BD2B26)]">{error}</p>
           </div>
