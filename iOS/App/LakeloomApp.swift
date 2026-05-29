@@ -73,7 +73,17 @@ struct LakeloomApp: App {
         // stream for the streaming speech recognizer. Single mic
         // owner, two consumers (file writer + recognizer) feeding
         // off the same input tap.
-        let engineRecordingEngine = EngineAudioRecordingEngine()
+        //
+        // PR A piece 4: rotation mechanics live in the engine (commit
+        // 9636eaf) but `chunkDuration` is kept `nil` for now —
+        // production stays single-chunk until Genie's migration 021
+        // (`chunk_index`/`is_final_chunk` columns + partial unique
+        // index) and the concat playback endpoint land. Flipping
+        // this to `300` is a one-line follow-up that ships alongside
+        // the `chunk_index` wire-field plumbing on `PendingUpload`.
+        // See architecture/hi_genie/2026-05-29_chunked-recording-design.md
+        // and architecture/hey_isaac/2026-05-29_caf-deployed-chunked-recording-answers.md.
+        let engineRecordingEngine = EngineAudioRecordingEngine(chunkDuration: nil)
         let streamingRecognizer = LiveStreamingSpeechRecognizer()
 
         // Upload pipeline. Worker loop is started from the App's
