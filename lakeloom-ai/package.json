@@ -26,7 +26,8 @@
     "sync": "appkit plugin sync --write --silent",
     "typegen": "appkit generate-types",
     "setup": "appkit setup --write",
-    "patch:zerobus-sdk": "node scripts/patch-zerobus-sdk.mjs"
+    "patch:zerobus-sdk": "node scripts/patch-zerobus-sdk.mjs",
+    "prestart": "bash scripts/install-ffmpeg.sh"
   },
   "keywords": [],
   "author": "",
