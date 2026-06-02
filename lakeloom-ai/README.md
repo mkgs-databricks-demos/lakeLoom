@@ -30,7 +30,7 @@ Example output:
 
 ```
 ALLOW   ENABLED
-f4dc1a12-f273-48a3-9732-70ed837b419e  lakeLoomZeroBus  98.10.37.0/24
+f4dc1a12-f273-48a3-9732-70ed837b419e  lakeLoom  98.10.37.0/24, 45.46.229.0/24, 74.254.145.0/24, 166.198.21.0/24, 12.74.55.0/24
 ```
 
 ### Create a new allow list
@@ -38,7 +38,7 @@ f4dc1a12-f273-48a3-9732-70ed837b419e  lakeLoomZeroBus  98.10.37.0/24
 Replace the label, list_type, and ip_addresses with your values:
 
 ```
-databricks ip-access-lists create --json '{"label": "lakeLoomZeroBus", "list_type": "ALLOW", "ip_addresses": ["98.10.37.0/24"]}'
+databricks ip-access-lists create --json '{"label": "lakeLoom", "list_type": "ALLOW", "ip_addresses": ["98.10.37.0/24", "45.46.229.0/24", "74.254.145.0/24", "166.198.21.0/24", "12.74.55.0/24"]}'
 ```
 
 ### Edit an existing allow list
@@ -46,11 +46,11 @@ databricks ip-access-lists create --json '{"label": "lakeLoomZeroBus", "list_typ
 Use the list ID from the list command above:
 
 ```
-databricks ip-access-lists update <LIST_ID> --json '{"label": "lakeLoomZeroBus", "list_type": "ALLOW", "ip_addresses": ["98.10.37.0/24"], "enabled": true}'
+databricks ip-access-lists update <LIST_ID> --json '{"label": "lakeLoom", "list_type": "ALLOW", "ip_addresses": ["98.10.37.0/24", "45.46.229.0/24", "74.254.145.0/24", "166.198.21.0/24", "12.74.55.0/24"], "enabled": true}'
 ```
 
 ```
-databricks ip-access-lists update f4dc1a12-f273-48a3-9732-70ed837b419e --json '{"label": "lakeLoom", "list_type": "ALLOW", "ip_addresses": ["98.10.37.0/24", "45.46.229.0/24", "74.254.145.0/24"], "enabled": true}'
+databricks ip-access-lists update f4dc1a12-f273-48a3-9732-70ed837b419e --json '{"label": "lakeLoom", "list_type": "ALLOW", "ip_addresses": ["98.10.37.0/24", "45.46.229.0/24", "74.254.145.0/24", "166.198.21.0/24", "12.74.55.0/24"], "enabled": true}'
 ```
 
 For our home network, the list ID is `f4dc1a12-f273-48a3-9732-70ed837b419e`
