@@ -233,6 +233,20 @@ struct LakeloomApp: App {
                     if let operationQueue = coordinator.operationQueue {
                         await operationQueue.start()
                     }
+                    // Orphan recovery (June-2 field-session fix): after
+                    // BOTH queues have rehydrated, revive the create op
+                    // for any capture session that still has audio /
+                    // media waiting to upload. Breaks the deadlock where
+                    // a parked create strands a recording's chunks
+                    // against a session that never got created. Runs
+                    // after operationQueue.start() so the ops are loaded.
+                    if let operationQueue = coordinator.operationQueue,
+                       let uploadCoordinator = coordinator.uploadCoordinator {
+                        await OrphanedCaptureRecovery.reconcile(
+                            uploadCoordinator: uploadCoordinator,
+                            operationQueue: operationQueue
+                        )
+                    }
                 }
                 .task {
                     // PR 21 (Phase 3): nudge the operation queue AND
