@@ -136,6 +136,27 @@ public struct PendingOperation: Sendable, Equatable, Hashable, Codable, Identifi
             case .updateProject:             return "project.update"
             }
         }
+
+        /// The capture session this op targets, if any. Lets the queue
+        /// match a `createCaptureSession` op back to the audio uploads
+        /// that depend on it — the basis for resurrecting a parked
+        /// create when its session's chunks are stranded (the June-2
+        /// field-session orphan bug). Project ops return nil.
+        public var captureSessionID: String? {
+            switch self {
+            case .createCaptureSession(let id, _, _, _, _):  return id
+            case .updateCaptureSessionState(let id, _, _):   return id
+            case .updateCaptureLabel(let id, _):             return id
+            case .createProject, .updateProject:             return nil
+            }
+        }
+
+        /// True for the capture-session create op specifically — the
+        /// one op whose failure strands an entire recording's audio.
+        public var isCaptureSessionCreate: Bool {
+            if case .createCaptureSession = self { return true }
+            return false
+        }
     }
 
     /// Terminal capture-session states the server accepts on

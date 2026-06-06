@@ -46,7 +46,7 @@ enum OperationExecutor {
                         clientGeneratedID: captureSessionID
                     )
                 } catch let error as CaptureAPIError {
-                    try throwClassifiedCapture(error: error, isPatch: false)
+                    try throwClassifiedCapture(error: error, kind: .create)
                 }
 
             case .updateCaptureSessionState(
@@ -67,7 +67,7 @@ enum OperationExecutor {
                         endedAt: endedAt
                     )
                 } catch let error as CaptureAPIError {
-                    try throwClassifiedCapture(error: error, isPatch: true)
+                    try throwClassifiedCapture(error: error, kind: .patch)
                 }
 
             case .updateCaptureLabel(let captureSessionID, let label):
@@ -78,7 +78,7 @@ enum OperationExecutor {
                         label: label
                     )
                 } catch let error as CaptureAPIError {
-                    try throwClassifiedCapture(error: error, isPatch: true)
+                    try throwClassifiedCapture(error: error, kind: .patch)
                 }
 
             case .createProject, .updateProject:
@@ -102,14 +102,37 @@ enum OperationExecutor {
         }
     }
 
+    /// Which control-plane op is being classified. The two kinds
+    /// weight failures differently because they carry different blast
+    /// radius: a `.create` for a capture session **gates an entire
+    /// recording's audio uploads** (the chunks 404 until the session
+    /// row exists), so we bias it hard toward transient/revivable and
+    /// only park on a *definitive* client error. A `.patch` only
+    /// affects one session's state/label.
+    enum CaptureOpKind {
+        case create
+        case patch
+    }
+
     /// Map a `CaptureAPIError` to either an
     /// ``OperationPermanentFailure`` (parks the op) or a plain
-    /// re-throw (queue treats as transient). `isPatch` flips 404 to
-    /// transient — the parent capture may not exist yet because the
-    /// create op hasn't drained.
+    /// re-throw (queue treats as transient).
+    ///
+    /// **June-2 field-session lesson:** the morning recording's
+    /// `createCaptureSession` op parked permanently on a flaky
+    /// reconnect, which stranded ~13 audio chunks against a session
+    /// that was never created — `nextWorkableID` skips permanent ops
+    /// forever, while the audio retried 404 indefinitely. So for a
+    /// `.create`, only a payload the server will *never* accept
+    /// (`validationFailed` / `forbidden`) parks; everything ambiguous
+    /// (notFound — the project create may still be draining; decode /
+    /// unexpected — a cold-start edge or proxy hiccup) stays transient
+    /// and revivable. Auth still parks (the user must re-pair) but the
+    /// queue's create-revival re-drives it on the next cold start /
+    /// when dependent uploads 404, so the audio is no longer stranded.
     private static func throwClassifiedCapture(
         error: CaptureAPIError,
-        isPatch: Bool
+        kind: CaptureOpKind
     ) throws {
         switch error {
         case .networkUnavailable,
@@ -117,14 +140,23 @@ enum OperationExecutor {
              .serverUnavailable:
             // Transport-layer issues — let the queue back off + retry.
             throw error
-        case .notFound where isPatch:
+        case .notFound where kind == .patch:
             // Capture row probably not yet created. Retry until the
             // create op catches up.
             throw error
         case .notFound:
             // 404 on a CREATE means the server can't find the project.
-            // That's a real validation problem — park.
-            throw OperationPermanentFailure(reason: "404: \(String(describing: error))")
+            // For an offline-first flow the project's own create op
+            // may simply not have drained yet — same race as the PATCH
+            // case above — so retry rather than orphan the recording.
+            throw error
+        case .decodeFailed where kind == .create,
+             .unexpectedResponse where kind == .create:
+            // A malformed/edge response shouldn't strand a recording's
+            // audio. Retry; revival caps the blast radius if it
+            // persists. (Per-pattern `where` — a single `where` after a
+            // comma-joined list would bind only to the last pattern.)
+            throw error
         case .validationFailed,
              .forbidden,
              .invalidTransition,
@@ -134,7 +166,9 @@ enum OperationExecutor {
         case .notSignedIn, .authFailed:
             // The queue can't fix this — the user must re-pair. Park
             // so the operation surfaces in the outbox; the user can
-            // retry after authenticating.
+            // retry after authenticating. For a `.create`, the queue's
+            // create-revival brings it back post-re-pair so dependent
+            // audio still lands.
             throw OperationPermanentFailure(reason: "auth: \(String(describing: error))")
         }
     }

@@ -11,6 +11,7 @@ public actor FakeOperationQueue: OperationQueueing {
     public private(set) var enqueued: [PendingOperation] = []
     public private(set) var discardedIDs: [String] = []
     public private(set) var retriedIDs: [String] = []
+    public private(set) var revivedCreateSessionIDs: [String] = []
     public private(set) var startCount = 0
     public private(set) var stopCount = 0
     public private(set) var wakeCount = 0
@@ -35,6 +36,10 @@ public actor FakeOperationQueue: OperationQueueing {
 
     public func retry(operationID: String) async {
         retriedIDs.append(operationID)
+    }
+
+    public func reviveCreate(forCaptureSessionID captureSessionID: String) async {
+        revivedCreateSessionIDs.append(captureSessionID)
     }
 
     public func start() async {
