@@ -90,15 +90,45 @@ struct LakeloomApp: App {
         let engineRecordingEngine = EngineAudioRecordingEngine(chunkDuration: 300)
         let streamingRecognizer = LiveStreamingSpeechRecognizer()
 
+        // PR 21 (Phase 3 cutover): control-plane outbox. Holds queued
+        // capture-create + state-PATCH ops while the device is offline;
+        // drains them in FIFO order when the queue's worker sees a
+        // reachable network. Constructed BEFORE the upload coordinator
+        // so the coordinator's on-404 hook can call back into it to
+        // revive a stalled create (June-2 orphan fix). Construction can
+        // throw on filesystem failure — fall through to nil so the rest
+        // of the wiring proceeds (LiveCaptureService falls back to its
+        // legacy direct-call path).
+        let operationQueueStore: OperationQueueStore? = try? OperationQueueStore.makeDefault()
+        let operationQueue: (any OperationQueueing)?
+        if let operationQueueStore {
+            let executor = OperationExecutor.make(
+                captureAPI: captureAPI,
+                projects: projects
+            )
+            operationQueue = LiveOperationQueue(
+                queueStore: operationQueueStore,
+                execute: executor
+            )
+        } else {
+            operationQueue = nil
+        }
+
         // Upload pipeline. Worker loop is started from the App's
         // `.task` modifier below so the queue rehydration happens on
-        // every cold launch, not only when bootstrap() runs.
+        // every cold launch, not only when bootstrap() runs. The
+        // on-404 hook lets a stranded audio upload revive its capture
+        // session's create op mid-session (June-2 orphan fix), on top
+        // of the cold-start reconcile.
         let uploadCoordinator: (any UploadCoordinator)?
         do {
             let queueStore = try UploadQueueStore.makeDefault()
             uploadCoordinator = LiveUploadCoordinator(
                 lakeloomApp: lakeloomApp,
-                queueStore: queueStore
+                queueStore: queueStore,
+                onCaptureNotFound: { [operationQueue] sessionID in
+                    await operationQueue?.reviveCreate(forCaptureSessionID: sessionID)
+                }
             )
         } catch {
             // Persistence init failure shouldn't block the app —
@@ -117,29 +147,6 @@ struct LakeloomApp: App {
         // flicker during the boot window.
         let reachability = ReachabilityMonitor()
         reachability.start()
-
-        // PR 21 (Phase 3 cutover): control-plane outbox. Holds queued
-        // capture-create + state-PATCH ops while the device is
-        // offline; drains them in FIFO order when the queue's worker
-        // sees a reachable network. Same store-as-the-source-of-truth
-        // pattern as the upload coordinator. Construction can throw
-        // on filesystem failure — fall through to nil so the rest of
-        // the wiring proceeds (LiveCaptureService falls back to its
-        // legacy direct-call path).
-        let operationQueueStore: OperationQueueStore? = try? OperationQueueStore.makeDefault()
-        let operationQueue: (any OperationQueueing)?
-        if let operationQueueStore {
-            let executor = OperationExecutor.make(
-                captureAPI: captureAPI,
-                projects: projects
-            )
-            operationQueue = LiveOperationQueue(
-                queueStore: operationQueueStore,
-                execute: executor
-            )
-        } else {
-            operationQueue = nil
-        }
 
         // Capture orchestrator. Bundles captureAPI + a shared
         // AudioRecorder + the upload coordinator + the

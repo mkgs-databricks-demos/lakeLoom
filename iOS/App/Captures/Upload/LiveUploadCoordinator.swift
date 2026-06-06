@@ -28,6 +28,13 @@ public actor LiveUploadCoordinator: UploadCoordinator {
     private let multipartBoundaryProvider: @Sendable () -> String
     private let maxAttempts: Int
     private let backoff: [TimeInterval]
+    /// Called with a capture session id when an upload to that session
+    /// is rejected with 404 `UPLOAD_CAPTURE_NOT_FOUND` — the signal that
+    /// the session's create op never landed. Wired in production to
+    /// `OperationQueueing.reviveCreate(forCaptureSessionID:)` so a
+    /// stalled create is re-driven mid-session (not only on cold start),
+    /// breaking the June-2 stranded-audio deadlock without a relaunch.
+    private let onCaptureNotFound: (@Sendable (String) async -> Void)?
     /// Fixed retry delay used for "no network" failures so we don't
     /// burn the maxAttempts retry budget against pure offline-state.
     /// Short enough that the upload drains promptly after reachability
@@ -50,7 +57,8 @@ public actor LiveUploadCoordinator: UploadCoordinator {
     public init(
         lakeloomApp: any LakeloomAppClient,
         queueStore: UploadQueueStore,
-        logger: AppLogger = AppLogger(category: .ingest)
+        logger: AppLogger = AppLogger(category: .ingest),
+        onCaptureNotFound: (@Sendable (String) async -> Void)? = nil
     ) {
         self.lakeloomApp = lakeloomApp
         self.queueStore = queueStore
@@ -61,6 +69,7 @@ public actor LiveUploadCoordinator: UploadCoordinator {
         self.maxAttempts = 5
         self.backoff = [2, 4, 8, 16, 32]
         self.networkRetryDelay = 5
+        self.onCaptureNotFound = onCaptureNotFound
     }
 
     /// Test-friendly init: lets unit tests stub the clock, the sleep
@@ -75,7 +84,8 @@ public actor LiveUploadCoordinator: UploadCoordinator {
         multipartBoundaryProvider: @Sendable @escaping () -> String = { MultipartFormBuilder.makeBoundary() },
         maxAttempts: Int = 5,
         backoff: [TimeInterval] = [2, 4, 8, 16, 32],
-        networkRetryDelay: TimeInterval = 5
+        networkRetryDelay: TimeInterval = 5,
+        onCaptureNotFound: (@Sendable (String) async -> Void)? = nil
     ) {
         self.lakeloomApp = lakeloomApp
         self.queueStore = queueStore
@@ -86,6 +96,7 @@ public actor LiveUploadCoordinator: UploadCoordinator {
         self.maxAttempts = maxAttempts
         self.backoff = backoff
         self.networkRetryDelay = networkRetryDelay
+        self.onCaptureNotFound = onCaptureNotFound
     }
 
     // MARK: Public surface
@@ -462,6 +473,20 @@ public actor LiveUploadCoordinator: UploadCoordinator {
     }
 
     private func handleFailure(upload: PendingUpload, error: LakeloomAppError) async {
+        // 404 `UPLOAD_CAPTURE_NOT_FOUND` for a capture-routed upload
+        // means the session's create op never landed (the June-2 field
+        // bug). Nudge the operation queue to revive that create so it's
+        // re-driven mid-session, not only on the next cold start. The
+        // upload itself still falls through to its normal transient
+        // backoff below; by the time it retries, the revived create may
+        // have created the session. Fire-and-forget — revival is
+        // idempotent and a no-op once the create lands.
+        if case .httpError(let status, _, _) = error,
+           status == 404,
+           upload.kind != .document {
+            await onCaptureNotFound?(upload.captureSessionID)
+        }
+
         // "No network reached the server" failures shouldn't burn the
         // retry budget — otherwise an offline session longer than
         // (sum of `backoff`) seconds parks the upload terminal-failed

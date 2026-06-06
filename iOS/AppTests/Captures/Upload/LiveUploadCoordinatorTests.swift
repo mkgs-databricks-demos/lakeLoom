@@ -238,6 +238,42 @@ struct LiveUploadCoordinatorTests {
         await coordinator.stop()
     }
 
+    @Test("404 on an audio upload fires onCaptureNotFound with the session id (revive hook)")
+    func notFoundFiresReviveHook() async throws {
+        let sandbox = Self.makeSandbox()
+        let app = FakeLakeloomAppClient()
+        // First attempt 404s (session's create never landed); the
+        // transient retry then succeeds once the create is revived.
+        await app.enqueueResponse(.failure(.httpError(status: 404, detail: "no active capture session", code: "UPLOAD_CAPTURE_NOT_FOUND")))
+        await app.enqueueResponse(.success(Data("{\"id\":\"remote-x\"}".utf8)))
+
+        actor Box { var ids: [String] = []; func add(_ s: String) { ids.append(s) } }
+        let box = Box()
+
+        let coordinator = LiveUploadCoordinator(
+            lakeloomApp: app,
+            queueStore: sandbox.queueStore,
+            sleep: { _ in },
+            multipartBoundaryProvider: { "fixed-boundary" },
+            onCaptureNotFound: { sessionID in await box.add(sessionID) }
+        )
+
+        let stream = await coordinator.stateUpdates()
+        var iterator = stream.makeAsyncIterator()
+
+        let pending = Self.makePending(fileURL: sandbox.fileURL) // captureSessionID == "cap-1"
+        try await coordinator.enqueue(pending)
+        await coordinator.start()
+
+        for _ in 0..<5 {
+            if let change = await iterator.next(), change.state == .succeeded { break }
+        }
+
+        let fired = await box.ids
+        #expect(fired.contains(Self.captureID)) // revive requested for the stranded session
+        await coordinator.stop()
+    }
+
     @Test("audio upload body carries chunk_index + is_final_chunk form fields")
     func audioBodyCarriesChunkFields() async throws {
         let sandbox = Self.makeSandbox()

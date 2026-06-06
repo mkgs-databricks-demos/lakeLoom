@@ -220,11 +220,14 @@ public actor LiveOperationQueue: OperationQueueing {
         }
         guard var op = operations[id] else { return }
         switch op.state {
-        case .running, .succeeded:
-            // In flight or already landed — nothing to revive.
-            return
-        case .failed, .queued:
+        case .failed:
+            // Parked permanent, or transiently failed / backing off —
+            // the stalled states we want to re-drive.
             break
+        case .queued, .running, .succeeded:
+            // Already workable (queued drains on its own), in flight,
+            // or done — nothing to revive.
+            return
         }
         op.state = .queued
         op.attempts = 0
