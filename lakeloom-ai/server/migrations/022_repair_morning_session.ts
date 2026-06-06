@@ -46,12 +46,6 @@ export const migration022: Migration = {
       NULL,
       '019e8881-6525-7104-a83f-31b2893730bd'::uuid
     )
-    ON CONFLICT (id) DO NOTHING;
-
-    DO $
-    BEGIN
-      RAISE NOTICE '[migration 022] Orphaned morning session repaired: 019e8881-6525-7104-a83f-31b2893730bd';
-    END;
-    $;
+    ON CONFLICT (id) DO NOTHING
   `,
 };
