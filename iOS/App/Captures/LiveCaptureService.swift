@@ -289,10 +289,28 @@ public actor LiveCaptureService: CaptureService {
     /// re-attaches the upload watcher to drive the in-flight capture
     /// to completion.
     private func recoverInFlightCapture() async {
-        guard let store = contextStore,
-              let snapshot = await store.load() else {
-            return
+        guard let store = contextStore else { return }
+        let snapshots = await store.loadAll()
+        guard !snapshots.isEmpty else { return }
+        // The most-recently-started session is the one the user was last
+        // in — recover it in the foreground (drives `current` + the live
+        // upload watcher), exactly as the single-session path always
+        // has. Older snapshots exist when an earlier recording was still
+        // finalizing/uploading as a newer one started and clobbered the
+        // (formerly single-slot) context — the June-2 morning/afternoon
+        // case. Those are completed in the background so they don't
+        // linger `.active` server-side; they never touch `current`.
+        let sorted = snapshots.sorted { $0.startedAt > $1.startedAt }
+        await recoverForeground(snapshot: sorted[0], store: store)
+        for older in sorted.dropFirst() {
+            await recoverOlderSession(snapshot: older, store: store)
         }
+    }
+
+    private func recoverForeground(
+        snapshot: PersistedCaptureContext,
+        store: CaptureContextStore
+    ) async {
         let context = CaptureContext(
             captureSessionID: snapshot.captureSessionID,
             projectID: snapshot.projectID,
@@ -329,7 +347,7 @@ public actor LiveCaptureService: CaptureService {
             let recovered = await recoverRecordingPhaseAudio(context: context)
             if recovered.isEmpty {
                 await patchServerCancelled(context: context)
-                await store.clear()
+                await store.clear(captureSessionID: context.captureSessionID)
                 await logger.info(
                     "capture.recover.recording_no_files_cancelled",
                     metadata: ["capture_session_id": .uuidPrefix(context.captureSessionID)]
@@ -373,7 +391,7 @@ public actor LiveCaptureService: CaptureService {
             }
             if stillInFlight.isEmpty {
                 await patchServerCompleted(context: context)
-                await store.clear()
+                await store.clear(captureSessionID: context.captureSessionID)
                 await logger.info(
                     "capture.recover.finalizing_all_done_completed",
                     metadata: ["capture_session_id": .uuidPrefix(context.captureSessionID)]
@@ -389,6 +407,88 @@ public actor LiveCaptureService: CaptureService {
                     metadata: [
                         "capture_session_id": .uuidPrefix(context.captureSessionID),
                         "remaining_uploads": .int(Int64(pending.count))
+                    ]
+                )
+            }
+        }
+    }
+
+    /// Recover a session older than the foreground one (multi-slot
+    /// recovery — the June-2 morning recording whose context an
+    /// afternoon recording clobbered). Never touches `current` or the
+    /// live watcher; it just gets the session to a correct landing
+    /// state:
+    ///   - `.finalizing`, uploads already drained → PATCH completed +
+    ///     clear.
+    ///   - `.finalizing`, uploads still in flight → leave the snapshot
+    ///     persisted; a later launch completes it once they've drained.
+    ///     (We deliberately don't run a second concurrent live watcher —
+    ///     the single foreground watcher owns `current`.)
+    ///   - `.recording` (rare — a single recorder shouldn't leave an
+    ///     older recording-phase snapshot) → resurrect its on-disk audio
+    ///     as uploads so it's never lost, re-persist as `.finalizing`,
+    ///     and defer completion like the case above. The cold-start
+    ///     OrphanedCaptureRecovery pass (run just after) revives the
+    ///     create op for any chunks enqueued here.
+    private func recoverOlderSession(
+        snapshot: PersistedCaptureContext,
+        store: CaptureContextStore
+    ) async {
+        let context = CaptureContext(
+            captureSessionID: snapshot.captureSessionID,
+            projectID: snapshot.projectID,
+            workspaceID: snapshot.workspaceID,
+            startedAt: snapshot.startedAt
+        )
+        await logger.info(
+            "capture.recover.older_session",
+            metadata: [
+                "capture_session_id": .uuidPrefix(context.captureSessionID),
+                "phase": .string(snapshot.phase.rawValue),
+                "pending_uploads": .int(Int64(snapshot.pendingUploadIDs.count))
+            ]
+        )
+        switch snapshot.phase {
+        case .recording:
+            let recovered = await recoverRecordingPhaseAudio(context: context)
+            if recovered.isEmpty {
+                await patchServerCancelled(context: context)
+                await store.clear(captureSessionID: context.captureSessionID)
+                await logger.info(
+                    "capture.recover.older_recording_no_files_cancelled",
+                    metadata: ["capture_session_id": .uuidPrefix(context.captureSessionID)]
+                )
+            } else {
+                // Re-persist as finalizing so the next launch completes
+                // it instead of re-walking the dir and re-enqueuing.
+                await persistFinalizingIfNeeded(context: context, pending: Set(recovered))
+                await logger.info(
+                    "capture.recover.older_recording_resurrected",
+                    metadata: [
+                        "capture_session_id": .uuidPrefix(context.captureSessionID),
+                        "recovered_uploads": .int(Int64(recovered.count))
+                    ]
+                )
+            }
+        case .finalizing:
+            let allUploads = await uploadCoordinator.currentUploads()
+            let stillInFlight = snapshot.pendingUploadIDs.filter { id in
+                guard let upload = allUploads.first(where: { $0.id == id }) else { return false }
+                return !upload.state.isTerminal
+            }
+            if stillInFlight.isEmpty {
+                await patchServerCompleted(context: context)
+                await store.clear(captureSessionID: context.captureSessionID)
+                await logger.info(
+                    "capture.recover.older_completed",
+                    metadata: ["capture_session_id": .uuidPrefix(context.captureSessionID)]
+                )
+            } else {
+                await logger.info(
+                    "capture.recover.older_deferred",
+                    metadata: [
+                        "capture_session_id": .uuidPrefix(context.captureSessionID),
+                        "remaining_uploads": .int(Int64(stillInFlight.count))
                     ]
                 )
             }
@@ -757,12 +857,12 @@ public actor LiveCaptureService: CaptureService {
             // next launch doesn't try to recover an unrecoverable
             // state.
             transition(to: .failed(reason: "recorder.stop: \(String(describing: error))"))
-            await contextStore?.clear()
+            await contextStore?.clear(captureSessionID: context.captureSessionID)
             await tearDownInSessionResources()
             throw CaptureServiceError.recorderStopFailed(reason: String(describing: error))
         } catch {
             transition(to: .failed(reason: "recorder.stop: \(error.localizedDescription)"))
-            await contextStore?.clear()
+            await contextStore?.clear(captureSessionID: context.captureSessionID)
             await tearDownInSessionResources()
             throw CaptureServiceError.recorderStopFailed(reason: error.localizedDescription)
         }
@@ -803,7 +903,7 @@ public actor LiveCaptureService: CaptureService {
                 sha = try fileHasher(chunk.fileURL)
             } catch {
                 transition(to: .failed(reason: "hash: \(error.localizedDescription)"))
-                await contextStore?.clear()
+                await contextStore?.clear(captureSessionID: context.captureSessionID)
                 await tearDownInSessionResources()
                 throw CaptureServiceError.hashingFailed(reason: error.localizedDescription)
             }
@@ -830,12 +930,12 @@ public actor LiveCaptureService: CaptureService {
                 try await uploadCoordinator.enqueue(pending)
             } catch let error as UploadCoordinatorError {
                 transition(to: .failed(reason: "enqueue: \(String(describing: error))"))
-                await contextStore?.clear()
+                await contextStore?.clear(captureSessionID: context.captureSessionID)
                 await tearDownInSessionResources()
                 throw CaptureServiceError.enqueueFailed(reason: String(describing: error))
             } catch {
                 transition(to: .failed(reason: "enqueue: \(error.localizedDescription)"))
-                await contextStore?.clear()
+                await contextStore?.clear(captureSessionID: context.captureSessionID)
                 await tearDownInSessionResources()
                 throw CaptureServiceError.enqueueFailed(reason: error.localizedDescription)
             }
@@ -914,7 +1014,7 @@ public actor LiveCaptureService: CaptureService {
         if pendingIDs.isEmpty {
             await patchServerCompleted(context: context)
             transition(to: .completed(context))
-            await contextStore?.clear()
+            await contextStore?.clear(captureSessionID: context.captureSessionID)
             await tearDownInSessionResources()
             await logger.info(
                 "capture.stop.all_already_drained",
@@ -1014,7 +1114,7 @@ public actor LiveCaptureService: CaptureService {
             await recorder.cancel()
             await patchServerCancelled(context: context)
             transition(to: .cancelled(context))
-            await contextStore?.clear()
+            await contextStore?.clear(captureSessionID: context.captureSessionID)
             await tearDownInSessionResources()
 
         case .finalizing(let context, let pendingUploadIDs):
@@ -1027,7 +1127,7 @@ public actor LiveCaptureService: CaptureService {
             }
             await patchServerCancelled(context: context)
             transition(to: .cancelled(context))
-            await contextStore?.clear()
+            await contextStore?.clear(captureSessionID: context.captureSessionID)
             await tearDownInSessionResources()
 
         case .idle, .completed, .cancelled, .failed:
@@ -1482,7 +1582,7 @@ public actor LiveCaptureService: CaptureService {
                 if pending.isEmpty {
                     await patchServerCompleted(context: context)
                     transition(to: .completed(context))
-                    await contextStore?.clear()
+                    await contextStore?.clear(captureSessionID: context.captureSessionID)
                     return
                 }
             case .failed(_, let permanent):

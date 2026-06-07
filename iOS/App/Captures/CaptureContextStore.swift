@@ -1,21 +1,32 @@
 import Foundation
 
-/// Disk-persistent snapshot of the in-flight ``CaptureContext`` (if
-/// any) so ``LiveCaptureService`` can rehydrate after app
-/// termination.
+/// Disk-persistent snapshots of in-flight ``CaptureContext``s so
+/// ``LiveCaptureService`` can rehydrate after app termination.
 ///
 /// Storage is a single JSON file at
-/// `<Application Support>/Captures/active-capture.json`. Atomic
-/// writes go through a tmp+rename so a crash mid-write leaves the
-/// previous good snapshot intact. Same shape + concurrency pattern
-/// as ``UploadQueueStore``.
+/// `<Application Support>/Captures/active-capture.json` holding an
+/// **array** of contexts keyed by `captureSessionID`. Atomic writes go
+/// through a tmp+rename so a crash mid-write leaves the previous good
+/// snapshot intact. Same concurrency pattern as ``UploadQueueStore``.
+///
+/// **Why an array (multi-slot).** This file used to hold a single
+/// context, so starting a second recording overwrote the first's
+/// snapshot. The June-2 field session exposed the consequence: a
+/// morning recording that was still finalizing got its context clobbered
+/// by the afternoon recording, so on the next launch only the afternoon
+/// session was recoverable and the morning one could never be driven to
+/// `.completed`. Keying by `captureSessionID` lets every sequential
+/// offline session be recovered independently. The legacy single-object
+/// file is migrated transparently on first read.
 ///
 /// Lifecycle invariants the service maintains around this store:
-/// - **Save** on every transition INTO `.recording` or `.finalizing`,
-///   and whenever `pendingUploadIDs` changes during `.finalizing`.
-/// - **Clear** on every transition into a terminal state
-///   (`.completed`, `.cancelled`, `.failed`) so a clean exit doesn't
-///   leave a stale snapshot to recover on next launch.
+/// - **Save** (upsert) on every transition INTO `.recording` or
+///   `.finalizing`, and whenever `pendingUploadIDs` changes during
+///   `.finalizing`.
+/// - **Clear** the *specific* session (`clear(captureSessionID:)`) on
+///   every transition into a terminal state (`.completed`, `.cancelled`,
+///   `.failed`) so a clean exit doesn't leave a stale snapshot — without
+///   disturbing a concurrent session's snapshot.
 public actor CaptureContextStore {
 
     private let fileURL: URL
@@ -58,17 +69,24 @@ public actor CaptureContextStore {
         return CaptureContextStore(fileURL: url, logger: logger)
     }
 
-    /// Read the persisted snapshot. Returns `nil` if there's no
-    /// in-flight capture or if the file is missing/corrupt
-    /// (corrupt files log a warning and are treated as nil so a
-    /// damaged sidecar never blocks app launch).
-    public func load() async -> PersistedCaptureContext? {
+    /// All persisted in-flight capture snapshots. Returns `[]` if the
+    /// file is missing or corrupt (corrupt files log a warning and are
+    /// treated as empty so a damaged sidecar never blocks app launch).
+    /// Transparently migrates the legacy single-object file shape.
+    public func loadAll() async -> [PersistedCaptureContext] {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            return nil
+            return []
         }
         do {
             let data = try Data(contentsOf: fileURL)
-            return try decoder.decode(PersistedCaptureContext.self, from: data)
+            // Current shape: an array.
+            if let contexts = try? decoder.decode([PersistedCaptureContext].self, from: data) {
+                return contexts
+            }
+            // Legacy shape (pre-multi-slot): a single object. Migrate by
+            // wrapping it — the next save() rewrites the file as an array.
+            let single = try decoder.decode(PersistedCaptureContext.self, from: data)
+            return [single]
         } catch {
             await logger.warning(
                 "capture.context.load_failed",
@@ -76,16 +94,51 @@ public actor CaptureContextStore {
                     "reason": .string(error.localizedDescription)
                 ]
             )
-            return nil
+            return []
         }
     }
 
-    /// Replace the on-disk snapshot. Atomic via tmp+rename so a
-    /// crash mid-write leaves the previous snapshot intact.
+    /// The most-recently-started in-flight snapshot, if any. Kept as a
+    /// convenience for callers that only care about the foreground
+    /// capture; recovery uses ``loadAll()`` to rehydrate every session.
+    public func load() async -> PersistedCaptureContext? {
+        await loadAll().max { $0.startedAt < $1.startedAt }
+    }
+
+    /// Upsert a snapshot by `captureSessionID` — replaces an existing
+    /// entry for the same session, else appends. Atomic via tmp+rename
+    /// so a crash mid-write leaves the previous snapshot intact.
     public func save(_ context: PersistedCaptureContext) async throws {
+        var contexts = await loadAll()
+        contexts.removeAll { $0.captureSessionID == context.captureSessionID }
+        contexts.append(context)
+        try await write(contexts)
+    }
+
+    /// Remove the snapshot for a single capture session. Leaves any
+    /// other sessions' snapshots intact. No-op if absent.
+    public func clear(captureSessionID: String) async {
+        var contexts = await loadAll()
+        let before = contexts.count
+        contexts.removeAll { $0.captureSessionID == captureSessionID }
+        guard contexts.count != before else { return }
+        if contexts.isEmpty {
+            try? FileManager.default.removeItem(at: fileURL)
+        } else {
+            try? await write(contexts)
+        }
+    }
+
+    /// Delete every snapshot (e.g. sign-out / full reset). Always
+    /// succeeds (treats "no file" as a clear).
+    public func clear() async {
+        try? FileManager.default.removeItem(at: fileURL)
+    }
+
+    private func write(_ contexts: [PersistedCaptureContext]) async throws {
         let data: Data
         do {
-            data = try encoder.encode(context)
+            data = try encoder.encode(contexts)
         } catch {
             throw CaptureContextStoreError.persistenceFailed(reason: "encode: \(error.localizedDescription)")
         }
@@ -97,12 +150,6 @@ public actor CaptureContextStore {
             try? FileManager.default.removeItem(at: tmpURL)
             throw CaptureContextStoreError.persistenceFailed(reason: "write: \(error.localizedDescription)")
         }
-    }
-
-    /// Delete the snapshot file. Always succeeds (treats "no file"
-    /// as a clear).
-    public func clear() async {
-        try? FileManager.default.removeItem(at: fileURL)
     }
 }
 
