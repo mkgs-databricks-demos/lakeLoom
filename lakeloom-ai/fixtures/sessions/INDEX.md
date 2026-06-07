@@ -1,5 +1,6 @@
 # Session Index
 
+* [2026-06-07] Migration 022 — Orphaned Morning Session Repair (DB wipe root cause, pg-pool ` gotcha, 22/22 chunks verified) — `2026-06-07_migration-022-morning-session-repair.md`
 * [2026-05-27] Phase 6 Transcript Auth + Phase 2 Handler Wiring — `2026-05-27_phase6-transcript-auth-and-phase2-handler.md`
 * [2026-05-26] Phase 5 — Device & Admin Panel Implementation — `2026-05-26_phase5-device-admin-panel.md`
 * [2026-05-25] CDF Estate + Offline Capture + Pipeline Design — `2026-05-25_cdf-estate-offline-capture.md`

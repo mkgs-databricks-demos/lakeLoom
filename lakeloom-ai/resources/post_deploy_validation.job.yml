@@ -6,6 +6,7 @@
 #   - Health endpoint responds
 #   - ZeroBus env configured, pool health, history endpoints
 #   - CAF/AIFF upload acceptance + server-side transcode to M4A
+#   - Chunked recording: chunk_index parsing, dedup, list + stream endpoints
 # Triggered by deploy.sh after successful app deploy + migration.
 # Raises AssertionError (non-zero exit) on any test failure.
 
@@ -39,6 +40,17 @@ resources:
             - task_key: api_endpoint_tests
           notebook_task:
             notebook_path: ../src/tests/caf-transcode-test.ipynb
+            base_parameters:
+              app_name: ${var.app_name}
+              catalog_use: ${var.catalog}
+              schema_use: ${var.schema}
+          environment_key: default
+
+        - task_key: chunked_recording_validation
+          depends_on:
+            - task_key: api_endpoint_tests
+          notebook_task:
+            notebook_path: ../src/tests/chunked-recording-test.ipynb
             base_parameters:
               app_name: ${var.app_name}
               catalog_use: ${var.catalog}
