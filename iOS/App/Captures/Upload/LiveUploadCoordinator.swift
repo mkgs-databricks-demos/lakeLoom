@@ -393,7 +393,14 @@ public actor LiveUploadCoordinator: UploadCoordinator {
                 clientTimestamp: upload.clientTimestamp,
                 clientFilename: upload.originalFilename,
                 sha256Hex: upload.sha256Hex,
-                deviceID: upload.deviceID
+                deviceID: upload.deviceID,
+                // Chunk metadata is only meaningful for audio recordings
+                // (PR A piece 4). Photos / screenshots / documents are
+                // single whole files — leave the fields off so their
+                // multipart bodies stay byte-identical to today.
+                chunkIndex: upload.kind == .audio ? upload.chunkIndex : nil,
+                isFinalChunk: upload.kind == .audio ? upload.isFinalChunk : nil,
+                totalChunks: upload.kind == .audio ? upload.totalChunks : nil
             )
         } catch {
             // File disappeared from under us between enqueue and
@@ -430,6 +437,27 @@ public actor LiveUploadCoordinator: UploadCoordinator {
                 live.remoteUploadID = response.id
                 uploads[upload.id] = live
             }
+        }
+        // Genie's chunk dedup (migration 021) returns the existing row
+        // with `dedup_sha_mismatch: true` when a *different* file already
+        // occupies this (capture_session_id, chunk_index) slot — the
+        // server keeps the first file and drops ours. The HTTP status is
+        // still a success (idempotent by design, her 2026-05-29 reply,
+        // option b), but a SHA divergence means two genuinely different
+        // files claimed one chunk slot — a recovery bug we want loud, not
+        // silent. Clean idempotent retries (same file) carry the flag as
+        // false and log nothing.
+        if let signal = try? JSONDecoder().decode(DedupSignal.self, from: data),
+           signal.shaMismatch {
+            await logger.error(
+                "upload.dedup.sha_mismatch",
+                metadata: [
+                    "upload_id": .uuidPrefix(upload.id),
+                    "capture_session_id": .uuidPrefix(upload.captureSessionID),
+                    "chunk_index": .int(Int64(upload.chunkIndex)),
+                    "local_sha256": .string(upload.sha256Hex)
+                ]
+            )
         }
     }
 

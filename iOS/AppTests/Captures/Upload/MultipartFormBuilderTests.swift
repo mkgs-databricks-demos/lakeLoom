@@ -131,6 +131,66 @@ struct MultipartFormBuilderTests {
         #expect(payload == bytes)
     }
 
+    @Test("emits chunk_index, is_final_chunk, total_chunks when provided")
+    func chunkFieldsPresent() {
+        let boundary = "lakeloom.boundary.fixture"
+        let body = MultipartFormBuilder.build(
+            boundary: boundary,
+            fileBytes: Data([0xFF]),
+            filename: "audio-chunk1.m4a",
+            mimeType: "audio/mp4",
+            clientTimestamp: nil,
+            clientFilename: nil,
+            sha256Hex: nil,
+            chunkIndex: 1,
+            isFinalChunk: true,
+            totalChunks: 2
+        )
+        let ascii = String(data: body, encoding: .isoLatin1) ?? ""
+        #expect(ascii.contains("Content-Disposition: form-data; name=\"chunk_index\"\r\n\r\n1\r\n"))
+        #expect(ascii.contains("Content-Disposition: form-data; name=\"is_final_chunk\"\r\n\r\ntrue\r\n"))
+        #expect(ascii.contains("Content-Disposition: form-data; name=\"total_chunks\"\r\n\r\n2\r\n"))
+    }
+
+    @Test("serializes is_final_chunk false as the string \"false\"")
+    func isFinalChunkFalse() {
+        let boundary = "lakeloom.boundary.fixture"
+        let body = MultipartFormBuilder.build(
+            boundary: boundary,
+            fileBytes: Data([0xFF]),
+            filename: "audio-chunk0.m4a",
+            mimeType: "audio/mp4",
+            clientTimestamp: nil,
+            clientFilename: nil,
+            sha256Hex: nil,
+            chunkIndex: 0,
+            isFinalChunk: false
+        )
+        let ascii = String(data: body, encoding: .isoLatin1) ?? ""
+        #expect(ascii.contains("Content-Disposition: form-data; name=\"chunk_index\"\r\n\r\n0\r\n"))
+        #expect(ascii.contains("Content-Disposition: form-data; name=\"is_final_chunk\"\r\n\r\nfalse\r\n"))
+        // total_chunks omitted on a non-final chunk
+        #expect(!ascii.contains("total_chunks"))
+    }
+
+    @Test("omits all chunk fields when nil (single-chunk / non-audio back-compat)")
+    func chunkFieldsOmitted() {
+        let boundary = "lakeloom.boundary.fixture"
+        let body = MultipartFormBuilder.build(
+            boundary: boundary,
+            fileBytes: Data([0xFF]),
+            filename: "audio.m4a",
+            mimeType: "audio/mp4",
+            clientTimestamp: nil,
+            clientFilename: nil,
+            sha256Hex: nil
+        )
+        let ascii = String(data: body, encoding: .isoLatin1) ?? ""
+        #expect(!ascii.contains("chunk_index"))
+        #expect(!ascii.contains("is_final_chunk"))
+        #expect(!ascii.contains("total_chunks"))
+    }
+
     @Test("contentTypeHeaderValue is multipart/form-data with the boundary")
     func contentTypeHeader() {
         #expect(

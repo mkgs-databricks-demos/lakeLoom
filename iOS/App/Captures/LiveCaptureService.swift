@@ -456,10 +456,12 @@ public actor LiveCaptureService: CaptureService {
         }
         // Filter to audio files. Sort so chunk N+1 enqueues after
         // chunk N — keeps the upload coordinator's worker draining
-        // in recording order (the order the user spoke into the
-        // mic), which is also what server-side `ORDER BY uploaded_at`
-        // expects as a proxy for chunk ordering until mig 021's
-        // `chunk_index` lands.
+        // in recording order (the order the user spoke into the mic).
+        // We also parse `chunkIndex` out of each `<stem>-chunkN.<ext>`
+        // filename below and send it as `chunk_index`, so the server
+        // orders by `chunk_index` regardless of upload arrival order.
+        // Legacy single-chunk names (`audio-….m4a`, no `-chunkN`) parse
+        // to index 0.
         let audioExtensions: Set<String> = ["m4a", "caf"]
         let audioFiles = entries
             .filter { audioExtensions.contains($0.pathExtension.lowercased()) }
@@ -520,6 +522,13 @@ public actor LiveCaptureService: CaptureService {
             }
             let ext = fileURL.pathExtension.lowercased()
             let mime: String = ext == "caf" ? "audio/x-caf" : "audio/mp4"
+            // Recover the chunk index from the `<stem>-chunkN.<ext>`
+            // filename. `isFinalChunk` stays `false`: a force-quit
+            // leaves us unable to know which chunk was last, and the
+            // hint is advisory anyway (Genie §7.4) — the session state
+            // PATCH drives completion. `totalChunks` is likewise unknown
+            // here, so nil.
+            let recoveredChunkIndex = Self.chunkIndex(fromFilename: fileURL.lastPathComponent)
             let pending = PendingUpload(
                 id: uploadIDProvider(),
                 workspaceID: context.workspaceID,
@@ -532,6 +541,9 @@ public actor LiveCaptureService: CaptureService {
                 clientTimestamp: createdAt,
                 originalFilename: fileURL.lastPathComponent,
                 deviceID: audioDeviceID,
+                chunkIndex: recoveredChunkIndex,
+                isFinalChunk: false,
+                totalChunks: nil,
                 createdAt: nowProvider()
             )
             do {
@@ -544,7 +556,8 @@ public actor LiveCaptureService: CaptureService {
                         "upload_id": .uuidPrefix(pending.id),
                         "filename": .string(fileURL.lastPathComponent),
                         "bytes": .int(sizeBytes),
-                        "mime": .string(mime)
+                        "mime": .string(mime),
+                        "chunk_index": .int(Int64(recoveredChunkIndex))
                     ]
                 )
             } catch {
@@ -559,6 +572,20 @@ public actor LiveCaptureService: CaptureService {
             }
         }
         return recovered
+    }
+
+    /// Parse the zero-based chunk index out of an audio filename of the
+    /// form `<stem>-chunkN.<ext>` (produced by
+    /// ``EngineAudioRecordingEngine/chunkFinalURL(seed:chunkIndex:chunked:)``
+    /// in chunked mode). Legacy single-chunk names (`audio-….m4a`, no
+    /// `-chunkN` segment) and any unparseable name return `0` — the
+    /// safe default that matches single-chunk semantics.
+    static func chunkIndex(fromFilename filename: String) -> Int {
+        let stem = (filename as NSString).deletingPathExtension
+        guard let range = stem.range(of: "-chunk", options: .backwards) else { return 0 }
+        let digits = stem[range.upperBound...]
+        guard !digits.isEmpty, let index = Int(digits) else { return 0 }
+        return index
     }
 
     public func startCapture(
@@ -761,15 +788,15 @@ public actor LiveCaptureService: CaptureService {
 
         let audioDeviceID = await resolvedDeviceID()
 
-        // One `PendingUpload` per chunk. Today the engine always
-        // produces exactly one chunk, so this loop runs once and
-        // behavior is identical to the pre-refactor single-file path.
-        // PR A piece 4's rotation will produce N chunks; each
-        // becomes its own queued upload. `chunkIndex` /
-        // `isFinalChunk` will surface on `PendingUpload` (and on the
-        // wire) once Genie answers §7.1 of the chunked-recording
-        // design doc — gated to keep this commit pure data shape,
-        // zero behavior change.
+        // One `PendingUpload` per chunk. While `chunkDuration == nil`
+        // the engine produces exactly one chunk, so this loop runs once
+        // with `chunkIndex == 0`, `isFinalChunk == true` — identical on
+        // the wire to the pre-chunking single-file path. PR A piece 4's
+        // rotation produces N chunks; each carries its own `chunkIndex`
+        // and the shared session `totalChunks`, mapped onto Genie's
+        // `chunk_index` / `is_final_chunk` / `total_chunks` multipart
+        // fields (migration 021).
+        let totalChunks = completed.chunks.count
         for chunk in completed.chunks {
             let sha: String
             do {
@@ -793,6 +820,9 @@ public actor LiveCaptureService: CaptureService {
                 clientTimestamp: chunk.startedAt,
                 originalFilename: chunk.fileURL.lastPathComponent,
                 deviceID: audioDeviceID,
+                chunkIndex: chunk.chunkIndex,
+                isFinalChunk: chunk.isFinalChunk,
+                totalChunks: chunk.isFinalChunk ? totalChunks : nil,
                 createdAt: nowProvider()
             )
 

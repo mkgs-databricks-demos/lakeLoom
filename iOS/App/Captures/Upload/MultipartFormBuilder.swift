@@ -47,6 +47,13 @@ enum MultipartFormBuilder {
     ///   - deviceID: optional `device_id` field — stable per-device
     ///               UUID. Sent as a sibling form field per Genie's
     ///               2026-05-23 multipart shape answer.
+    ///   - chunkIndex: zero-based `chunk_index` field (PR A piece 4 /
+    ///               migration 021). Emitted only when non-nil. Audio
+    ///               uploads always pass it; other kinds leave it nil.
+    ///   - isFinalChunk: advisory `is_final_chunk` field, serialized as
+    ///               `"true"`/`"false"`. Emitted only when non-nil.
+    ///   - totalChunks: `total_chunks` session count, set on the final
+    ///               chunk. Emitted only when non-nil.
     static func build(
         boundary: String,
         fileURL: URL,
@@ -56,7 +63,10 @@ enum MultipartFormBuilder {
         clientTimestamp: Date?,
         clientFilename: String?,
         sha256Hex: String?,
-        deviceID: String? = nil
+        deviceID: String? = nil,
+        chunkIndex: Int? = nil,
+        isFinalChunk: Bool? = nil,
+        totalChunks: Int? = nil
     ) throws -> Data {
         let fileData = try Data(contentsOf: fileURL)
         return build(
@@ -68,7 +78,10 @@ enum MultipartFormBuilder {
             clientTimestamp: clientTimestamp,
             clientFilename: clientFilename,
             sha256Hex: sha256Hex,
-            deviceID: deviceID
+            deviceID: deviceID,
+            chunkIndex: chunkIndex,
+            isFinalChunk: isFinalChunk,
+            totalChunks: totalChunks
         )
     }
 
@@ -83,7 +96,10 @@ enum MultipartFormBuilder {
         clientTimestamp: Date?,
         clientFilename: String?,
         sha256Hex: String?,
-        deviceID: String? = nil
+        deviceID: String? = nil,
+        chunkIndex: Int? = nil,
+        isFinalChunk: Bool? = nil,
+        totalChunks: Int? = nil
     ) -> Data {
         var body = Data()
 
@@ -109,6 +125,28 @@ enum MultipartFormBuilder {
             body.append(boundaryLine(boundary))
             body.append(fieldDisposition("device_id"))
             body.append(string(deviceID))
+            body.append(crlf)
+        }
+        // Chunked-recording fields (PR A piece 4 / migration 021).
+        // Genie's busboy handler reads `chunk_index`, `is_final_chunk`,
+        // `total_chunks`; booleans as the strings "true"/"false".
+        // Emitted only when supplied so non-audio uploads stay clean.
+        if let chunkIndex {
+            body.append(boundaryLine(boundary))
+            body.append(fieldDisposition("chunk_index"))
+            body.append(string("\(chunkIndex)"))
+            body.append(crlf)
+        }
+        if let isFinalChunk {
+            body.append(boundaryLine(boundary))
+            body.append(fieldDisposition("is_final_chunk"))
+            body.append(string(isFinalChunk ? "true" : "false"))
+            body.append(crlf)
+        }
+        if let totalChunks {
+            body.append(boundaryLine(boundary))
+            body.append(fieldDisposition("total_chunks"))
+            body.append(string("\(totalChunks)"))
             body.append(crlf)
         }
 

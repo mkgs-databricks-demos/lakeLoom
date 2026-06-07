@@ -59,6 +59,30 @@ public struct PendingUpload: Sendable, Equatable, Hashable, Codable, Identifiabl
     /// as nil and upload without it (Genie's Zod schema treats it as
     /// optional during rollout).
     public let deviceID: String?
+    /// Zero-based index of this chunk within its capture session.
+    /// Single-chunk recordings (today's default, `chunkDuration == nil`)
+    /// always use `0`. PR A piece 4's rotation produces N chunks, each
+    /// enqueued as its own `PendingUpload` with a monotonically
+    /// increasing index. Sent as the `chunk_index` multipart field; the
+    /// server's `(capture_session_id, chunk_index)` partial-unique index
+    /// (migration 021) dedups retries. Older on-disk queue entries that
+    /// pre-date this field decode as `0` (see custom `init(from:)`).
+    public let chunkIndex: Int
+    /// Advisory hint that this is the last chunk of a chunked recording
+    /// session. Sent as `is_final_chunk`. The server treats it as a hint
+    /// only — the capture-session state PATCH remains authoritative for
+    /// completion (Genie §7.4). Single-chunk recordings are their own
+    /// final chunk, so this defaults to `true`; force-quit recovery
+    /// enqueues with `false` since it can't know which chunk was last.
+    /// Older on-disk queue entries decode as `true` — they were always
+    /// whole recordings.
+    public let isFinalChunk: Bool
+    /// Total chunk count for the session, set on the final chunk at stop
+    /// time (`chunks.count`). Sent as `total_chunks` so the server can
+    /// sanity-check `chunk_index < total_chunks`. Nil when unknown — e.g.
+    /// force-quit recovery, where files are enqueued off disk without a
+    /// session-level count, and on non-final chunks.
+    public let totalChunks: Int?
     public let createdAt: Date
 
     public var state: State
@@ -85,6 +109,9 @@ public struct PendingUpload: Sendable, Equatable, Hashable, Codable, Identifiabl
         clientTimestamp: Date,
         originalFilename: String?,
         deviceID: String? = nil,
+        chunkIndex: Int = 0,
+        isFinalChunk: Bool = true,
+        totalChunks: Int? = nil,
         createdAt: Date,
         state: State = .queued,
         attempts: Int = 0,
@@ -104,12 +131,54 @@ public struct PendingUpload: Sendable, Equatable, Hashable, Codable, Identifiabl
         self.clientTimestamp = clientTimestamp
         self.originalFilename = originalFilename
         self.deviceID = deviceID
+        self.chunkIndex = chunkIndex
+        self.isFinalChunk = isFinalChunk
+        self.totalChunks = totalChunks
         self.createdAt = createdAt
         self.state = state
         self.attempts = attempts
         self.nextAttemptAt = nextAttemptAt
         self.lastError = lastError
         self.remoteUploadID = remoteUploadID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, workspaceID, captureSessionID, projectID, kind, localFileURL
+        case mimeType, sizeBytes, sha256Hex, clientTimestamp, originalFilename
+        case deviceID, chunkIndex, isFinalChunk, totalChunks, createdAt
+        case state, attempts, nextAttemptAt, lastError, remoteUploadID
+    }
+
+    /// Custom decoder so queue entries persisted before the chunk
+    /// fields existed (PR A piece 4) still rehydrate after an app
+    /// update. `chunkIndex` / `isFinalChunk` / `totalChunks` are absent
+    /// in those JSON blobs; we fill the single-chunk defaults (`0`,
+    /// `true`, `nil`) rather than throwing — losing a queued recording
+    /// to a decode failure is exactly the data loss this whole branch
+    /// exists to prevent. Encoding stays synthesized via `CodingKeys`.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        workspaceID = try c.decode(String.self, forKey: .workspaceID)
+        captureSessionID = try c.decode(String.self, forKey: .captureSessionID)
+        projectID = try c.decodeIfPresent(String.self, forKey: .projectID)
+        kind = try c.decode(Kind.self, forKey: .kind)
+        localFileURL = try c.decode(URL.self, forKey: .localFileURL)
+        mimeType = try c.decode(String.self, forKey: .mimeType)
+        sizeBytes = try c.decode(Int64.self, forKey: .sizeBytes)
+        sha256Hex = try c.decode(String.self, forKey: .sha256Hex)
+        clientTimestamp = try c.decode(Date.self, forKey: .clientTimestamp)
+        originalFilename = try c.decodeIfPresent(String.self, forKey: .originalFilename)
+        deviceID = try c.decodeIfPresent(String.self, forKey: .deviceID)
+        chunkIndex = try c.decodeIfPresent(Int.self, forKey: .chunkIndex) ?? 0
+        isFinalChunk = try c.decodeIfPresent(Bool.self, forKey: .isFinalChunk) ?? true
+        totalChunks = try c.decodeIfPresent(Int.self, forKey: .totalChunks)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        state = try c.decode(State.self, forKey: .state)
+        attempts = try c.decode(Int.self, forKey: .attempts)
+        nextAttemptAt = try c.decodeIfPresent(Date.self, forKey: .nextAttemptAt)
+        lastError = try c.decodeIfPresent(String.self, forKey: .lastError)
+        remoteUploadID = try c.decodeIfPresent(String.self, forKey: .remoteUploadID)
     }
 
     /// Server endpoint this upload should target. Documents live at
@@ -192,6 +261,32 @@ public struct UploadStateChange: Sendable, Equatable {
     public init(uploadID: String, state: PendingUpload.State) {
         self.uploadID = uploadID
         self.state = state
+    }
+}
+
+/// Decodes the chunk-dedup signal Genie's audio upload route attaches
+/// to a *successful* response when an upload hit the
+/// `(capture_session_id, chunk_index)` unique index (migration 021).
+///
+/// Both fields default to `false` when absent, so this safely decodes
+/// any upload response — non-dedup inserts simply carry neither key.
+/// Per Genie's 2026-05-29 reply (option b): the status stays 2xx and
+/// the existing row is returned; `dedupSHAMismatch` is the loud signal
+/// that two *different* files claimed the same chunk slot (a recovery
+/// bug), as opposed to a clean idempotent retry of the same file.
+struct DedupSignal: Decodable, Equatable {
+    let isDedup: Bool
+    let shaMismatch: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case isDedup = "_dedup"
+        case shaMismatch = "dedup_sha_mismatch"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        isDedup = (try? c.decodeIfPresent(Bool.self, forKey: .isDedup)) ?? false
+        shaMismatch = (try? c.decodeIfPresent(Bool.self, forKey: .shaMismatch)) ?? false
     }
 }
 
