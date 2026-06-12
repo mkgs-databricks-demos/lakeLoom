@@ -165,8 +165,12 @@ struct PendingUploadsView: View {
 
     private func discard(_ id: String) async {
         await uploadCoordinator.discard(uploadID: id)
-        // discard() doesn't broadcast through stateUpdates(), so
-        // refresh the snapshot manually.
+        // `discard()` re-broadcasts the upload's pre-discard state on
+        // `stateUpdates()` so the `observe()` loop above re-snapshots
+        // and updates the list. Snapshot here too so the row vanishes
+        // synchronously with the tap — without this, there's a tiny
+        // window where the cross-actor `stateUpdates()` yield hasn't
+        // reached the observer task yet and the row visibly lingers.
         await refresh()
     }
 

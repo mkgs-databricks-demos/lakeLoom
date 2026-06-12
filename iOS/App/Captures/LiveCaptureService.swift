@@ -58,6 +58,19 @@ public actor LiveCaptureService: CaptureService {
     /// command. Production wiring supplies a `NowPlayingController`;
     /// tests omit it (no lock-screen UI to verify).
     private let nowPlaying: (any NowPlayingControlling)?
+    /// PR 21 (Phase 3 cutover): when wired, ``startCapture`` generates
+    /// the capture session id locally as a UUIDv7 and enqueues a
+    /// ``PendingOperation/Variant/createCaptureSession`` op instead
+    /// of blocking on the server. The recorder starts immediately so
+    /// the user can record without network. Stop / cancel similarly
+    /// enqueue ``Variant/updateCaptureSessionState`` rather than
+    /// firing direct PATCHes.
+    ///
+    /// When nil, startCapture / stopCapture / cancelCapture fall back
+    /// to the pre-Phase-3 direct API calls (this is the path the
+    /// existing test suite exercises — only the new offline-aware
+    /// tests opt in).
+    private let operationQueue: (any OperationQueueing)?
     /// PR 10c: optional camera path for in-session photo capture.
     /// Production wiring sets `LivePhotoCapture`; tests that don't
     /// exercise the photo flow can omit. When nil,
@@ -73,6 +86,13 @@ public actor LiveCaptureService: CaptureService {
     private let nowProvider: @Sendable () -> Date
     private let uploadIDProvider: @Sendable () -> String
     private let fileHasher: @Sendable (URL) throws -> String
+    /// Resolves the on-disk Application Support directory for a
+    /// given capture session's audio files. Defaults to
+    /// `LiveAudioRecorder.capturesDirectory(for:)` (real
+    /// Application Support); tests inject a sandbox-rooted resolver
+    /// so the recovery flow can find fixture audio files without
+    /// touching the real filesystem.
+    private let capturesDirectoryProvider: @Sendable (String) throws -> URL
     /// Optional disk-persistent capture-context snapshot. Production
     /// wiring sets this; older tests that don't exercise the rehydrate
     /// path pass `nil` so they keep working unchanged.
@@ -130,6 +150,7 @@ public actor LiveCaptureService: CaptureService {
         audioBufferSource: (any AudioBufferSource)? = nil,
         interruptionPublisher: (any AudioInterruptionPublishing)? = nil,
         nowPlaying: (any NowPlayingControlling)? = nil,
+        operationQueue: (any OperationQueueing)? = nil,
         photoCapture: (any PhotoCapture)? = nil,
         pairedSessionIDProvider: (@Sendable () async -> String?)? = nil,
         logger: AppLogger = AppLogger(category: .capture)
@@ -145,12 +166,16 @@ public actor LiveCaptureService: CaptureService {
         self.audioBufferSource = audioBufferSource
         self.interruptionPublisher = interruptionPublisher
         self.nowPlaying = nowPlaying
+        self.operationQueue = operationQueue
         self.photoCapture = photoCapture
         self.pairedSessionIDProvider = pairedSessionIDProvider
         self.logger = logger
         self.nowProvider = Date.init
         self.uploadIDProvider = { UUID().uuidString }
         self.fileHasher = { url in try FileSHA256.hex(of: url) }
+        self.capturesDirectoryProvider = { sessionID in
+            try LiveAudioRecorder.capturesDirectory(for: sessionID)
+        }
     }
 
     /// Test-friendly init. Lets unit tests pin the clock, generate
@@ -168,12 +193,16 @@ public actor LiveCaptureService: CaptureService {
         audioBufferSource: (any AudioBufferSource)? = nil,
         interruptionPublisher: (any AudioInterruptionPublishing)? = nil,
         nowPlaying: (any NowPlayingControlling)? = nil,
+        operationQueue: (any OperationQueueing)? = nil,
         photoCapture: (any PhotoCapture)? = nil,
         pairedSessionIDProvider: (@Sendable () async -> String?)? = nil,
         logger: AppLogger = AppLogger(category: .capture),
         nowProvider: @Sendable @escaping () -> Date,
         uploadIDProvider: @Sendable @escaping () -> String,
-        fileHasher: @Sendable @escaping (URL) throws -> String
+        fileHasher: @Sendable @escaping (URL) throws -> String,
+        capturesDirectoryProvider: @Sendable @escaping (String) throws -> URL = { sessionID in
+            try LiveAudioRecorder.capturesDirectory(for: sessionID)
+        }
     ) {
         self.captureAPI = captureAPI
         self.recorder = recorder
@@ -186,12 +215,14 @@ public actor LiveCaptureService: CaptureService {
         self.audioBufferSource = audioBufferSource
         self.interruptionPublisher = interruptionPublisher
         self.nowPlaying = nowPlaying
+        self.operationQueue = operationQueue
         self.photoCapture = photoCapture
         self.pairedSessionIDProvider = pairedSessionIDProvider
         self.logger = logger
         self.nowProvider = nowProvider
         self.uploadIDProvider = uploadIDProvider
         self.fileHasher = fileHasher
+        self.capturesDirectoryProvider = capturesDirectoryProvider
     }
 
     // MARK: Public surface
@@ -278,17 +309,45 @@ public actor LiveCaptureService: CaptureService {
         )
         switch snapshot.phase {
         case .recording:
-            // App died with the recorder active. No uploads were
-            // enqueued (the audio file may exist on disk but is
-            // unfinalized and unsigned). Patch the server-side
-            // session to `.cancelled` so the row never lingers
-            // `.active` and clear the snapshot.
-            await patchServerCancelled(context: context)
-            await store.clear()
-            await logger.info(
-                "capture.recover.recording_orphan_cancelled",
-                metadata: ["capture_session_id": .uuidPrefix(context.captureSessionID)]
-            )
+            // App died with the recorder active. The audio files on
+            // disk (CAF intermediate + transcoded M4A — and, with
+            // rotation, every closed chunk) are the only artifact of
+            // the session. Pre-rotation behavior was to patch the
+            // server to `.cancelled` and walk away — fine for the
+            // 30-second smoke test, but a data-loss bug for the
+            // FDE-in-the-field use case where a force-quit during a
+            // 2-hour offline recording must NOT lose audio.
+            //
+            // New behavior: scan the session's captures directory
+            // for any audio files, enqueue them as PendingUploads
+            // against the same `.active` server-side session, and
+            // transition the snapshot to `.finalizing` so the upload
+            // watcher drives the session to `.completed` once
+            // everything drains. Fall back to the old cancel-on-
+            // detect path only when there's nothing on disk to
+            // recover.
+            let recovered = await recoverRecordingPhaseAudio(context: context)
+            if recovered.isEmpty {
+                await patchServerCancelled(context: context)
+                await store.clear()
+                await logger.info(
+                    "capture.recover.recording_no_files_cancelled",
+                    metadata: ["capture_session_id": .uuidPrefix(context.captureSessionID)]
+                )
+            } else {
+                let pending = Set(recovered)
+                let stream = await uploadCoordinator.stateUpdates()
+                transition(to: .finalizing(context, pendingUploadIDs: pending))
+                await persistFinalizingIfNeeded(context: context, pending: pending)
+                spawnWatcher(stream: stream, for: context, pendingUploadIDs: pending)
+                await logger.info(
+                    "capture.recover.recording_audio_resurrected",
+                    metadata: [
+                        "capture_session_id": .uuidPrefix(context.captureSessionID),
+                        "recovered_uploads": .int(Int64(pending.count))
+                    ]
+                )
+            }
 
         case .finalizing:
             // App died after the recorder finalized + the uploads
@@ -336,6 +395,172 @@ public actor LiveCaptureService: CaptureService {
         }
     }
 
+    /// Walk the captures directory for `context.captureSessionID`,
+    /// build a `PendingUpload` for every audio file we find, and
+    /// enqueue each. Returns the newly-minted upload IDs so the
+    /// caller can set up the finalize watcher.
+    ///
+    /// Files we recover:
+    /// - `audio-<stamp>.m4a` — single-chunk transcoded output
+    /// - `audio-<stamp>.caf` — single-chunk CAF fallback / orphaned
+    ///   intermediate (engine died before transcode)
+    /// - `audio-<stamp>-chunk<N>.m4a` / `.caf` — chunked-recording
+    ///   per-chunk outputs / intermediates
+    ///
+    /// We don't bother distinguishing CAF-intermediate from CAF-
+    /// fallback at recovery time: if a CAF is on disk, it represents
+    /// audio the user expects to be uploaded. Server accepts
+    /// `audio/x-caf` and transcodes via ffmpeg, so either way the
+    /// data lands. Files smaller than the 256-byte transcode floor
+    /// (see EngineAudioRecordingEngine.transcode) are dropped —
+    /// they're empty headers from a force-quit before any frames
+    /// were written.
+    ///
+    /// SHA-256 + size are computed fresh from disk; we don't try to
+    /// match against any pre-stop in-memory state because there
+    /// isn't any reliable one after a force-quit.
+    private func recoverRecordingPhaseAudio(context: CaptureContext) async -> [String] {
+        let captureDir: URL
+        do {
+            captureDir = try capturesDirectoryProvider(context.captureSessionID)
+        } catch {
+            await logger.warning(
+                "capture.recover.dir_resolve_failed",
+                metadata: [
+                    "capture_session_id": .uuidPrefix(context.captureSessionID),
+                    "reason": .string(error.localizedDescription)
+                ]
+            )
+            return []
+        }
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: captureDir.path) else {
+            return []
+        }
+        let entries: [URL]
+        do {
+            entries = try fileManager.contentsOfDirectory(
+                at: captureDir,
+                includingPropertiesForKeys: [.fileSizeKey, .creationDateKey],
+                options: [.skipsHiddenFiles]
+            )
+        } catch {
+            await logger.warning(
+                "capture.recover.dir_list_failed",
+                metadata: [
+                    "capture_session_id": .uuidPrefix(context.captureSessionID),
+                    "reason": .string(error.localizedDescription)
+                ]
+            )
+            return []
+        }
+        // Filter to audio files. Sort so chunk N+1 enqueues after
+        // chunk N — keeps the upload coordinator's worker draining
+        // in recording order (the order the user spoke into the
+        // mic), which is also what server-side `ORDER BY uploaded_at`
+        // expects as a proxy for chunk ordering until mig 021's
+        // `chunk_index` lands.
+        let audioExtensions: Set<String> = ["m4a", "caf"]
+        let audioFiles = entries
+            .filter { audioExtensions.contains($0.pathExtension.lowercased()) }
+            .filter { $0.lastPathComponent.hasPrefix("audio-") }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+
+        guard !audioFiles.isEmpty else { return [] }
+
+        let audioDeviceID = await resolvedDeviceID()
+        var recovered: [String] = []
+        for fileURL in audioFiles {
+            let sizeBytes: Int64
+            let createdAt: Date
+            do {
+                let attrs = try fileManager.attributesOfItem(atPath: fileURL.path)
+                sizeBytes = (attrs[.size] as? NSNumber)?.int64Value ?? 0
+                createdAt = (attrs[.creationDate] as? Date) ?? context.startedAt
+            } catch {
+                await logger.warning(
+                    "capture.recover.file_stat_failed",
+                    metadata: [
+                        "capture_session_id": .uuidPrefix(context.captureSessionID),
+                        "filename": .string(fileURL.lastPathComponent),
+                        "reason": .string(error.localizedDescription)
+                    ]
+                )
+                continue
+            }
+            // Match the post-transcode floor (256 bytes); below that,
+            // the file is a stub header from a force-quit before
+            // any frames landed. Uploading would just waste bytes
+            // and the user's time staring at a "Failed" pill.
+            if sizeBytes < 256 {
+                try? fileManager.removeItem(at: fileURL)
+                await logger.info(
+                    "capture.recover.stub_file_purged",
+                    metadata: [
+                        "capture_session_id": .uuidPrefix(context.captureSessionID),
+                        "filename": .string(fileURL.lastPathComponent),
+                        "bytes": .int(sizeBytes)
+                    ]
+                )
+                continue
+            }
+            let sha: String
+            do {
+                sha = try fileHasher(fileURL)
+            } catch {
+                await logger.warning(
+                    "capture.recover.hash_failed",
+                    metadata: [
+                        "capture_session_id": .uuidPrefix(context.captureSessionID),
+                        "filename": .string(fileURL.lastPathComponent),
+                        "reason": .string(error.localizedDescription)
+                    ]
+                )
+                continue
+            }
+            let ext = fileURL.pathExtension.lowercased()
+            let mime: String = ext == "caf" ? "audio/x-caf" : "audio/mp4"
+            let pending = PendingUpload(
+                id: uploadIDProvider(),
+                workspaceID: context.workspaceID,
+                captureSessionID: context.captureSessionID,
+                kind: .audio,
+                localFileURL: fileURL,
+                mimeType: mime,
+                sizeBytes: sizeBytes,
+                sha256Hex: sha,
+                clientTimestamp: createdAt,
+                originalFilename: fileURL.lastPathComponent,
+                deviceID: audioDeviceID,
+                createdAt: nowProvider()
+            )
+            do {
+                try await uploadCoordinator.enqueue(pending)
+                recovered.append(pending.id)
+                await logger.info(
+                    "capture.recover.audio_enqueued",
+                    metadata: [
+                        "capture_session_id": .uuidPrefix(context.captureSessionID),
+                        "upload_id": .uuidPrefix(pending.id),
+                        "filename": .string(fileURL.lastPathComponent),
+                        "bytes": .int(sizeBytes),
+                        "mime": .string(mime)
+                    ]
+                )
+            } catch {
+                await logger.warning(
+                    "capture.recover.enqueue_failed",
+                    metadata: [
+                        "capture_session_id": .uuidPrefix(context.captureSessionID),
+                        "filename": .string(fileURL.lastPathComponent),
+                        "reason": .string(error.localizedDescription)
+                    ]
+                )
+            }
+        }
+        return recovered
+    }
+
     public func startCapture(
         workspaceID: String,
         projectID: String,
@@ -348,7 +573,8 @@ public actor LiveCaptureService: CaptureService {
             "capture.start.attempt",
             metadata: [
                 "workspace_id": .uuidPrefix(workspaceID),
-                "project_id": .uuidPrefix(projectID)
+                "project_id": .uuidPrefix(projectID),
+                "path": .string(operationQueue == nil ? "direct" : "queued")
             ]
         )
 
@@ -358,45 +584,88 @@ public actor LiveCaptureService: CaptureService {
         // proceed without the field.
         let deviceID: String? = await resolvedDeviceID()
 
-        let session: CaptureSession
-        do {
-            session = try await captureAPI.createCaptureSession(
+        let captureSessionID: String
+        let startedAt: Date
+
+        if let operationQueue {
+            // Phase 3 path. Generate the capture session id locally
+            // so the recorder can start without waiting on a server
+            // round trip; the server-side create lands when the
+            // OperationQueue drains. Server reconciles via Genie's
+            // migration 018 (client_generated_id used as the row's
+            // primary key, idempotent on (user, client_generated_id)).
+            let now = nowProvider()
+            let localID = UUIDv7.generate(now: now)
+            captureSessionID = localID
+            startedAt = now
+
+            let pendingOp = PendingOperation(
+                id: UUIDv7.generate(now: now),
                 workspaceID: workspaceID,
-                projectID: projectID,
-                label: label,
-                clientTimestamp: nowProvider(),
-                deviceID: deviceID
+                variant: .createCaptureSession(
+                    captureSessionID: localID,
+                    projectID: projectID,
+                    label: label,
+                    clientTimestamp: now,
+                    deviceID: deviceID
+                ),
+                createdAt: now
             )
-        } catch let error as CaptureAPIError {
-            // Surface the network-unavailable case specifically so
-            // the UI can render an offline-aware banner rather than
-            // a stringified reason; everything else stays under the
-            // generic `createSessionFailed`.
-            switch error {
-            case .networkUnavailable:
-                transition(to: .failed(reason: "create: networkUnavailable"))
-                throw CaptureServiceError.createSessionNetworkUnavailable
-            default:
-                transition(to: .failed(reason: "create: \(String(describing: error))"))
-                throw CaptureServiceError.createSessionFailed(reason: String(describing: error))
+            do {
+                try await operationQueue.enqueue(pendingOp)
+            } catch {
+                // The OperationQueue persists to disk on enqueue.
+                // Failure here means the on-disk store is unhealthy —
+                // we can't safely proceed, since stopCapture later
+                // would have no create-op to drain behind.
+                transition(to: .failed(reason: "enqueue: \(error.localizedDescription)"))
+                throw CaptureServiceError.createSessionFailed(reason: error.localizedDescription)
             }
-        } catch {
-            transition(to: .failed(reason: "create: \(error.localizedDescription)"))
-            throw CaptureServiceError.createSessionFailed(reason: error.localizedDescription)
+        } else {
+            // Legacy direct-call path. Kept until every test passes
+            // an operationQueue dep; the production app no longer
+            // takes this branch.
+            let session: CaptureSession
+            do {
+                session = try await captureAPI.createCaptureSession(
+                    workspaceID: workspaceID,
+                    projectID: projectID,
+                    label: label,
+                    clientTimestamp: nowProvider(),
+                    deviceID: deviceID,
+                    clientGeneratedID: nil
+                )
+            } catch let error as CaptureAPIError {
+                switch error {
+                case .networkUnavailable:
+                    transition(to: .failed(reason: "create: networkUnavailable"))
+                    throw CaptureServiceError.createSessionNetworkUnavailable
+                default:
+                    transition(to: .failed(reason: "create: \(String(describing: error))"))
+                    throw CaptureServiceError.createSessionFailed(reason: String(describing: error))
+                }
+            } catch {
+                transition(to: .failed(reason: "create: \(error.localizedDescription)"))
+                throw CaptureServiceError.createSessionFailed(reason: error.localizedDescription)
+            }
+            captureSessionID = session.id
+            startedAt = nowProvider()
         }
 
-        // Server-side session exists from here. Any failure in the
-        // remainder of `startCapture` must roll it back to .cancelled.
+        // Recorder uses the same id whether it came from the server
+        // or was generated locally. Any failure in the rest of
+        // startCapture has to clean up the create op (or the
+        // server-side row in the legacy path).
         do {
-            _ = try await recorder.start(captureSessionID: session.id)
+            _ = try await recorder.start(captureSessionID: captureSessionID)
         } catch let error as AudioRecorderError {
             // Pull the permission-denied case out of the generic
             // bucket so the UI can render an "Open Settings"
             // affordance instead of a re-tap-the-Record-button
             // retry (which would fail with the same error).
-            await rollbackServerSession(
+            await rollbackCreate(
                 workspaceID: workspaceID,
-                captureSessionID: session.id,
+                captureSessionID: captureSessionID,
                 because: "recorder.start: \(String(describing: error))"
             )
             switch error {
@@ -408,9 +677,9 @@ public actor LiveCaptureService: CaptureService {
                 throw CaptureServiceError.recorderStartFailed(reason: String(describing: error))
             }
         } catch {
-            await rollbackServerSession(
+            await rollbackCreate(
                 workspaceID: workspaceID,
-                captureSessionID: session.id,
+                captureSessionID: captureSessionID,
                 because: "recorder.start: \(error.localizedDescription)"
             )
             transition(to: .failed(reason: "recorder.start: \(error.localizedDescription)"))
@@ -418,17 +687,17 @@ public actor LiveCaptureService: CaptureService {
         }
 
         let context = CaptureContext(
-            captureSessionID: session.id,
+            captureSessionID: captureSessionID,
             projectID: projectID,
             workspaceID: workspaceID,
-            startedAt: nowProvider()
+            startedAt: startedAt
         )
         transition(to: .recording(context))
         await persistRecording(context: context)
         await logger.info(
             "capture.start.ok",
             metadata: [
-                "capture_session_id": .uuidPrefix(session.id)
+                "capture_session_id": .uuidPrefix(captureSessionID)
             ]
         )
 
@@ -451,9 +720,9 @@ public actor LiveCaptureService: CaptureService {
             throw CaptureServiceError.notRecording
         }
 
-        let recording: AudioRecording
+        let completed: CompletedRecording
         do {
-            recording = try await recorder.stop()
+            completed = try await recorder.stop()
         } catch let error as AudioRecorderError {
             // Recorder failed mid-stop. Leave the server-side session
             // `.active` and surface `.failed` — caller can invoke
@@ -471,34 +740,8 @@ public actor LiveCaptureService: CaptureService {
             throw CaptureServiceError.recorderStopFailed(reason: error.localizedDescription)
         }
 
-        let sha: String
-        do {
-            sha = try fileHasher(recording.fileURL)
-        } catch {
-            transition(to: .failed(reason: "hash: \(error.localizedDescription)"))
-            await contextStore?.clear()
-            await tearDownInSessionResources()
-            throw CaptureServiceError.hashingFailed(reason: error.localizedDescription)
-        }
-
-        let audioDeviceID = await resolvedDeviceID()
-        let pending = PendingUpload(
-            id: uploadIDProvider(),
-            workspaceID: context.workspaceID,
-            captureSessionID: context.captureSessionID,
-            kind: .audio,
-            localFileURL: recording.fileURL,
-            mimeType: recording.mimeType,
-            sizeBytes: recording.sizeBytes,
-            sha256Hex: sha,
-            clientTimestamp: recording.startedAt,
-            originalFilename: recording.fileURL.lastPathComponent,
-            deviceID: audioDeviceID,
-            createdAt: nowProvider()
-        )
-
         // Subscribe to the upload coordinator's state stream BEFORE
-        // calling `enqueue`. The coordinator's `stateUpdates()` is
+        // enqueueing any chunk. The coordinator's `stateUpdates()` is
         // not buffered — once `enqueue` fires its initial `.queued`
         // event (and the worker loop continues straight into
         // `.uploading` / `.succeeded`), any of those transitions
@@ -516,19 +759,62 @@ public actor LiveCaptureService: CaptureService {
         // counts we observed on real device).
         let uploadStream = await uploadCoordinator.stateUpdates()
 
-        do {
-            try await uploadCoordinator.enqueue(pending)
-        } catch let error as UploadCoordinatorError {
-            transition(to: .failed(reason: "enqueue: \(String(describing: error))"))
-            await contextStore?.clear()
-            await tearDownInSessionResources()
-            throw CaptureServiceError.enqueueFailed(reason: String(describing: error))
-        } catch {
-            transition(to: .failed(reason: "enqueue: \(error.localizedDescription)"))
-            await contextStore?.clear()
-            await tearDownInSessionResources()
-            throw CaptureServiceError.enqueueFailed(reason: error.localizedDescription)
+        let audioDeviceID = await resolvedDeviceID()
+
+        // One `PendingUpload` per chunk. Today the engine always
+        // produces exactly one chunk, so this loop runs once and
+        // behavior is identical to the pre-refactor single-file path.
+        // PR A piece 4's rotation will produce N chunks; each
+        // becomes its own queued upload. `chunkIndex` /
+        // `isFinalChunk` will surface on `PendingUpload` (and on the
+        // wire) once Genie answers §7.1 of the chunked-recording
+        // design doc — gated to keep this commit pure data shape,
+        // zero behavior change.
+        for chunk in completed.chunks {
+            let sha: String
+            do {
+                sha = try fileHasher(chunk.fileURL)
+            } catch {
+                transition(to: .failed(reason: "hash: \(error.localizedDescription)"))
+                await contextStore?.clear()
+                await tearDownInSessionResources()
+                throw CaptureServiceError.hashingFailed(reason: error.localizedDescription)
+            }
+
+            let pending = PendingUpload(
+                id: uploadIDProvider(),
+                workspaceID: context.workspaceID,
+                captureSessionID: context.captureSessionID,
+                kind: .audio,
+                localFileURL: chunk.fileURL,
+                mimeType: chunk.mimeType,
+                sizeBytes: chunk.sizeBytes,
+                sha256Hex: sha,
+                clientTimestamp: chunk.startedAt,
+                originalFilename: chunk.fileURL.lastPathComponent,
+                deviceID: audioDeviceID,
+                createdAt: nowProvider()
+            )
+
+            do {
+                try await uploadCoordinator.enqueue(pending)
+            } catch let error as UploadCoordinatorError {
+                transition(to: .failed(reason: "enqueue: \(String(describing: error))"))
+                await contextStore?.clear()
+                await tearDownInSessionResources()
+                throw CaptureServiceError.enqueueFailed(reason: String(describing: error))
+            } catch {
+                transition(to: .failed(reason: "enqueue: \(error.localizedDescription)"))
+                await contextStore?.clear()
+                await tearDownInSessionResources()
+                throw CaptureServiceError.enqueueFailed(reason: error.localizedDescription)
+            }
         }
+
+        // The final chunk's metadata stands in for the session for
+        // the recognizer-handoff fallback below: it carries the
+        // session-wide `endedAt` and the wall-clock end of audio.
+        let finalChunk = completed.final
 
         // Transcription handoff. PR 9b: when the live recognizer was
         // wired and started in startCapture (`liveStreamingActive`
@@ -550,12 +836,19 @@ public actor LiveCaptureService: CaptureService {
             liveStreamingTask = nil
             liveStreamingActive = false
         } else {
+            // File-based transcription fallback (older test paths,
+            // permission-denied at start). For multi-chunk sessions
+            // we transcribe the final chunk's file — Whisper runs
+            // server-side on every chunk anyway via the upload pipeline,
+            // so this is purely a belt-and-suspenders path for legacy
+            // callers and will be dropped when the live recognizer is
+            // mandatory.
             transcribeAudioInBackground(
-                fileURL: recording.fileURL,
+                fileURL: finalChunk.fileURL,
                 workspaceID: context.workspaceID,
                 projectID: context.projectID,
                 deviceID: audioDeviceID,
-                startedAt: recording.startedAt
+                startedAt: completed.first.startedAt
             )
         }
 
@@ -1013,7 +1306,14 @@ public actor LiveCaptureService: CaptureService {
         transcriptContinuations.removeAll()
     }
 
-    private func rollbackServerSession(
+    /// Roll back a half-started capture. In the queued path the
+    /// create op may still be in flight — but enqueuing a `cancelled`
+    /// state PATCH is the simpler universal cleanup: if the create
+    /// hasn't drained, the queue runs create→cancel and the server
+    /// ends with a cancelled row; if it already drained, the cancel
+    /// finds the row and transitions it. No need to peek at the
+    /// queue state from here.
+    private func rollbackCreate(
         workspaceID: String,
         captureSessionID: String,
         because reason: String
@@ -1025,51 +1325,92 @@ public actor LiveCaptureService: CaptureService {
                 "reason": .string(reason)
             ]
         )
-        _ = try? await captureAPI.updateCaptureSession(
+        await patchCaptureState(
             workspaceID: workspaceID,
             captureSessionID: captureSessionID,
             state: .cancelled,
-            endedAt: nowProvider()
+            logLabel: "capture.cancel.rollback"
         )
     }
 
     private func patchServerCancelled(context: CaptureContext) async {
+        await patchCaptureState(
+            workspaceID: context.workspaceID,
+            captureSessionID: context.captureSessionID,
+            state: .cancelled,
+            logLabel: "capture.cancel.patch"
+        )
+    }
+
+    private func patchServerCompleted(context: CaptureContext) async {
+        await patchCaptureState(
+            workspaceID: context.workspaceID,
+            captureSessionID: context.captureSessionID,
+            state: .completed,
+            logLabel: "capture.complete.patch"
+        )
+    }
+
+    /// Shared helper that funnels both rollback + finalize through
+    /// the same queue-vs-direct fork. The legacy direct path keeps
+    /// the existing best-effort semantics (try/catch + warn on
+    /// failure); the queued path entrusts persistence + retry to the
+    /// OperationQueue.
+    private func patchCaptureState(
+        workspaceID: String,
+        captureSessionID: String,
+        state: PendingOperation.TerminalState,
+        logLabel: String
+    ) async {
+        if let operationQueue {
+            let now = nowProvider()
+            let op = PendingOperation(
+                id: UUIDv7.generate(now: now),
+                workspaceID: workspaceID,
+                variant: .updateCaptureSessionState(
+                    captureSessionID: captureSessionID,
+                    endState: state,
+                    endedAt: now
+                ),
+                createdAt: now
+            )
+            do {
+                try await operationQueue.enqueue(op)
+            } catch {
+                await logger.warning(
+                    "\(logLabel)_enqueue_failed",
+                    metadata: [
+                        "capture_session_id": .uuidPrefix(captureSessionID),
+                        "reason": .string(error.localizedDescription)
+                    ]
+                )
+            }
+            return
+        }
+        // Legacy direct path.
+        let endState: CaptureSession.EndState
+        switch state {
+        case .completed: endState = .completed
+        case .cancelled: endState = .cancelled
+        }
         do {
             _ = try await captureAPI.updateCaptureSession(
-                workspaceID: context.workspaceID,
-                captureSessionID: context.captureSessionID,
-                state: .cancelled,
+                workspaceID: workspaceID,
+                captureSessionID: captureSessionID,
+                state: endState,
                 endedAt: nowProvider()
             )
         } catch {
             await logger.warning(
-                "capture.cancel.patch_failed",
+                "\(logLabel)_failed",
                 metadata: [
-                    "capture_session_id": .uuidPrefix(context.captureSessionID),
+                    "capture_session_id": .uuidPrefix(captureSessionID),
                     "reason": .string(String(describing: error))
                 ]
             )
         }
     }
 
-    private func patchServerCompleted(context: CaptureContext) async {
-        do {
-            _ = try await captureAPI.updateCaptureSession(
-                workspaceID: context.workspaceID,
-                captureSessionID: context.captureSessionID,
-                state: .completed,
-                endedAt: nowProvider()
-            )
-        } catch {
-            await logger.warning(
-                "capture.complete.patch_failed",
-                metadata: [
-                    "capture_session_id": .uuidPrefix(context.captureSessionID),
-                    "reason": .string(String(describing: error))
-                ]
-            )
-        }
-    }
 
     // MARK: - Watcher
 

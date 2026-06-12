@@ -162,18 +162,18 @@ struct HomeView: View {
         .buttonStyle(RecordButtonPressStyle())
         .accessibilityLabel("Record")
         .accessibilityHint("Starts a capture session in this project.")
-        .opacity(isOnline ? 1.0 : 0.4)
-        .disabled(isStartingCapture || !isOnline)
+        .disabled(isStartingCapture)
     }
 
     // MARK: - Offline banner
 
-    /// Inline banner shown above the Record CTA when the device
-    /// has no usable network path. PR #16 Phase 1 gates recording
-    /// behind connectivity entirely — Phase 2 (queued capture-
-    /// session create + client-generated IDs) lets recording start
-    /// offline, at which point this banner becomes informational
-    /// rather than blocking.
+    /// Informational banner shown above the Record CTA when the
+    /// device has no usable network path. Phase 1 used this to gate
+    /// recording behind connectivity; Phase 3 lets recording start
+    /// while offline (capture-create goes through `OperationQueue`,
+    /// uploads queue locally), so the banner is now purely a
+    /// heads-up — "you can record, but uploads will sync when you're
+    /// back online" — and no longer disables the button.
     private var offlineBanner: some View {
         HStack(spacing: Spacing.md) {
             Image(systemName: "wifi.slash")
@@ -183,7 +183,7 @@ struct HomeView: View {
                 Text("Offline")
                     .font(BrandTypography.bodyEmphasis)
                     .foregroundStyle(BrandColors.textPrimary)
-                Text("Recording is paused until the network is reachable. The project list above is loaded from your last session.")
+                Text("You can still record — uploads and project edits will sync when the network is back.")
                     .font(BrandTypography.caption)
                     .foregroundStyle(BrandColors.textSecondary)
                     .lineLimit(3)

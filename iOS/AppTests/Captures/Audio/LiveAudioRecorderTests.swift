@@ -117,7 +117,7 @@ struct LiveAudioRecorderTests {
 
     // MARK: stop
 
-    @Test("stop returns AudioRecording with duration + size + mime")
+    @Test("stop returns CompletedRecording with one chunk carrying duration + size + mime")
     func stopHappyPath() async throws {
         let engine = FakeAudioRecordingEngine()
         let payload = Data(repeating: 0xAB, count: 1024)
@@ -126,16 +126,60 @@ struct LiveAudioRecorderTests {
         let (recorder, _, _) = Self.makeRecorder(engine: engine)
 
         _ = try await recorder.start(captureSessionID: Self.captureID)
-        let result = try await recorder.stop()
+        let completed = try await recorder.stop()
 
+        #expect(completed.chunks.count == 1)
+        let result = completed.final
         #expect(result.captureSessionID == Self.captureID)
         #expect(result.durationSeconds == 7.5)
         #expect(result.sizeBytes == 1024)
         #expect(result.mimeType == "audio/mp4")
         #expect(result.fileExtension == "m4a")
+        #expect(result.chunkIndex == 0)
+        #expect(result.isFinalChunk == true)
         #expect(result.startedAt == Self.fixedStart)
         // endedAt comes from second nowProvider() call → +105s
         #expect(result.endedAt == Self.fixedStart.addingTimeInterval(105))
+
+        let state = await recorder.state
+        #expect(state == .idle)
+    }
+
+    @Test("stop with CAF fallback artifact propagates mime + extension + URL to AudioRecording")
+    func stopCafFallbackPropagation() async throws {
+        // Simulates `EngineAudioRecordingEngine` falling back to the
+        // raw `.caf` intermediate after a permanent transcode failure.
+        // The engine's `EngineStopArtifact` carries a different URL
+        // than what `start(writingTo:)` was given (m4a → caf), plus
+        // `audio/x-caf` mime. `LiveAudioRecorder` must surface that
+        // through to `AudioRecording` untouched so the upload layer
+        // ships the right MIME header.
+        let engine = FakeAudioRecordingEngine()
+        let payload = Data(repeating: 0xCA, count: 4096)
+        await engine.setFakeFilePayload(payload)
+        await engine.setStopDuration(12.0)
+        let (recorder, _, _) = Self.makeRecorder(engine: engine)
+
+        let startURL = try await recorder.start(captureSessionID: Self.captureID)
+        // Engine fell back: write the CAF payload to the sibling .caf
+        // path and configure the artifact to point there.
+        let cafURL = startURL.deletingPathExtension().appendingPathExtension("caf")
+        try payload.write(to: cafURL)
+        await engine.setStopArtifact(
+            url: cafURL,
+            mimeType: "audio/x-caf",
+            fileExtension: "caf"
+        )
+
+        let completed = try await recorder.stop()
+
+        #expect(completed.chunks.count == 1)
+        let result = completed.final
+        #expect(result.mimeType == "audio/x-caf")
+        #expect(result.fileExtension == "caf")
+        #expect(result.fileURL == cafURL)
+        #expect(result.sizeBytes == 4096)
+        #expect(result.durationSeconds == 12.0)
 
         let state = await recorder.state
         #expect(state == .idle)

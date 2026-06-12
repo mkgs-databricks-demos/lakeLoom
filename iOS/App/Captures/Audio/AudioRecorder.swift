@@ -30,11 +30,13 @@ public protocol AudioRecorder: Sendable {
     /// ``stop()`` returns.
     func start(captureSessionID: String) async throws -> URL
 
-    /// Stop the active recording and finalize the file. Returns the
-    /// closed ``AudioRecording`` for hand-off to the uploader.
+    /// Stop the active recording and finalize the file(s). Returns
+    /// a ``CompletedRecording`` carrying one or more chunks (today
+    /// always one; PR A piece 4's chunked-recording rotation will
+    /// produce multi-chunk completions for long sessions).
     /// Throws ``AudioRecorderError/notRecording`` if no recording
     /// is in progress.
-    func stop() async throws -> AudioRecording
+    func stop() async throws -> CompletedRecording
 
     /// Stop without keeping the file. Deletes the partial recording
     /// on disk. No-op when idle.
@@ -53,12 +55,14 @@ public enum AudioRecorderState: Sendable, Equatable {
     case recording(captureSessionID: String, startedAt: Date)
 }
 
-/// Finalized recording handed to the upload layer.
+/// One finalized audio chunk handed to the upload layer. Multiple
+/// chunks may belong to a single capture session — see
+/// ``CompletedRecording`` for the session-level wrapper and PR A
+/// piece 4's design (`architecture/hi_genie/2026-05-29_chunked-recording-design.md`)
+/// for the chunked-recording rationale.
 ///
-/// The fields here map 1:1 to the metadata the future
-/// `POST /api/captures/:capture_session_id/uploads` endpoint will
-/// need (per Genie's wire-format contract). Keep them in sync with
-/// the server-side schema in
+/// Wire fields map 1:1 to what the upload handler needs (per Genie's
+/// contract). Keep them in sync with
 /// `lakeloom-ai/server/routes/captures/upload-routes.ts`.
 public struct AudioRecording: Sendable, Equatable, Hashable {
     public let captureSessionID: String
@@ -67,12 +71,20 @@ public struct AudioRecording: Sendable, Equatable, Hashable {
     public let endedAt: Date
     public let durationSeconds: Double
     public let sizeBytes: Int64
-    /// Always `"audio/mp4"` — AAC inside an M4A container. iOS's
-    /// default `AVAudioRecorder` settings, which Genie's server-side
-    /// accept-list explicitly allows.
+    /// `"audio/mp4"` for an M4A chunk (the happy path) or
+    /// `"audio/x-caf"` for a CAF fallback chunk when on-device
+    /// transcode failed. Genie's server-side accept-list allows both.
     public let mimeType: String
-    /// Always `"m4a"`. Matches the file extension on `fileURL`.
+    /// `"m4a"` or `"caf"`. Matches the file extension on `fileURL`.
     public let fileExtension: String
+    /// 0-based position of this chunk within its capture session.
+    /// Today's single-chunk recordings always have `chunkIndex = 0`.
+    /// Chunked recording (PR A piece 4) increments per rotation.
+    public let chunkIndex: Int
+    /// `true` iff this is the last chunk of the session — i.e.,
+    /// recorded between the last rotation and `stopCapture()`. For
+    /// single-chunk recordings, the only chunk is final by definition.
+    public let isFinalChunk: Bool
 
     public init(
         captureSessionID: String,
@@ -82,7 +94,9 @@ public struct AudioRecording: Sendable, Equatable, Hashable {
         durationSeconds: Double,
         sizeBytes: Int64,
         mimeType: String,
-        fileExtension: String
+        fileExtension: String,
+        chunkIndex: Int = 0,
+        isFinalChunk: Bool = true
     ) {
         self.captureSessionID = captureSessionID
         self.fileURL = fileURL
@@ -92,7 +106,41 @@ public struct AudioRecording: Sendable, Equatable, Hashable {
         self.sizeBytes = sizeBytes
         self.mimeType = mimeType
         self.fileExtension = fileExtension
+        self.chunkIndex = chunkIndex
+        self.isFinalChunk = isFinalChunk
     }
+}
+
+/// Closed-out recording, one per `AudioRecorder.stop()` call. Wraps
+/// the ordered list of chunks the engine produced — always at least
+/// one, exactly one for single-chunk recordings (today's default).
+///
+/// `final` is a convenience for callers that only care about the
+/// last chunk's metadata (e.g. logging, UI summary). `chunks` is the
+/// authoritative ordered list — iterate it to enqueue each chunk as
+/// its own upload. Init enforces non-empty so `final` / `first` are
+/// always safe.
+public struct CompletedRecording: Sendable, Equatable, Hashable {
+    public let chunks: [AudioRecording]
+
+    public init(chunks: [AudioRecording]) {
+        precondition(!chunks.isEmpty, "CompletedRecording must have at least one chunk")
+        self.chunks = chunks
+    }
+
+    /// Convenience for the common single-chunk case.
+    public init(_ recording: AudioRecording) {
+        self.init(chunks: [recording])
+    }
+
+    /// The last chunk (the one being recorded when `stop()` was
+    /// called). For single-chunk recordings, this is the only chunk.
+    public var final: AudioRecording { chunks.last! }
+
+    /// The first chunk. Useful when the caller needs the session
+    /// `startedAt` — every chunk carries its own start time, but the
+    /// first chunk's is the session's true start.
+    public var first: AudioRecording { chunks.first! }
 }
 
 /// Typed errors for the audio recorder. Callers (CaptureService,

@@ -1032,3 +1032,37 @@ CoreDataStack → LiveDeviceKeyStore → LiveM2MTokenClient → RequestSigner
 ```
 
 `BrandFontRegistration.registerAll()` runs synchronously in `LakeloomApp.init` before the first frame to register DM Sans + DM Mono with the process font manager (see Module 08).
+
+
+## Phase 3 Cutover — Control-Plane Outbox Wiring (PR #21)
+
+`LakeloomApp.init` now builds a `LiveOperationQueue` alongside the existing `LiveUploadCoordinator`:
+
+```
+OperationQueueStore.makeDefault()
+  → LiveOperationQueue(
+      queueStore: ...,
+      execute: OperationExecutor.make(captureAPI:, projects:)
+    )
+  → passed to AppCoordinator + LiveCaptureService
+```
+
+`OperationExecutor.make` is the factory that turns a `PendingOperation` into the right HTTP call (`captureAPI.createCaptureSession(clientGeneratedID:)` for `.createCaptureSession`, `captureAPI.updateCaptureSession(...)` for `.updateCaptureSessionState`, etc.). Error classification is unified — see Module 02 §25 for the per-status mapping.
+
+### Lifecycle hooks
+
+The `RootView`'s outer `.task` block now does three coordinated things on cold launch:
+
+1. `await coordinator.bootstrap()` — same as before.
+2. `await captureService.start()` / `uploadCoordinator.start()` — same as before (rehydrates the capture context + upload queue).
+3. **NEW:** `await operationQueue.start()` — rehydrates the on-disk operation outbox and resumes draining any ops that were in flight at the previous force-quit.
+
+A second `.task` subscribes to `ReachabilityMonitor.stateUpdates()`. On every transition to `.online`, it calls `operationQueue.wake()` so a backlog of capture-create / state-PATCH ops drains immediately instead of sitting out the current backoff window. The reachability monitor exposes the stream via `stateUpdates() -> AsyncStream<State>`; the UI surfaces still read the @Observable `state` directly.
+
+### AppCoordinator exposure
+
+The new dep is wired through `AppCoordinator.operationQueue` (optional `any OperationQueueing`), parallel to `uploadCoordinator`. UI code that wants to surface the outbox (e.g., a future diagnostic-outbox view) reads from there.
+
+### Failure-mode boundary
+
+If `OperationQueueStore.makeDefault()` throws on init (broken filesystem), the queue stays nil. `LiveCaptureService` falls back to its legacy direct-call path — same behavior as before Phase 3, just without the offline-record affordance. The Record button stays enabled in both paths.

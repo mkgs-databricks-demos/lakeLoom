@@ -27,12 +27,84 @@ protocol AudioRecordingEngine: Sendable {
     func start(writingTo url: URL) async throws
 
     /// Stop recording, finalize the file, deactivate the session.
-    /// Returns the recorded duration in seconds.
-    func stop() async throws -> Double
+    /// Returns a finalized artifact: the URL the audio actually
+    /// landed at (which may differ from the URL passed to `start()`
+    /// if the engine fell back to a raw intermediate format), the
+    /// duration, and the MIME / extension for the upload contract.
+    func stop() async throws -> EngineStopArtifact
 
     /// Stop without keeping the file. Implementations must still
     /// deactivate `AVAudioSession`. The caller deletes the file.
     func cancel() async
+}
+
+/// Finalized output of an engine `stop()` call. Carries every chunk
+/// the engine produced for this recording, along with the total
+/// duration of the session.
+///
+/// **Chunk model:** today, every engine produces exactly one chunk
+/// per recording — `chunks.count == 1`, `chunks[0].chunkIndex == 0`,
+/// behavior identical to pre-chunking. PR A piece 4's `AVAudioFile`
+/// rotation will produce multi-chunk artifacts (chunks 0..N-1) when
+/// the engine is configured with a chunk duration. The array always
+/// has at least one element; an engine that produces nothing throws
+/// `AudioRecorderError.notRecording` instead.
+///
+/// **CAF fallback contract:** when an engine that transcodes
+/// CAF→M4A internally (currently ``EngineAudioRecordingEngine``)
+/// hits a permanent transcode failure, it falls back to producing
+/// the raw `.caf` intermediate as the chunk artifact rather than
+/// throwing — losing the user's audio is never acceptable. Genie's
+/// server-side handler accepts `audio/x-caf` and stores the CAF on
+/// UC Volume; silver/gold pipeline transcodes later. See
+/// `architecture/hey_isaac/2026-05-28_offline-guarantee-answers.md` §Q1.
+public struct EngineStopArtifact: Sendable, Equatable, Hashable {
+    public let chunks: [Chunk]
+    public let totalDuration: Double
+
+    public init(chunks: [Chunk], totalDuration: Double) {
+        precondition(!chunks.isEmpty, "EngineStopArtifact must have at least one chunk")
+        self.chunks = chunks
+        self.totalDuration = totalDuration
+    }
+
+    /// Convenience init for the single-chunk happy path. Builds a
+    /// one-element `chunks` array with `chunkIndex = 0`. Behavior
+    /// identical to the pre-refactor single-file shape.
+    public init(fileURL: URL, duration: Double, mimeType: String, fileExtension: String) {
+        self.init(
+            chunks: [Chunk(
+                fileURL: fileURL,
+                chunkIndex: 0,
+                duration: duration,
+                mimeType: mimeType,
+                fileExtension: fileExtension
+            )],
+            totalDuration: duration
+        )
+    }
+
+    public struct Chunk: Sendable, Equatable, Hashable {
+        public let fileURL: URL
+        public let chunkIndex: Int
+        public let duration: Double
+        public let mimeType: String
+        public let fileExtension: String
+
+        public init(
+            fileURL: URL,
+            chunkIndex: Int,
+            duration: Double,
+            mimeType: String,
+            fileExtension: String
+        ) {
+            self.fileURL = fileURL
+            self.chunkIndex = chunkIndex
+            self.duration = duration
+            self.mimeType = mimeType
+            self.fileExtension = fileExtension
+        }
+    }
 }
 
 /// Production engine — wraps `AVAudioRecorder` configured with iOS's
@@ -108,11 +180,12 @@ actor LiveAudioRecordingEngine: AudioRecordingEngine {
         self.recordingStartedAt = Date()
     }
 
-    func stop() async throws -> Double {
+    func stop() async throws -> EngineStopArtifact {
         guard let recorder, let proxy = delegateProxy, let startedAt = recordingStartedAt else {
             throw AudioRecorderError.notRecording
         }
-        let duration = recorder.currentTime
+        let rawDuration = recorder.currentTime
+        let recorderURL = recorder.url
         // Subscribe to the delegate's finalize stream BEFORE calling
         // stop(), so we never miss the delegate yield if it fires
         // synchronously inside `stop()`.
@@ -127,10 +200,15 @@ actor LiveAudioRecordingEngine: AudioRecordingEngine {
         // Fallback in case `currentTime` was 0 (e.g., very short
         // recording) — use wall clock so we never report a negative
         // or zero duration for a recording that did happen.
-        if duration <= 0 {
-            return max(0.001, Date().timeIntervalSince(startedAt))
-        }
-        return duration
+        let duration: Double = rawDuration > 0
+            ? rawDuration
+            : max(0.001, Date().timeIntervalSince(startedAt))
+        return EngineStopArtifact(
+            fileURL: recorderURL,
+            duration: duration,
+            mimeType: "audio/mp4",
+            fileExtension: "m4a"
+        )
     }
 
     func cancel() async {

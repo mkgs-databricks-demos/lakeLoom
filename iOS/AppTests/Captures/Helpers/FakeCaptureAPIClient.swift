@@ -12,6 +12,7 @@ public actor FakeCaptureAPIClient: CaptureAPIClient {
         public let projectID: String
         public let label: String?
         public let deviceID: String?
+        public let clientGeneratedID: String?
     }
 
     public struct UpdateCall: Sendable, Equatable {
@@ -41,17 +42,19 @@ public actor FakeCaptureAPIClient: CaptureAPIClient {
         projectID: String,
         label: String?,
         clientTimestamp: Date?,
-        deviceID: String?
+        deviceID: String?,
+        clientGeneratedID: String?
     ) async throws -> CaptureSession {
         createCalls.append(CreateCall(
             workspaceID: workspaceID,
             projectID: projectID,
             label: label,
-            deviceID: deviceID
+            deviceID: deviceID,
+            clientGeneratedID: clientGeneratedID
         ))
         guard !nextCreateResults.isEmpty else {
             return CaptureSession(
-                id: "cap-\(UUID().uuidString)",
+                id: clientGeneratedID ?? "cap-\(UUID().uuidString)",
                 projectID: projectID,
                 state: .active,
                 label: label,

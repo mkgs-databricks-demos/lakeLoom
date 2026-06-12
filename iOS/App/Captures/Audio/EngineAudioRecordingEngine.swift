@@ -34,15 +34,25 @@ import Foundation
 actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, AudioInterruptionPublishing {
 
     private var engine: AVAudioEngine?
-    private var cafWriter: AVAudioFile?
-    private var frameCounter: FrameCounter?
+    /// Thread-safe holder for the current `AVAudioFile` the tap is
+    /// writing into. Wrapped (rather than holding the `AVAudioFile`
+    /// directly) so the rotation logic can swap the underlying writer
+    /// atomically without racing the real-time tap thread.
+    private var writerHolder: AudioWriterHolder?
     private var sampleRate: Double = 0
+    private var inputFormat: AVAudioFormat?
     private var startedAt: Date?
-    /// URL the caller asked the final `.m4a` to be written to.
-    private var finalURL: URL?
-    /// Sibling `.caf` URL (same stem, swapped extension) used as the
-    /// intermediate PCM file before transcoding.
-    private var intermediateURL: URL?
+    /// URL the caller asked the final `.m4a` to be written to. In
+    /// chunked mode, per-chunk M4A URLs are derived from this seed
+    /// (see ``chunkFinalURL(seed:chunkIndex:)``).
+    private var finalSeedURL: URL?
+    /// Sibling `.caf` seed URL (same stem as `finalSeedURL`, `.caf`
+    /// extension) used as the intermediate PCM file before transcoding.
+    /// In chunked mode, per-chunk CAF URLs are derived from this seed.
+    private var intermediateSeedURL: URL?
+    /// 0-based index of the chunk currently being written by the tap.
+    /// Starts at 0; bumped each time the rotation Task swaps the writer.
+    private var activeChunkIndex: Int = 0
     /// Live PCM buffer stream. Created on `start()`, finished on
     /// `stop()` / `cancel()`. The speech recognizer subscribes via
     /// ``AudioBufferSource/buffers()``. Single-consumer.
@@ -59,10 +69,41 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, Audio
     /// on stop/cancel and avoid leaking observers across recordings.
     private var interruptionObserver: NSObjectProtocol?
     private var routeChangeObserver: NSObjectProtocol?
+    /// Periodic rotation Task. `nil` when `chunkDuration == nil`
+    /// (single-chunk mode) or between recordings. Cancelled on stop /
+    /// cancel; the rotation loop checks `Task.isCancelled` after each
+    /// sleep and exits cleanly.
+    private var rotationTask: Task<Void, Never>?
+    /// In-flight finalization Tasks — one per closed chunk. `stop()`
+    /// awaits all of them so the assembled `EngineStopArtifact` reflects
+    /// every chunk's actual transcode outcome (M4A vs CAF fallback).
+    private var pendingFinalizations: [Task<Void, Never>] = []
+    /// Closed-out chunks. Each rotation appends one entry once its
+    /// finalization Task completes; `stop()` sorts by `chunkIndex`
+    /// before assembling the artifact. Mutated under actor isolation.
+    private var finalizedChunks: [EngineStopArtifact.Chunk] = []
     private let logger: AppLogger
+    /// Maximum number of `AVAssetExportSession.export()` attempts
+    /// before falling back to CAF. Interruption is the most common
+    /// failure mode and typically clears within a second; three
+    /// attempts with a 500ms gap covers the realistic transient
+    /// window.
+    private let transcodeAttempts: Int
+    /// Rotation interval. `nil` disables rotation entirely — the engine
+    /// produces exactly one chunk per recording, identical to the
+    /// pre-rotation behavior. When set (e.g. 300s = 5 min), the engine
+    /// rotates `AVAudioFile` writers in place and finalizes each closed
+    /// chunk through the same CAF→M4A transcode + fallback path.
+    private let chunkDuration: TimeInterval?
 
-    init(logger: AppLogger = AppLogger(category: .capture)) {
+    init(
+        logger: AppLogger = AppLogger(category: .capture),
+        transcodeAttempts: Int = 3,
+        chunkDuration: TimeInterval? = nil
+    ) {
         self.logger = logger
+        self.transcodeAttempts = transcodeAttempts
+        self.chunkDuration = chunkDuration
     }
 
     func currentPermission() async -> Bool? {
@@ -98,47 +139,48 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, Audio
 
         let avEngine = AVAudioEngine()
         let inputNode = avEngine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
+        let format = inputNode.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else {
             try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
             throw AudioRecorderError.sessionConfigurationFailed(
-                reason: "invalid input format: sr=\(inputFormat.sampleRate) ch=\(inputFormat.channelCount)"
+                reason: "invalid input format: sr=\(format.sampleRate) ch=\(format.channelCount)"
             )
         }
 
-        // Intermediate CAF lives at the same path as the requested
+        // Intermediate CAF lives in the same directory as the requested
         // .m4a but with a swapped extension. Same parent directory,
         // so caller-side cleanup logic (which already deletes the
         // capture's directory tree on cancel/failure) handles both
         // without explicit knowledge of the intermediate.
-        let intermediate = url.deletingPathExtension().appendingPathExtension("caf")
+        let intermediateSeed = url.deletingPathExtension().appendingPathExtension("caf")
+        let chunk0CAF = Self.chunkIntermediateURL(seed: intermediateSeed, chunkIndex: 0, chunked: chunkDuration != nil)
         // If a prior aborted run left a stale CAF behind, drop it
         // before opening a fresh writer.
-        try? FileManager.default.removeItem(at: intermediate)
+        try? FileManager.default.removeItem(at: chunk0CAF)
 
         let writer: AVAudioFile
         do {
-            writer = try AVAudioFile(forWriting: intermediate, settings: inputFormat.settings)
+            writer = try AVAudioFile(forWriting: chunk0CAF, settings: format.settings)
         } catch {
             try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
             throw AudioRecorderError.fileSystemError(reason: "AVAudioFile init: \(error.localizedDescription)")
         }
+        let holder = AudioWriterHolder(initial: writer)
 
-        let counter = FrameCounter()
         // PR 9b: also fan out audio buffers to a live stream so the
         // speech recognizer can consume them in parallel with the
         // file write. Single tap, two consumers — no parallel-engine
         // race condition that bit PR 8d.
         let (stream, streamContinuation) = AsyncStream<PCMBufferEnvelope>.makeStream()
         // The tap closure runs on a real-time audio thread. Capture
-        // only Sendable references; the AVAudioFile + FrameCounter
-        // are both safe to access from the tap (AVAudioFile.write is
-        // documented as thread-safe for serial writes; FrameCounter
-        // wraps an NSLock; AsyncStream.Continuation.yield is
-        // documented as thread-safe).
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { buffer, _ in
-            try? writer.write(from: buffer)
-            counter.add(buffer.frameLength)
+        // only Sendable references. The writer holder is lock-
+        // protected internally so rotation can swap the underlying
+        // `AVAudioFile` without racing tap writes (and it tallies
+        // per-chunk frames inline under that same lock).
+        // `AsyncStream.Continuation.yield` is documented as
+        // thread-safe.
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, _ in
+            holder.write(buffer)
             streamContinuation.yield(PCMBufferEnvelope(buffer))
         }
 
@@ -152,12 +194,15 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, Audio
         }
 
         self.engine = avEngine
-        self.cafWriter = writer
-        self.frameCounter = counter
-        self.sampleRate = inputFormat.sampleRate
+        self.writerHolder = holder
+        self.sampleRate = format.sampleRate
+        self.inputFormat = format
         self.startedAt = Date()
-        self.finalURL = url
-        self.intermediateURL = intermediate
+        self.finalSeedURL = url
+        self.intermediateSeedURL = intermediateSeed
+        self.activeChunkIndex = 0
+        self.finalizedChunks = []
+        self.pendingFinalizations = []
         self.bufferStream = stream
         self.bufferContinuation = streamContinuation
 
@@ -170,6 +215,14 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, Audio
         self.interruptionContinuation = interruptContinuation
         self.isInterrupted = false
         registerSessionObservers()
+
+        // Last: spawn the rotation Task if rotation is enabled. We do
+        // this *after* every piece of recording state is in place so
+        // the first rotation has a valid `writerHolder`, `sampleRate`,
+        // etc. to work with.
+        if let chunkDuration {
+            startRotationTask(interval: chunkDuration)
+        }
     }
 
     // MARK: - AudioBufferSource
@@ -184,12 +237,20 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, Audio
         interruptionStream
     }
 
-    func stop() async throws -> Double {
+    func stop() async throws -> EngineStopArtifact {
         guard let avEngine = engine,
-              let intermediate = intermediateURL,
-              let final = finalURL else {
+              let intermediateSeed = intermediateSeedURL,
+              let finalSeed = finalSeedURL else {
             throw AudioRecorderError.notRecording
         }
+
+        // Cancel the rotation Task first so no in-flight rotation
+        // can race the stop() teardown. The sleeping rotation Task
+        // will wake from cancellation, see Task.isCancelled, and exit
+        // cleanly. We don't `await` it here — that's tail work; we
+        // just need it to stop scheduling new rotations.
+        rotationTask?.cancel()
+        rotationTask = nil
 
         // Detach session observers before tearing the engine down so
         // a late interruption notification can't sneak in while we're
@@ -198,12 +259,13 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, Audio
         unregisterSessionObservers()
 
         // Stop the audio pipeline FIRST, before any await, so no new
-        // tap buffers fire while we're transcoding.
+        // tap buffers fire while we're transcoding the final chunk.
         avEngine.inputNode.removeTap(onBus: 0)
         avEngine.stop()
-        // Dropping the AVAudioFile reference flushes + closes the
-        // CAF file. AVAudioFile's destructor handles this.
-        cafWriter = nil
+        // Snapshot + drop the final writer. AVAudioFile's destructor
+        // flushes + closes the CAF when the last reference goes away.
+        let lastChunkFrames = writerHolder?.close() ?? 0
+        writerHolder = nil
         // Finish the buffer stream so any consumer (live speech
         // recognizer) drains naturally and calls request.endAudio()
         // on its recognition request.
@@ -212,45 +274,135 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, Audio
         interruptionContinuation?.finish()
         interruptionContinuation = nil
 
-        let frames = frameCounter?.snapshot() ?? 0
-        let measuredDuration = sampleRate > 0 ? Double(frames) / sampleRate : 0
-        let savedStartedAt = startedAt
+        // Finalize the chunk that was active when stop() landed —
+        // synchronously here so we don't return before its transcode
+        // outcome is known.
+        let finalChunkIndex = activeChunkIndex
+        let finalCAF = Self.chunkIntermediateURL(
+            seed: intermediateSeed,
+            chunkIndex: finalChunkIndex,
+            chunked: chunkDuration != nil
+        )
+        if lastChunkFrames > 0 {
+            let finalChunkDuration = Double(lastChunkFrames) / max(sampleRate, 1)
+            let finalM4A = Self.chunkFinalURL(
+                seed: finalSeed,
+                chunkIndex: finalChunkIndex,
+                chunked: chunkDuration != nil
+            )
+            let chunk = await finalizeChunk(
+                index: finalChunkIndex,
+                cafURL: finalCAF,
+                duration: finalChunkDuration,
+                preferredM4AURL: finalM4A
+            )
+            finalizedChunks.append(chunk)
+        } else {
+            // Engine produced no audio in the last chunk (e.g. stop()
+            // landed within microseconds of a rotation). Drop the
+            // empty CAF; don't add a zero-frame chunk to the artifact.
+            try? FileManager.default.removeItem(at: finalCAF)
+        }
 
-        do {
-            try await transcode(from: intermediate, to: final)
-        } catch {
+        // Wait for every rotation-spawned finalization Task to settle.
+        // Each task appended its chunk to `finalizedChunks` via the
+        // actor-isolated path; by awaiting them we ensure the artifact
+        // we return reflects every chunk's real transcode outcome.
+        let pending = pendingFinalizations
+        pendingFinalizations = []
+        for task in pending {
+            await task.value
+        }
+
+        // Sort chunks by index — finalization completion order may
+        // not match recording order (especially when one chunk's
+        // transcode retried while a later chunk finished quickly).
+        let chunks = finalizedChunks.sorted { $0.chunkIndex < $1.chunkIndex }
+        finalizedChunks = []
+
+        if chunks.isEmpty {
+            // No chunks landed — every one was either empty or its
+            // finalization couldn't even produce a CAF fallback.
+            // Treat as engine failure rather than returning a
+            // zero-chunk artifact (which the artifact precondition
+            // would crash on anyway).
+            let savedStartedAt = startedAt
             cleanupState()
             try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
-            throw AudioRecorderError.engineFailure(reason: "transcode: \(error.localizedDescription)")
+            await logger.error(
+                "audio.stop.no_chunks",
+                metadata: [
+                    "wall_clock_s": .string(
+                        String(format: "%.3f", Date().timeIntervalSince(savedStartedAt ?? Date()))
+                    )
+                ],
+                errorCode: "no_chunks"
+            )
+            throw AudioRecorderError.engineFailure(reason: "no chunks produced")
         }
 
-        try? FileManager.default.removeItem(at: intermediate)
+        // Total duration = sum of per-chunk durations. Falls back to
+        // wall-clock if every chunk somehow reported zero frames
+        // (which shouldn't happen given the empty-chunk guard above).
+        let summed = chunks.reduce(0.0) { $0 + $1.duration }
+        let totalDuration: Double = summed > 0
+            ? summed
+            : max(0.001, Date().timeIntervalSince(startedAt ?? Date()))
+
         cleanupState()
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
-
-        // Fallback to wall-clock if the frame counter never fired
-        // (e.g., very-short capture where the tap had no chance to
-        // deliver a buffer). Mirrors LiveAudioRecordingEngine's
-        // 0.001s floor so we never report a zero-duration recording.
-        if measuredDuration > 0 {
-            return measuredDuration
-        }
-        return max(0.001, Date().timeIntervalSince(savedStartedAt ?? Date()))
+        return EngineStopArtifact(chunks: chunks, totalDuration: totalDuration)
     }
 
     func cancel() async {
         guard let avEngine = engine else { return }
+        rotationTask?.cancel()
+        rotationTask = nil
+        // Cancel every in-flight finalization Task so we don't leak
+        // a transcode running in the background after cancel().
+        for task in pendingFinalizations { task.cancel() }
+        pendingFinalizations = []
+
         unregisterSessionObservers()
         avEngine.inputNode.removeTap(onBus: 0)
         avEngine.stop()
-        cafWriter = nil
+        writerHolder?.close()
+        writerHolder = nil
         bufferContinuation?.finish()
         bufferContinuation = nil
         interruptionContinuation?.finish()
         interruptionContinuation = nil
-        if let intermediate = intermediateURL {
-            try? FileManager.default.removeItem(at: intermediate)
+
+        // Delete every CAF + M4A that this recording put on disk.
+        // The caller's directory-tree cleanup also covers these, but
+        // doing it here keeps the engine cleanup self-contained for
+        // tests / smoke-test paths that don't clean the directory.
+        if let intermediateSeed = intermediateSeedURL,
+           let finalSeed = finalSeedURL {
+            // Cover the full range we *might* have written, including
+            // the chunk that was active when cancel landed.
+            for index in 0...activeChunkIndex {
+                let caf = Self.chunkIntermediateURL(
+                    seed: intermediateSeed,
+                    chunkIndex: index,
+                    chunked: chunkDuration != nil
+                )
+                let m4a = Self.chunkFinalURL(
+                    seed: finalSeed,
+                    chunkIndex: index,
+                    chunked: chunkDuration != nil
+                )
+                try? FileManager.default.removeItem(at: caf)
+                try? FileManager.default.removeItem(at: m4a)
+            }
         }
+        // Also wipe any chunks the rotation Task had already finalized
+        // to disk before cancel landed.
+        for chunk in finalizedChunks {
+            try? FileManager.default.removeItem(at: chunk.fileURL)
+        }
+        finalizedChunks = []
+
         cleanupState()
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
@@ -259,17 +411,253 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, Audio
 
     private func cleanupState() {
         engine = nil
-        cafWriter = nil
-        frameCounter = nil
+        writerHolder?.close()
+        writerHolder = nil
         sampleRate = 0
+        inputFormat = nil
         startedAt = nil
-        finalURL = nil
-        intermediateURL = nil
+        finalSeedURL = nil
+        intermediateSeedURL = nil
+        activeChunkIndex = 0
         bufferStream = nil
         bufferContinuation = nil
         interruptionStream = nil
         interruptionContinuation = nil
         isInterrupted = false
+        rotationTask = nil
+        pendingFinalizations = []
+        finalizedChunks = []
+    }
+
+    // MARK: - Rotation
+
+    /// Build the per-chunk CAF URL from the session's intermediate
+    /// seed. In single-chunk mode (`chunked == false`) the seed is
+    /// used verbatim — preserves the pre-rotation on-disk filename
+    /// `<stem>.caf`. In chunked mode (`chunked == true`) each chunk
+    /// is suffixed with `-chunkN`: `<stem>-chunk0.caf`, etc.
+    static func chunkIntermediateURL(seed: URL, chunkIndex: Int, chunked: Bool) -> URL {
+        guard chunked else { return seed }
+        let dir = seed.deletingLastPathComponent()
+        let stem = seed.deletingPathExtension().lastPathComponent
+        let ext = seed.pathExtension
+        return dir.appendingPathComponent("\(stem)-chunk\(chunkIndex).\(ext)", isDirectory: false)
+    }
+
+    /// Build the per-chunk M4A URL from the session's final seed.
+    /// See ``chunkIntermediateURL(seed:chunkIndex:chunked:)`` for the
+    /// naming scheme.
+    static func chunkFinalURL(seed: URL, chunkIndex: Int, chunked: Bool) -> URL {
+        guard chunked else { return seed }
+        let dir = seed.deletingLastPathComponent()
+        let stem = seed.deletingPathExtension().lastPathComponent
+        let ext = seed.pathExtension
+        return dir.appendingPathComponent("\(stem)-chunk\(chunkIndex).\(ext)", isDirectory: false)
+    }
+
+    /// Spawn the periodic rotation Task. Sleeps `interval` seconds at
+    /// a time and calls `rotate()` after each tick. Exits on
+    /// cancellation — `stop()` and `cancel()` both cancel the task.
+    private func startRotationTask(interval: TimeInterval) {
+        let nanos = UInt64(interval * 1_000_000_000)
+        rotationTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: nanos)
+                } catch {
+                    // Cancellation throws `CancellationError`; treat
+                    // it as a clean exit signal.
+                    return
+                }
+                if Task.isCancelled { return }
+                await self?.rotate()
+            }
+        }
+    }
+
+    /// Rotation tick: open a fresh CAF for the next chunk, swap it
+    /// into the holder atomically, and spawn a finalization Task for
+    /// the chunk that just closed. Mutates `activeChunkIndex` so the
+    /// tap's writes are now attributed to the new chunk.
+    ///
+    /// If the engine is paused (interrupted) and no frames have been
+    /// written into the active chunk, skip the rotation — rotating
+    /// an empty file just adds a zero-duration chunk to the artifact,
+    /// which is worse than nothing.
+    private func rotate() async {
+        guard let holder = writerHolder,
+              let intermediateSeed = intermediateSeedURL,
+              let finalSeed = finalSeedURL,
+              let format = inputFormat,
+              !Task.isCancelled else {
+            return
+        }
+
+        let closingChunkIndex = activeChunkIndex
+        let nextChunkIndex = closingChunkIndex + 1
+        let nextCAF = Self.chunkIntermediateURL(
+            seed: intermediateSeed,
+            chunkIndex: nextChunkIndex,
+            chunked: true
+        )
+        // Pre-clean in case a stale file from a prior aborted run is
+        // sitting at the next chunk's path.
+        try? FileManager.default.removeItem(at: nextCAF)
+
+        let nextWriter: AVAudioFile
+        do {
+            nextWriter = try AVAudioFile(forWriting: nextCAF, settings: format.settings)
+        } catch {
+            // Couldn't open the next chunk's CAF. Keep the current
+            // writer in place — recording continues into the active
+            // chunk — and log. The next rotation tick will try again.
+            await logger.error(
+                "audio.rotate.open_failed",
+                metadata: [
+                    "chunk_index": .int(Int64(nextChunkIndex)),
+                    "reason": .string(error.localizedDescription)
+                ],
+                errorCode: "rotate_open"
+            )
+            return
+        }
+
+        // Swap atomically. After this call returns, tap writes go
+        // into `nextWriter` and `closingWriter` is the previous
+        // writer (its CAF will flush + close when we drop the ref).
+        let (closingWriter, framesInClosing) = holder.swap(nextWriter)
+        activeChunkIndex = nextChunkIndex
+
+        // Drop the closing writer's reference so AVAudioFile's
+        // destructor flushes the CAF tail to disk. We capture only
+        // the URL + frame count into the finalization Task.
+        _ = closingWriter
+        let closingCAF = Self.chunkIntermediateURL(
+            seed: intermediateSeed,
+            chunkIndex: closingChunkIndex,
+            chunked: true
+        )
+
+        if framesInClosing == 0 {
+            // Chunk window passed with no audio (interruption /
+            // tap stall). Drop the empty CAF and don't finalize.
+            try? FileManager.default.removeItem(at: closingCAF)
+            await logger.warning(
+                "audio.rotate.empty_chunk",
+                metadata: ["chunk_index": .int(Int64(closingChunkIndex))]
+            )
+            return
+        }
+
+        let closingDuration = Double(framesInClosing) / max(sampleRate, 1)
+        let closingM4A = Self.chunkFinalURL(
+            seed: finalSeed,
+            chunkIndex: closingChunkIndex,
+            chunked: true
+        )
+
+        await logger.info(
+            "audio.rotate.swap",
+            metadata: [
+                "closed_chunk_index": .int(Int64(closingChunkIndex)),
+                "closed_duration_s": .string(String(format: "%.3f", closingDuration)),
+                "next_chunk_index": .int(Int64(nextChunkIndex))
+            ]
+        )
+
+        // Spawn a finalization Task for the closing chunk. We don't
+        // await it here — the rotation loop has to keep its cadence,
+        // and the transcode runs in parallel with continued recording
+        // into the new chunk. `stop()` awaits all pending finalizations
+        // before assembling the artifact.
+        let task: Task<Void, Never> = Task { [weak self] in
+            guard let self else { return }
+            let chunk = await self.finalizeChunk(
+                index: closingChunkIndex,
+                cafURL: closingCAF,
+                duration: closingDuration,
+                preferredM4AURL: closingM4A
+            )
+            await self.appendFinalizedChunk(chunk)
+        }
+        pendingFinalizations.append(task)
+    }
+
+    /// Append a chunk to the finalized list under actor isolation.
+    /// Used by background finalization Tasks; the in-line finalize
+    /// path in `stop()` mutates the array directly without going
+    /// through this helper.
+    private func appendFinalizedChunk(_ chunk: EngineStopArtifact.Chunk) {
+        finalizedChunks.append(chunk)
+    }
+
+    /// Transcode `cafURL` → `preferredM4AURL` with retries; on
+    /// permanent failure, fall back to the CAF (Genie's server-side
+    /// accepts `audio/x-caf`). Returns the finalized chunk metadata
+    /// with the URL + MIME / extension that should actually be
+    /// uploaded.
+    private func finalizeChunk(
+        index: Int,
+        cafURL: URL,
+        duration: Double,
+        preferredM4AURL: URL
+    ) async -> EngineStopArtifact.Chunk {
+        var lastError: Error?
+        for attempt in 1...transcodeAttempts {
+            do {
+                try await transcode(from: cafURL, to: preferredM4AURL)
+                lastError = nil
+                break
+            } catch {
+                lastError = error
+                await logger.warning(
+                    "audio.transcode.attempt_failed",
+                    metadata: [
+                        "chunk_index": .int(Int64(index)),
+                        "attempt": .int(Int64(attempt)),
+                        "of": .int(Int64(transcodeAttempts)),
+                        "reason": .string(error.localizedDescription)
+                    ]
+                )
+                if attempt < transcodeAttempts {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                }
+            }
+        }
+
+        if lastError == nil {
+            // Happy path: M4A on disk at `preferredM4AURL`, drop the CAF.
+            try? FileManager.default.removeItem(at: cafURL)
+            return EngineStopArtifact.Chunk(
+                fileURL: preferredM4AURL,
+                chunkIndex: index,
+                duration: duration,
+                mimeType: "audio/mp4",
+                fileExtension: "m4a"
+            )
+        }
+
+        // Permanent transcode failure → CAF fallback for this chunk.
+        // Server accepts `audio/x-caf`; silver pipeline transcodes
+        // later. Delete any partial M4A AVAssetExportSession may have
+        // left behind so we don't accidentally upload junk.
+        await logger.error(
+            "audio.transcode.fallback_to_caf",
+            metadata: [
+                "chunk_index": .int(Int64(index)),
+                "caf_path": .string(cafURL.lastPathComponent),
+                "reason": .string(lastError?.localizedDescription ?? "unknown")
+            ],
+            errorCode: "transcode_fallback"
+        )
+        try? FileManager.default.removeItem(at: preferredM4AURL)
+        return EngineStopArtifact.Chunk(
+            fileURL: cafURL,
+            chunkIndex: index,
+            duration: duration,
+            mimeType: "audio/x-caf",
+            fileExtension: "caf"
+        )
     }
 
     // MARK: - Session observers
@@ -415,27 +803,110 @@ actor EngineAudioRecordingEngine: AudioRecordingEngine, AudioBufferSource, Audio
         // iOS 18+ async API. Throws on failure; replaces the older
         // completion-handler + status-polling dance.
         try await exporter.export(to: destination, as: .m4a)
+
+        // Post-transcode size guard: AVAssetExportSession has been
+        // observed to silently produce a 0-byte / tiny output for
+        // edge-case inputs without throwing. A valid AAC/M4A file
+        // has at least an `ftyp` box (~32 bytes) and metadata; we
+        // pick a generous 256-byte floor to catch the obviously-bad
+        // case without false-positiving on legitimately short
+        // recordings (1s of 64 kbps AAC is ~8 KB, so the floor never
+        // fires on a real recording). Throwing here drops us into
+        // the retry / CAF-fallback path one level up — uploading
+        // the lossless CAF beats uploading a malformed M4A that
+        // can't be decoded server-side or in the React player.
+        let attrs = try? FileManager.default.attributesOfItem(atPath: destination.path)
+        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+        if size < 256 {
+            try? FileManager.default.removeItem(at: destination)
+            throw AudioRecorderError.engineFailure(
+                reason: "transcode produced \(size)-byte output (expected ≥256)"
+            )
+        }
     }
 }
 
-/// Lock-protected frame counter shared between the real-time tap
-/// callback and the actor-isolated stop() path. AVAudioFramePosition
-/// is Int64 — increments are NOT atomic on all platforms, so we
-/// guard with NSLock. `@unchecked Sendable` because the lock is the
-/// only mutable state and is explicitly thread-safe.
-private final class FrameCounter: @unchecked Sendable {
+/// Lock-protected holder for the current `AVAudioFile` writer.
+/// Sits between the real-time tap thread (which writes buffers
+/// into the active file) and the actor's rotation path (which
+/// swaps the active file for a fresh one at chunk boundaries).
+///
+/// `AVAudioFile.write(from:)` is documented as thread-safe for
+/// writes from a single thread; concurrent writes from multiple
+/// threads need external synchronization. The tap is one thread,
+/// the rotation Task is another — so we wrap with an NSLock and
+/// gate every write/swap behind it. Lock contention is on the
+/// order of hundreds of nanoseconds; the tap's buffer interval
+/// at 4096 samples / 48 kHz is ~85 ms. Six orders of magnitude
+/// of headroom, no audible impact.
+///
+/// Per-chunk frame count is tracked inline with each `write()` so
+/// that `swap()` / `close()` can return the exact frame count for
+/// the chunk being closed — under the same lock that gates the
+/// writer. This avoids a race where buffers written between a
+/// separate frame snapshot and the writer swap would be miscounted.
+///
+/// `@unchecked Sendable` because the lock is the only mutable
+/// state and is explicitly thread-safe.
+final class AudioWriterHolder: @unchecked Sendable {
     private let lock = NSLock()
-    private var count: AVAudioFramePosition = 0
+    private var writer: AVAudioFile?
+    private var chunkFrames: AVAudioFramePosition = 0
 
-    func add(_ frames: AVAudioFrameCount) {
-        lock.lock()
-        count += AVAudioFramePosition(frames)
-        lock.unlock()
+    init(initial: AVAudioFile) {
+        self.writer = initial
     }
 
-    func snapshot() -> AVAudioFramePosition {
+    /// Write a buffer to the currently-held writer and tally the
+    /// frames toward the current chunk. Called from the real-time
+    /// tap thread. Errors are silently swallowed — matches the prior
+    /// `try? writer.write(from: buffer)` behavior (write failures
+    /// during a recording session are not actionable in real time;
+    /// they surface later via the file's final size or transcode
+    /// result). Frames are tallied even on write error so the
+    /// counter still represents what *should* have landed —
+    /// downstream duration calc is more useful than a frame counter
+    /// that silently drops on IO failure.
+    func write(_ buffer: AVAudioPCMBuffer) {
         lock.lock()
         defer { lock.unlock() }
-        return count
+        try? writer?.write(from: buffer)
+        chunkFrames += AVAudioFramePosition(buffer.frameLength)
+    }
+
+    /// Atomically swap the held writer and return the previous
+    /// writer along with the number of frames written into it.
+    /// Resets the per-chunk frame counter to zero so the new
+    /// writer starts counting from 0. Used by the rotation path:
+    /// open the new file, then swap.
+    ///
+    /// The returned `previous` writer's destructor will flush + close
+    /// its CAF as soon as the caller drops the reference. Hold onto
+    /// it long enough to read `length` if needed before dropping.
+    func swap(_ new: AVAudioFile) -> (previous: AVAudioFile?, framesInPrevious: AVAudioFramePosition) {
+        lock.lock()
+        defer { lock.unlock() }
+        let old = writer
+        let frames = chunkFrames
+        writer = new
+        chunkFrames = 0
+        return (old, frames)
+    }
+
+    /// Drop the held writer and return the frames written into it.
+    /// AVAudioFile's destructor flushes and closes the CAF when the
+    /// last reference goes away. Called from `stop()` / `cancel()`
+    /// / `cleanupState()`. Frame counter resets to 0 so subsequent
+    /// `close()` calls (from the cleanup paths that call this twice)
+    /// return 0 instead of the same count twice.
+    @discardableResult
+    func close() -> AVAudioFramePosition {
+        lock.lock()
+        defer { lock.unlock() }
+        let frames = chunkFrames
+        writer = nil
+        chunkFrames = 0
+        return frames
     }
 }
+

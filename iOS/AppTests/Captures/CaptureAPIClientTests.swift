@@ -33,7 +33,8 @@ struct LiveCaptureAPIClientCreateUpdateTests {
             projectID: Self.projectID,
             label: "Kickoff call",
             clientTimestamp: nil,
-            deviceID: nil
+            deviceID: nil,
+            clientGeneratedID: nil
         )
 
         #expect(session.id == Self.captureID)
@@ -68,7 +69,8 @@ struct LiveCaptureAPIClientCreateUpdateTests {
             projectID: Self.projectID,
             label: nil,
             clientTimestamp: nil,
-            deviceID: "11111111-2222-3333-4444-555555555555"
+            deviceID: "11111111-2222-3333-4444-555555555555",
+            clientGeneratedID: nil
         )
 
         let body = String(data: (await fake.requestCalls).first!.body!, encoding: .utf8)!
@@ -89,7 +91,8 @@ struct LiveCaptureAPIClientCreateUpdateTests {
             projectID: Self.projectID,
             label: nil,
             clientTimestamp: nil,
-            deviceID: nil
+            deviceID: nil,
+            clientGeneratedID: nil
         )
 
         let body = String(data: (await fake.requestCalls).first!.body!, encoding: .utf8)!
@@ -111,7 +114,8 @@ struct LiveCaptureAPIClientCreateUpdateTests {
             projectID: Self.projectID,
             label: nil,
             clientTimestamp: timestamp,
-            deviceID: nil
+            deviceID: nil,
+            clientGeneratedID: nil
         )
 
         let body = String(data: (await fake.requestCalls).first!.body!, encoding: .utf8)!
@@ -130,7 +134,8 @@ struct LiveCaptureAPIClientCreateUpdateTests {
                 projectID: Self.projectID,
                 label: String(repeating: "x", count: 300),
                 clientTimestamp: nil,
-                deviceID: nil
+                deviceID: nil,
+                clientGeneratedID: nil
             )
             Issue.record("expected validationFailed")
         } catch let error as CaptureAPIError {

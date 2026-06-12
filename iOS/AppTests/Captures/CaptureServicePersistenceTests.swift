@@ -231,7 +231,7 @@ struct CaptureServicePersistenceTests {
         }
     }
 
-    @Test("start() with .recording snapshot patches server .cancelled and clears")
+    @Test("start() with .recording snapshot and no on-disk audio patches server .cancelled")
     func recoverRecordingOrphan() async throws {
         let bundle = Self.makeBundle()
         try await bundle.store.save(PersistedCaptureContext(
@@ -248,6 +248,160 @@ struct CaptureServicePersistenceTests {
         let updates = await bundle.api.updateCalls
         #expect(updates.contains(where: { $0.state == .cancelled && $0.captureSessionID == Self.captureID }))
         #expect(await bundle.store.load() == nil)
+    }
+
+    @Test("start() with .recording snapshot AND on-disk audio resurrects uploads instead of cancelling")
+    func recoverRecordingResurrectsAudio() async throws {
+        // The FDE-in-field scenario: app died mid-recording with
+        // audio files on disk. Recovery should enqueue every file
+        // as a PendingUpload against the still-`.active` server
+        // session and re-attach the finalize watcher — NOT patch
+        // the server to `.cancelled` (the old behavior, which lost
+        // the user's audio).
+        let sandboxRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lakeloom-recover-\(UUID().uuidString)", isDirectory: true)
+        let captureDir = sandboxRoot
+            .appendingPathComponent("Captures", isDirectory: true)
+            .appendingPathComponent(Self.captureID, isDirectory: true)
+        try FileManager.default.createDirectory(at: captureDir, withIntermediateDirectories: true)
+
+        // Write two stand-in audio files large enough to clear the
+        // 256-byte stub-purge floor. Simulates a chunked recording
+        // that force-quit between chunk 1's finalize and chunk 2's
+        // rotation.
+        let payload = Data(repeating: 0xAB, count: 512)
+        let chunk0 = captureDir.appendingPathComponent("audio-20260529T120000Z-chunk0.m4a")
+        let chunk1 = captureDir.appendingPathComponent("audio-20260529T120000Z-chunk1.caf")
+        try payload.write(to: chunk0)
+        try payload.write(to: chunk1)
+
+        let api = FakeCaptureAPIClient()
+        let recorder = FakeAudioRecorder()
+        let uploads = FakeUploadCoordinator()
+        let store = CaptureContextStore(
+            fileURL: sandboxRoot.appendingPathComponent("active-capture.json")
+        )
+        // Stateful ID provider; tests need unique IDs across the
+        // two enqueues so the upload coordinator doesn't dedupe.
+        // Wrap the counter in a class so the `@Sendable` closure
+        // can mutate via reference instead of capturing a `var`.
+        final class IDCounter: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = 0
+            func next() -> Int {
+                lock.lock(); defer { lock.unlock() }
+                value += 1
+                return value
+            }
+        }
+        let counter = IDCounter()
+        let service = LiveCaptureService(
+            captureAPI: api,
+            recorder: recorder,
+            uploadCoordinator: uploads,
+            contextStore: store,
+            nowProvider: { Self.fixedNow },
+            uploadIDProvider: { "u-recover-\(counter.next())" },
+            fileHasher: { _ in "deadbeefcafe" },
+            capturesDirectoryProvider: { _ in captureDir }
+        )
+
+        try await store.save(PersistedCaptureContext(
+            captureSessionID: Self.captureID,
+            projectID: Self.projectID,
+            workspaceID: Self.workspaceID,
+            startedAt: Self.fixedNow,
+            phase: .recording,
+            pendingUploadIDs: []
+        ))
+
+        await service.start()
+
+        // Server should NOT have been patched cancelled.
+        let updates = await api.updateCalls
+        #expect(!updates.contains(where: { $0.state == .cancelled }))
+
+        // Both audio files enqueued, in filename-sorted order so
+        // the upload coordinator drains in recording order.
+        let calls = await uploads.calls
+        let enqueued: [String] = calls.compactMap { call in
+            if case let .enqueue(_, captureSessionID) = call,
+               captureSessionID == Self.captureID {
+                return captureSessionID
+            }
+            return nil
+        }
+        #expect(enqueued.count == 2)
+
+        let stored = await uploads.currentUploads()
+        let m4a = stored.first { $0.localFileURL == chunk0 }
+        let caf = stored.first { $0.localFileURL == chunk1 }
+        #expect(m4a?.mimeType == "audio/mp4")
+        #expect(caf?.mimeType == "audio/x-caf")
+        #expect(m4a?.sizeBytes == 512)
+        #expect(caf?.sizeBytes == 512)
+        #expect(m4a?.captureSessionID == Self.captureID)
+
+        // Snapshot transitioned to `.finalizing` with the recovered
+        // upload IDs — watcher will drive it to `.completed` once
+        // the uploads drain.
+        let snapshot = await store.load()
+        #expect(snapshot?.phase == .finalizing)
+        #expect(snapshot?.pendingUploadIDs.count == 2)
+
+        try? FileManager.default.removeItem(at: sandboxRoot)
+    }
+
+    @Test("start() with .recording snapshot drops sub-256-byte stub files instead of enqueuing them")
+    func recoverRecordingPurgesStubs() async throws {
+        // Force-quit before any audio frames landed leaves a tiny
+        // CAF header stub. Recovery should not enqueue that — it'd
+        // just become a failed upload row the user has to discard.
+        let sandboxRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("lakeloom-recover-\(UUID().uuidString)", isDirectory: true)
+        let captureDir = sandboxRoot
+            .appendingPathComponent("Captures", isDirectory: true)
+            .appendingPathComponent(Self.captureID, isDirectory: true)
+        try FileManager.default.createDirectory(at: captureDir, withIntermediateDirectories: true)
+
+        let stub = captureDir.appendingPathComponent("audio-stub.caf")
+        try Data(repeating: 0x00, count: 64).write(to: stub) // < 256-byte floor
+
+        let api = FakeCaptureAPIClient()
+        let uploads = FakeUploadCoordinator()
+        let store = CaptureContextStore(
+            fileURL: sandboxRoot.appendingPathComponent("active-capture.json")
+        )
+        let service = LiveCaptureService(
+            captureAPI: api,
+            recorder: FakeAudioRecorder(),
+            uploadCoordinator: uploads,
+            contextStore: store,
+            nowProvider: { Self.fixedNow },
+            uploadIDProvider: { "u-stub" },
+            fileHasher: { _ in "deadbeef" },
+            capturesDirectoryProvider: { _ in captureDir }
+        )
+        try await store.save(PersistedCaptureContext(
+            captureSessionID: Self.captureID,
+            projectID: Self.projectID,
+            workspaceID: Self.workspaceID,
+            startedAt: Self.fixedNow,
+            phase: .recording,
+            pendingUploadIDs: []
+        ))
+
+        await service.start()
+
+        let stored = await uploads.currentUploads()
+        #expect(stored.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: stub.path))
+        // With no salvageable audio, fall back to cancelling the
+        // server-side session so the row doesn't linger `.active`.
+        let updates = await api.updateCalls
+        #expect(updates.contains(where: { $0.state == .cancelled }))
+
+        try? FileManager.default.removeItem(at: sandboxRoot)
     }
 
     @Test("start() with .finalizing + all uploads succeeded → server .completed + clears")

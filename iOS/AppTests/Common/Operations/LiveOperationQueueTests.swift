@@ -188,6 +188,42 @@ struct LiveOperationQueueTests {
         await queue.stop()
     }
 
+    @Test("restore recovers .running op from disk by resetting to .queued")
+    func recoversRunningOpFromDisk() async throws {
+        // Simulate a previous launch that died mid-attempt: persist
+        // an op in `.running` state, then bring up a fresh queue
+        // against the same store. The worker must pick it up.
+        let store = Self.makeStore()
+        let wedged = PendingOperation(
+            id: "op-wedged",
+            workspaceID: "ws-1",
+            variant: .updateCaptureLabel(captureSessionID: "cap-1", label: "x"),
+            createdAt: Date(timeIntervalSince1970: 1_747_152_120),
+            state: .running,
+            attempts: 1
+        )
+        try await store.save([wedged])
+
+        let recorder = RecordingExecutor()
+        let queue = LiveOperationQueue(
+            queueStore: store,
+            execute: { op in try await recorder.run(op) },
+            sleep: { _ in }
+        )
+
+        await queue.start()
+
+        await Self.waitFor(queue: queue) { change in
+            change.operationID == "op-wedged" && change.state == .succeeded
+        }
+
+        let calls = await recorder.calls
+        #expect(calls == ["op-wedged"])
+        let snapshot = await queue.currentOperations()
+        #expect(snapshot.isEmpty)
+        await queue.stop()
+    }
+
     @Test("FIFO ordering preserved across enqueue + execute")
     func fifoOrdering() async throws {
         let store = Self.makeStore()

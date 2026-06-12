@@ -198,15 +198,39 @@ public actor LiveOperationQueue: OperationQueueing {
     public func start() async {
         if !didLoadFromDisk {
             let restored = await queueStore.load()
+            var resetCount = 0
             for op in restored {
                 // Skip ops that were enqueued in-memory before start()
                 // — those are already in `operations`/`order` and the
                 // disk copy is just the persisted shadow of them.
                 if operations[op.id] != nil { continue }
-                operations[op.id] = op
-                order.append(op.id)
+                var recovered = op
+                // `runOne` persists `.running` BEFORE awaiting the
+                // network call. If the previous launch died mid-
+                // attempt (force-quit, jetsam, crash), the op is on
+                // disk in `.running` — and `nextWorkableID()` skips
+                // running ops, so the worker would wedge the queue
+                // forever. Reset to `.queued` on restore so we re-
+                // attempt cleanly. Note `attempts` is preserved so
+                // the transient-retry budget keeps counting up.
+                if case .running = recovered.state {
+                    recovered.state = .queued
+                    recovered.nextAttemptAt = nil
+                    resetCount += 1
+                }
+                operations[recovered.id] = recovered
+                order.append(recovered.id)
             }
             didLoadFromDisk = true
+            if resetCount > 0 {
+                // Persist the reset so a subsequent crash mid-recovery
+                // doesn't re-wedge us against the same disk state.
+                try? await persist()
+                await logger.info(
+                    "operation.queue.recovered_running",
+                    metadata: ["count": .int(Int64(resetCount))]
+                )
+            }
             await logger.info(
                 "operation.queue.restored",
                 metadata: ["count": .int(Int64(restored.count))]

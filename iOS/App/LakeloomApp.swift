@@ -73,7 +73,17 @@ struct LakeloomApp: App {
         // stream for the streaming speech recognizer. Single mic
         // owner, two consumers (file writer + recognizer) feeding
         // off the same input tap.
-        let engineRecordingEngine = EngineAudioRecordingEngine()
+        //
+        // PR A piece 4: rotation mechanics live in the engine (commit
+        // 9636eaf) but `chunkDuration` is kept `nil` for now —
+        // production stays single-chunk until Genie's migration 021
+        // (`chunk_index`/`is_final_chunk` columns + partial unique
+        // index) and the concat playback endpoint land. Flipping
+        // this to `300` is a one-line follow-up that ships alongside
+        // the `chunk_index` wire-field plumbing on `PendingUpload`.
+        // See architecture/hi_genie/2026-05-29_chunked-recording-design.md
+        // and architecture/hey_isaac/2026-05-29_caf-deployed-chunked-recording-answers.md.
+        let engineRecordingEngine = EngineAudioRecordingEngine(chunkDuration: nil)
         let streamingRecognizer = LiveStreamingSpeechRecognizer()
 
         // Upload pipeline. Worker loop is started from the App's
@@ -103,6 +113,29 @@ struct LakeloomApp: App {
         // flicker during the boot window.
         let reachability = ReachabilityMonitor()
         reachability.start()
+
+        // PR 21 (Phase 3 cutover): control-plane outbox. Holds queued
+        // capture-create + state-PATCH ops while the device is
+        // offline; drains them in FIFO order when the queue's worker
+        // sees a reachable network. Same store-as-the-source-of-truth
+        // pattern as the upload coordinator. Construction can throw
+        // on filesystem failure — fall through to nil so the rest of
+        // the wiring proceeds (LiveCaptureService falls back to its
+        // legacy direct-call path).
+        let operationQueueStore: OperationQueueStore? = try? OperationQueueStore.makeDefault()
+        let operationQueue: (any OperationQueueing)?
+        if let operationQueueStore {
+            let executor = OperationExecutor.make(
+                captureAPI: captureAPI,
+                projects: projects
+            )
+            operationQueue = LiveOperationQueue(
+                queueStore: operationQueueStore,
+                execute: executor
+            )
+        } else {
+            operationQueue = nil
+        }
 
         // Capture orchestrator. Bundles captureAPI + a shared
         // AudioRecorder + the upload coordinator + the
@@ -139,6 +172,7 @@ struct LakeloomApp: App {
                 audioBufferSource: engineRecordingEngine,
                 interruptionPublisher: engineRecordingEngine,
                 nowPlaying: nowPlayingController,
+                operationQueue: operationQueue,
                 photoCapture: photoCapture,
                 pairedSessionIDProvider: pairedSessionIDProvider
             )
@@ -162,7 +196,8 @@ struct LakeloomApp: App {
                 transcriptEvents: transcriptEvents,
                 deviceIdentity: deviceIdentity,
                 mediaContent: mediaContent,
-                reachability: reachability
+                reachability: reachability,
+                operationQueue: operationQueue
             )
         )
     }
@@ -186,6 +221,35 @@ struct LakeloomApp: App {
                         // directly so any queued uploads from a
                         // previous run can drain.
                         await uploads.start()
+                    }
+                    // PR 21 (Phase 3): start the control-plane outbox
+                    // so any ops queued from a prior launch (or that
+                    // accumulated while the user was offline) drain
+                    // immediately on cold start.
+                    if let operationQueue = coordinator.operationQueue {
+                        await operationQueue.start()
+                    }
+                }
+                .task {
+                    // PR 21 (Phase 3): nudge the operation queue AND
+                    // the upload coordinator whenever the device
+                    // transitions back online so a backlog of
+                    // capture-create / state-PATCH ops + data-plane
+                    // multipart uploads drains right away instead of
+                    // waiting out the current backoff window.
+                    // Without the uploadCoordinator wake, an offline
+                    // session longer than `sum(backoff)` seconds would
+                    // park audio uploads terminal-failed permanent
+                    // before reachability returned — see the network-
+                    // error handling in `LiveUploadCoordinator.handleFailure`.
+                    guard let reachability = coordinator.reachability else { return }
+                    let operationQueue = coordinator.operationQueue
+                    let uploadCoordinator = coordinator.uploadCoordinator
+                    for await state in reachability.stateUpdates() {
+                        if state == .online {
+                            if let operationQueue { await operationQueue.wake() }
+                            if let uploadCoordinator { await uploadCoordinator.wake() }
+                        }
                     }
                 }
         }

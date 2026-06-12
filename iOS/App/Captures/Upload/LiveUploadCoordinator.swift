@@ -28,6 +28,11 @@ public actor LiveUploadCoordinator: UploadCoordinator {
     private let multipartBoundaryProvider: @Sendable () -> String
     private let maxAttempts: Int
     private let backoff: [TimeInterval]
+    /// Fixed retry delay used for "no network" failures so we don't
+    /// burn the maxAttempts retry budget against pure offline-state.
+    /// Short enough that the upload drains promptly after reachability
+    /// returns; long enough not to thrash CPU while offline.
+    private let networkRetryDelay: TimeInterval
 
     // MARK: State
 
@@ -55,6 +60,7 @@ public actor LiveUploadCoordinator: UploadCoordinator {
         self.multipartBoundaryProvider = { MultipartFormBuilder.makeBoundary() }
         self.maxAttempts = 5
         self.backoff = [2, 4, 8, 16, 32]
+        self.networkRetryDelay = 5
     }
 
     /// Test-friendly init: lets unit tests stub the clock, the sleep
@@ -68,7 +74,8 @@ public actor LiveUploadCoordinator: UploadCoordinator {
         sleep: @Sendable @escaping (TimeInterval) async throws -> Void,
         multipartBoundaryProvider: @Sendable @escaping () -> String = { MultipartFormBuilder.makeBoundary() },
         maxAttempts: Int = 5,
-        backoff: [TimeInterval] = [2, 4, 8, 16, 32]
+        backoff: [TimeInterval] = [2, 4, 8, 16, 32],
+        networkRetryDelay: TimeInterval = 5
     ) {
         self.lakeloomApp = lakeloomApp
         self.queueStore = queueStore
@@ -78,6 +85,7 @@ public actor LiveUploadCoordinator: UploadCoordinator {
         self.multipartBoundaryProvider = multipartBoundaryProvider
         self.maxAttempts = maxAttempts
         self.backoff = backoff
+        self.networkRetryDelay = networkRetryDelay
     }
 
     // MARK: Public surface
@@ -102,7 +110,7 @@ public actor LiveUploadCoordinator: UploadCoordinator {
             ]
         )
         broadcast(uploadID: pending.id, state: pending.state)
-        wake()
+        resumeWake()
     }
 
     public func currentUploads() async -> [PendingUpload] {
@@ -129,7 +137,7 @@ public actor LiveUploadCoordinator: UploadCoordinator {
         uploads[uploadID] = upload
         try? await persist()
         broadcast(uploadID: uploadID, state: .queued)
-        wake()
+        resumeWake()
     }
 
     public func discard(uploadID: String) async {
@@ -141,6 +149,18 @@ public actor LiveUploadCoordinator: UploadCoordinator {
             "upload.queue.discarded",
             metadata: ["upload_id": .uuidPrefix(uploadID)]
         )
+        // Re-broadcast the upload's pre-discard state so subscribers
+        // that mirror `currentUploads().count` (the home-page
+        // pending-upload pill) re-snapshot and observe the entry's
+        // removal. We deliberately don't add a `.discarded` case to
+        // the enum — listeners that care about *presence/absence*
+        // already snapshot the queue on every yield, and the
+        // in-flight `LiveCaptureService.watchUploads` watcher's
+        // `switch` over `.queued`/`.uploading`/`.failed` is a no-op
+        // / safe-refresh on each, so re-broadcasting the pre-discard
+        // state can't trick it into completing a session
+        // prematurely.
+        broadcast(uploadID: uploadID, state: upload.state)
     }
 
     public func start() async {
@@ -159,12 +179,104 @@ public actor LiveUploadCoordinator: UploadCoordinator {
                     metadata: ["count": .int(Int64(restored.count))]
                 )
             }
+            // File-integrity sweep over the just-restored set.
+            // Uploads whose on-disk file is missing or empty after
+            // restore are unrecoverable — `Data(contentsOf:)` would
+            // throw at every retry and burn the budget for nothing.
+            // Mark them terminal-failed with a typed reason so the
+            // user sees an actionable "Discard" affordance in
+            // PendingUploadsView instead of a row that keeps trying
+            // forever. This is the most-likely root cause of the
+            // "unreadable (new error)" the user hit on the wedged
+            // session — pre-PR-#77 fixes, an interrupted upload was
+            // restored, its file had been GC'd somewhere along the
+            // way, and the retry kept failing with
+            // `transport(reason: "file unreadable: ...")` until the
+            // user manually discarded.
+            await sweepMissingFiles()
         }
         if workerTask == nil {
             workerTask = Task { [weak self] in
                 await self?.workerLoop()
             }
         }
+    }
+
+    /// Walk every restored upload still in `.queued` and validate
+    /// its on-disk file. Missing or empty files get parked as
+    /// terminal-failed with a typed reason. Files that exist but
+    /// have shrunk since enqueue (truncated mid-write?) are logged
+    /// but kept queued — the server's SHA-256 verification will
+    /// catch any actual tampering, and we'd rather attempt the
+    /// upload than discard data the user might want.
+    private func sweepMissingFiles() async {
+        let candidates = uploads.values.filter {
+            if case .queued = $0.state { return true }
+            return false
+        }
+        guard !candidates.isEmpty else { return }
+        var missing = 0
+        var empty = 0
+        var shrunk = 0
+        for upload in candidates {
+            let path = upload.localFileURL.path
+            let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+            if attrs == nil {
+                missing += 1
+                await markTerminalCorrupt(upload: upload, reason: "file_missing")
+                continue
+            }
+            let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+            if size == 0 {
+                empty += 1
+                await markTerminalCorrupt(upload: upload, reason: "file_empty")
+                continue
+            }
+            if size < upload.sizeBytes {
+                shrunk += 1
+                await logger.warning(
+                    "upload.restore.file_shrunk",
+                    metadata: [
+                        "upload_id": .uuidPrefix(upload.id),
+                        "persisted_bytes": .int(upload.sizeBytes),
+                        "current_bytes": .int(size)
+                    ]
+                )
+            }
+        }
+        if missing + empty + shrunk > 0 {
+            await logger.info(
+                "upload.restore.integrity_sweep",
+                metadata: [
+                    "missing": .int(Int64(missing)),
+                    "empty": .int(Int64(empty)),
+                    "shrunk": .int(Int64(shrunk))
+                ]
+            )
+        }
+    }
+
+    /// Park `upload` as terminal-failed permanent with a structured
+    /// reason. Helper for ``sweepMissingFiles`` so the failure shape
+    /// is uniform: same `permanent: true` so the worker won't retry,
+    /// same typed reason string for support-bundle grep.
+    private func markTerminalCorrupt(upload: PendingUpload, reason: String) async {
+        var updated = upload
+        updated.state = .failed(reason: reason, permanent: true)
+        updated.nextAttemptAt = nil
+        updated.lastError = reason
+        uploads[upload.id] = updated
+        try? await persist()
+        broadcast(uploadID: upload.id, state: updated.state)
+        await logger.error(
+            "upload.restore.file_corrupt",
+            metadata: [
+                "upload_id": .uuidPrefix(upload.id),
+                "reason": .string(reason),
+                "path": .string(upload.localFileURL.lastPathComponent)
+            ],
+            errorCode: reason
+        )
     }
 
     public func stop() async {
@@ -212,11 +324,21 @@ public actor LiveUploadCoordinator: UploadCoordinator {
         try? await persist()
         broadcast(uploadID: uploadID, state: .uploading)
 
+        // Snapshot the file's current on-disk state at the start of
+        // each attempt. Diagnostic for the "unreadable" failure mode
+        // we're chasing — if the file goes missing or shrinks
+        // between attempts, the next support-bundle grep on
+        // `upload.attempt.start` shows exactly when.
+        let attrs = try? FileManager.default.attributesOfItem(atPath: upload.localFileURL.path)
+        let currentSize = (attrs?[.size] as? NSNumber)?.int64Value ?? -1
         await logger.info(
             "upload.attempt.start",
             metadata: [
                 "upload_id": .uuidPrefix(uploadID),
-                "attempt": .int(Int64(upload.attempts))
+                "attempt": .int(Int64(upload.attempts)),
+                "file_exists": .bool(attrs != nil),
+                "current_bytes": .int(currentSize),
+                "persisted_bytes": .int(upload.sizeBytes)
             ]
         )
 
@@ -312,6 +434,35 @@ public actor LiveUploadCoordinator: UploadCoordinator {
     }
 
     private func handleFailure(upload: PendingUpload, error: LakeloomAppError) async {
+        // "No network reached the server" failures shouldn't burn the
+        // retry budget — otherwise an offline session longer than
+        // (sum of `backoff`) seconds parks the upload terminal-failed
+        // forever, and reachability returning doesn't recover it.
+        // Decrement the attempt counter (it was incremented at the top
+        // of `attempt()`) and use a fixed short backoff so we don't
+        // CPU-thrash while offline. `wake()` (wired to reachability
+        // .online in LakeloomApp) and `enqueue()` both prod the worker
+        // for any queued-and-waiting uploads.
+        if isNetworkError(error) {
+            let reason = String(describing: error)
+            var updated = upload
+            updated.attempts = max(0, upload.attempts - 1)
+            updated.state = .queued
+            updated.nextAttemptAt = nowProvider().addingTimeInterval(networkRetryDelay)
+            updated.lastError = reason
+            uploads[upload.id] = updated
+            try? await persist()
+            broadcast(uploadID: upload.id, state: .queued)
+            await logger.warning(
+                "upload.attempt.failed_network",
+                metadata: [
+                    "upload_id": .uuidPrefix(upload.id),
+                    "retry_in_s": .double(networkRetryDelay),
+                    "reason": .string(reason)
+                ]
+            )
+            return
+        }
         let permanent = isPermanent(error: error)
         let reason = String(describing: error)
         var updated = upload
@@ -351,6 +502,30 @@ public actor LiveUploadCoordinator: UploadCoordinator {
         }
     }
 
+    /// Errors that mean "no network reached the server" — distinct
+    /// from server-returned transient failures (404 race, 5xx, etc.)
+    /// because they shouldn't count against the retry budget. The
+    /// upload sits in fixed-delay re-queue until reachability returns.
+    ///
+    /// `.transport` is **not** included even though some transport
+    /// failures are genuinely network-layer (DNS, connection refused).
+    /// The `.transport` case is overloaded in `sendOnce`: it's also
+    /// thrown for "file unreadable on disk" and "no endpoint path",
+    /// which are permanent failures the user needs to clear. Counting
+    /// `.transport` toward `maxAttempts` lets those legitimate
+    /// permanent failures park after 5 attempts instead of looping
+    /// forever; the trade-off is that a truly transient transport
+    /// failure (rare) eats a budget slot.
+    private func isNetworkError(_ error: LakeloomAppError) -> Bool {
+        switch error {
+        case .networkUnavailable, .timeout:
+            return true
+        case .transport, .tokenExchangeFailed, .unauthorized,
+             .httpError, .decodeFailed, .workspaceNotConfigured:
+            return false
+        }
+    }
+
     private func isPermanent(error: LakeloomAppError) -> Bool {
         switch error {
         case .networkUnavailable, .timeout:
@@ -374,7 +549,18 @@ public actor LiveUploadCoordinator: UploadCoordinator {
             }
             // Fallback by status: 408/429/5xx are transient; other
             // 4xx and unknown statuses are permanent.
+            //
+            // 404 is the Phase 3 special case: when iOS records
+            // offline, the capture-create operation lands in
+            // `OperationQueue` first and uploads land on
+            // `UploadCoordinator` second. Both worker loops drain
+            // concurrently when the network returns, and a fast
+            // upload can race ahead of the create — the server then
+            // returns 404 because the capture row doesn't exist yet.
+            // Treating that as transient lets the upload back off
+            // and re-attempt once the create has drained.
             switch status {
+            case 404:             return false
             case 408, 429:        return false
             case 500...599:       return false
             case 400...499:       return true
@@ -402,7 +588,23 @@ public actor LiveUploadCoordinator: UploadCoordinator {
 
     // MARK: - Wake / persist / broadcast
 
-    private func wake() {
+    /// External nudge — used by LakeloomApp's reachability subscription
+    /// to retry queued uploads immediately when the device comes back
+    /// online. Clears any pending `nextAttemptAt` so the worker doesn't
+    /// honor a stale offline-era backoff timer.
+    public func wake() async {
+        var changed = false
+        for id in order {
+            guard var upload = uploads[id] else { continue }
+            if case .queued = upload.state, upload.nextAttemptAt != nil {
+                upload.nextAttemptAt = nil
+                uploads[id] = upload
+                changed = true
+            }
+        }
+        if changed {
+            try? await persist()
+        }
         resumeWake()
     }
 
