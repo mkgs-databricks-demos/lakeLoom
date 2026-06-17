@@ -43,6 +43,18 @@ public protocol OperationQueueing: Sendable {
     /// No-op for ops not currently tracked.
     func retry(operationID: String) async
 
+    /// Resurrect the `createCaptureSession` op for a given capture
+    /// session — reset it to `.queued` with a fresh attempt budget and
+    /// cleared backoff so the worker re-drives it now. This is the
+    /// recovery hook for the June-2 field-session bug: when a parked
+    /// create strands its recording's audio (the chunks 404
+    /// indefinitely), reviving the create lets the session land and the
+    /// audio drain. Called on cold start for every session with pending
+    /// uploads, and when an audio upload hits `UPLOAD_CAPTURE_NOT_FOUND`.
+    /// No-op if there's no matching create op, or it's already
+    /// in-flight (`.running`) or done (`.succeeded`).
+    func reviveCreate(forCaptureSessionID captureSessionID: String) async
+
     /// Start the worker loop and rehydrate the on-disk snapshot.
     /// Idempotent. Production wiring should call this from app
     /// bootstrap; the worker stays blocked on a continuation when
@@ -192,6 +204,45 @@ public actor LiveOperationQueue: OperationQueueing {
         operations[operationID] = operation
         try? await persist()
         broadcast(operationID: operationID, state: .queued)
+        wakeWorker()
+    }
+
+    public func reviveCreate(forCaptureSessionID captureSessionID: String) async {
+        // Find the create op that owns this capture session. Match on
+        // the create variant specifically — a PATCH op for the same
+        // session must not be mistaken for the gating create.
+        guard let id = order.first(where: { oid in
+            guard let op = operations[oid] else { return false }
+            return op.variant.isCaptureSessionCreate
+                && op.variant.captureSessionID == captureSessionID
+        }) else {
+            return
+        }
+        guard var op = operations[id] else { return }
+        switch op.state {
+        case .failed:
+            // Parked permanent, or transiently failed / backing off —
+            // the stalled states we want to re-drive.
+            break
+        case .queued, .running, .succeeded:
+            // Already workable (queued drains on its own), in flight,
+            // or done — nothing to revive.
+            return
+        }
+        op.state = .queued
+        op.attempts = 0
+        op.nextAttemptAt = nil
+        op.lastError = nil
+        operations[id] = op
+        try? await persist()
+        broadcast(operationID: id, state: .queued)
+        await logger.info(
+            "operation.create.revived",
+            metadata: [
+                "operation_id": .uuidPrefix(id),
+                "capture_session_id": .uuidPrefix(captureSessionID)
+            ]
+        )
         wakeWorker()
     }
 

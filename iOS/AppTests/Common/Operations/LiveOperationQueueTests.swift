@@ -251,4 +251,122 @@ struct LiveOperationQueueTests {
         #expect(calls == ["first", "second", "third"])
         await queue.stop()
     }
+
+    // MARK: - reviveCreate (June-2 field-session orphan-recovery)
+
+    /// One-shot gate: the first `shouldFail()` returns true, the rest
+    /// false. Lets the create op park on attempt 1, then succeed after
+    /// revival — without relying on `attempts` (revive resets it to 0).
+    actor CallGate {
+        private var fired = false
+        func shouldFail() -> Bool {
+            if fired { return false }
+            fired = true
+            return true
+        }
+    }
+
+    private static func createOp(id: String, captureSessionID: String) -> PendingOperation {
+        PendingOperation(
+            id: id,
+            workspaceID: "ws-1",
+            variant: .createCaptureSession(
+                captureSessionID: captureSessionID,
+                projectID: "proj-1",
+                label: nil,
+                clientTimestamp: Date(timeIntervalSince1970: 1_747_152_120),
+                deviceID: nil
+            ),
+            createdAt: Date(timeIntervalSince1970: 1_747_152_120)
+        )
+    }
+
+    @Test("reviveCreate resurrects a parked-permanent create op and it drains")
+    func reviveCreateResurrects() async throws {
+        let store = Self.makeStore()
+        let recorder = RecordingExecutor()
+        let gate = CallGate()
+        await recorder.handle("op-create-A") { _ in
+            if await gate.shouldFail() {
+                // Mirrors the field bug: create parks on the flaky
+                // reconnect (auth stale), stranding the recording.
+                throw OperationPermanentFailure(reason: "auth: token stale on reconnect")
+            }
+            // Revived attempt succeeds.
+        }
+        let queue = LiveOperationQueue(
+            queueStore: store,
+            execute: { op in try await recorder.run(op) },
+            sleep: { _ in }
+        )
+
+        try await queue.enqueue(Self.createOp(id: "op-create-A", captureSessionID: "cap-A"))
+        await queue.start()
+
+        // Parks permanent first.
+        await Self.waitFor(queue: queue) { change in
+            if change.operationID == "op-create-A", case .failed(_, let perm) = change.state {
+                return perm
+            }
+            return false
+        }
+
+        // Revival resets it to queued; the worker re-drives it.
+        await queue.reviveCreate(forCaptureSessionID: "cap-A")
+
+        await Self.waitFor(queue: queue) { change in
+            change.operationID == "op-create-A" && change.state == .succeeded
+        }
+
+        let snapshot = await queue.currentOperations()
+        #expect(snapshot.isEmpty) // succeeded → retired
+        let calls = await recorder.calls
+        #expect(calls == ["op-create-A", "op-create-A"]) // parked, then revived-success
+        await queue.stop()
+    }
+
+    @Test("reviveCreate only touches the create op — a same-session PATCH stays parked")
+    func reviveCreateIgnoresPatch() async throws {
+        let store = Self.makeStore()
+        let recorder = RecordingExecutor()
+        await recorder.handle("op-patch-A") { _ in
+            throw OperationPermanentFailure(reason: "invalidTransition")
+        }
+        let queue = LiveOperationQueue(
+            queueStore: store,
+            execute: { op in try await recorder.run(op) },
+            sleep: { _ in }
+        )
+
+        // A PATCH (not create) op for the same session id.
+        let patch = PendingOperation(
+            id: "op-patch-A",
+            workspaceID: "ws-1",
+            variant: .updateCaptureSessionState(captureSessionID: "cap-A", endState: .completed, endedAt: nil),
+            createdAt: Date(timeIntervalSince1970: 1_747_152_120)
+        )
+        try await queue.enqueue(patch)
+        await queue.start()
+
+        await Self.waitFor(queue: queue) { change in
+            if change.operationID == "op-patch-A", case .failed(_, let perm) = change.state {
+                return perm
+            }
+            return false
+        }
+
+        // reviveCreate must NOT resurrect a PATCH op.
+        await queue.reviveCreate(forCaptureSessionID: "cap-A")
+
+        let snapshot = await queue.currentOperations()
+        #expect(snapshot.count == 1)
+        if case .failed(_, let permanent) = snapshot[0].state {
+            #expect(permanent == true) // still parked
+        } else {
+            Issue.record("PATCH op should remain failed-permanent, got \(snapshot[0].state)")
+        }
+        let calls = await recorder.calls
+        #expect(calls == ["op-patch-A"]) // no second attempt
+        await queue.stop()
+    }
 }
