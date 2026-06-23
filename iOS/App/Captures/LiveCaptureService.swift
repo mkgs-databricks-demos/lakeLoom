@@ -111,6 +111,19 @@ public actor LiveCaptureService: CaptureService {
     /// the other. Cleared on capture stop / cancel.
     private var transcriptContinuations: [UUID: AsyncStream<TranscriptSegment>.Continuation] = [:]
     private var watcherTask: Task<Void, Never>?
+    /// Sessions that were stopped and are still draining their uploads
+    /// but are no longer the foreground capture — keyed by
+    /// `captureSessionID`. When `startCapture` is invoked while the
+    /// service is `.finalizing`, that session is *demoted* into this
+    /// map (its drain continues on a background watcher that never
+    /// touches `current`) so the mic is freed immediately and a new
+    /// recording can begin. This is the multi-session fix for the
+    /// offline field bug: stop a long session offline, then start
+    /// another — the first keeps draining in the background instead of
+    /// wedging `current` in `.finalizing` until reconnect. Each task
+    /// removes its own entry on completion (see
+    /// ``completeBackgroundFinalizer(context:)``).
+    private var backgroundFinalizers: [String: Task<Void, Never>] = [:]
     private var didStart = false
     /// PR 9b: background Task draining the live recognizer's
     /// segment stream into TranscriptStreamer. Held so cancelCapture
@@ -1309,11 +1322,49 @@ public actor LiveCaptureService: CaptureService {
     }
 
     private func ensureCanStart() throws {
+        // A session still actively writing audio (`.recording`) is the
+        // only genuine blocker — there's one microphone and one
+        // recorder. A `.finalizing` session (recorder already stopped,
+        // uploads still draining) must NOT block a new recording:
+        // offline, those uploads can't drain until reconnect, which is
+        // exactly how a long offline session used to wedge the device
+        // out of recording for the rest of the day. Demote it to a
+        // background finalizer so its drain continues without owning
+        // `current`, freeing the slot to start fresh.
+        if case .finalizing(let context, let pending) = current {
+            demoteFinalizingToBackground(context: context, pending: pending)
+        }
         switch current {
         case .idle, .completed, .cancelled, .failed:
             return
         case .recording, .finalizing:
             throw CaptureServiceError.alreadyCapturing
+        }
+    }
+
+    /// Move the current `.finalizing` session off the foreground slot
+    /// and into ``backgroundFinalizers`` so a new capture can start.
+    /// Synchronous (no `await`) so it runs to completion within the
+    /// same actor hop as `ensureCanStart`'s state check — no other
+    /// `startCapture` can interleave and observe a half-demoted state.
+    private func demoteFinalizingToBackground(
+        context: CaptureContext,
+        pending: Set<String>
+    ) {
+        // The foreground watcher owns `current`; on drain it would
+        // transition `current` to `.completed(oldSession)` and clobber
+        // the recording we're about to start. Cancel it and hand the
+        // session to a background watcher that never touches `current`.
+        watcherTask?.cancel()
+        watcherTask = nil
+        transition(to: .idle)
+        let id = context.captureSessionID
+        backgroundFinalizers[id]?.cancel()
+        backgroundFinalizers[id] = Task { [weak self] in
+            await self?.watchUploadsInBackground(
+                context: context,
+                pendingUploadIDs: pending
+            )
         }
     }
 
@@ -1606,6 +1657,90 @@ public actor LiveCaptureService: CaptureService {
         if case .finalizing(let ctx, _) = current, ctx == context {
             transition(to: .finalizing(context, pendingUploadIDs: pending))
         }
+    }
+
+    // MARK: - Background finalizers
+
+    /// Drains the uploads of a demoted (no-longer-foreground) capture
+    /// session and patches it to `.completed` once they're done —
+    /// without ever touching `current`, so the freshly-started
+    /// recording owns the foreground slot untouched.
+    ///
+    /// Mirrors ``watchUploads(stream:context:pendingUploadIDs:)`` but
+    /// deliberately omits every `current`-mutating side effect
+    /// (`transition`, `refreshFinalizingState`). It subscribes its own
+    /// upload stream and then reconciles the inherited pending set
+    /// against the queue's current state, because uploads may have
+    /// drained (and been auto-retired) during the demotion handoff.
+    /// The session's `.finalizing` snapshot stays on disk and is
+    /// updated as uploads succeed, so a force-quit mid-drain is
+    /// recovered by the existing older-session recovery path.
+    private func watchUploadsInBackground(
+        context: CaptureContext,
+        pendingUploadIDs initial: Set<String>
+    ) async {
+        let id = context.captureSessionID
+        await logger.info(
+            "capture.background_finalize.start",
+            metadata: [
+                "capture_session_id": .uuidPrefix(id),
+                "pending_uploads": .int(Int64(initial.count))
+            ]
+        )
+        // Subscribe BEFORE snapshotting the queue so no completion
+        // event can slip through the gap between reading the snapshot
+        // and attaching the listener (same ordering hazard
+        // `stopCapture` guards against). The snapshot then drops any
+        // upload that already reached a terminal state (or was
+        // auto-retired out of the queue) before we got here.
+        let stream = await uploadCoordinator.stateUpdates()
+        let snapshot = await uploadCoordinator.currentUploads()
+        var pending = initial.filter { uploadID in
+            guard let upload = snapshot.first(where: { $0.id == uploadID }) else {
+                // Gone from the queue — succeeded + auto-retired, or
+                // discarded. Either way it's no longer pending.
+                return false
+            }
+            return !upload.state.isTerminal
+        }
+        if pending.isEmpty {
+            await completeBackgroundFinalizer(context: context)
+            return
+        }
+        await persistFinalizingIfNeeded(context: context, pending: pending)
+        for await change in stream {
+            if Task.isCancelled { return }
+            guard pending.contains(change.uploadID) else { continue }
+            switch change.state {
+            case .succeeded:
+                pending.remove(change.uploadID)
+                await persistFinalizingIfNeeded(context: context, pending: pending)
+                if pending.isEmpty {
+                    await completeBackgroundFinalizer(context: context)
+                    return
+                }
+            case .failed:
+                // Park like the foreground watcher: a permanent failure
+                // waits on a user retry/discard via the pending-uploads
+                // UI; the watcher keeps listening so a later success
+                // still completes the session. No `current` to refresh.
+                continue
+            case .queued, .uploading:
+                continue
+            }
+        }
+    }
+
+    /// PATCH a demoted session to `.completed`, clear its persisted
+    /// snapshot, and drop its entry from ``backgroundFinalizers``.
+    private func completeBackgroundFinalizer(context: CaptureContext) async {
+        await patchServerCompleted(context: context)
+        await contextStore?.clear(captureSessionID: context.captureSessionID)
+        backgroundFinalizers[context.captureSessionID] = nil
+        await logger.info(
+            "capture.background_finalize.completed",
+            metadata: ["capture_session_id": .uuidPrefix(context.captureSessionID)]
+        )
     }
 
     // MARK: - Persistence helpers

@@ -316,6 +316,135 @@ struct LiveCaptureServiceTests {
         }
     }
 
+    // MARK: Multi-session / finalize de-wedge (offline field bug)
+
+    /// Reproduces the onsite field bug: a long session stopped while
+    /// offline sits in `.finalizing` (its uploads can't drain), and a
+    /// second session must still be startable. The fix demotes the
+    /// finalizing session to a background finalizer instead of throwing
+    /// `alreadyCapturing`.
+    @Test("startCapture while .finalizing demotes the draining session and starts fresh")
+    func startWhileFinalizingDemotesAndStarts() async throws {
+        let bundle = Self.makeBundle()
+        await bundle.api.enqueueCreateResult(.success(Self.captureSession(id: "cap-A")))
+        await bundle.api.enqueueCreateResult(.success(Self.captureSession(id: "cap-B")))
+
+        let fixtureURL = URL(fileURLWithPath: "/tmp/lakeloom-test-\(UUID().uuidString).m4a")
+        try Data([0x01, 0x02, 0x03]).write(to: fixtureURL)
+        defer { try? FileManager.default.removeItem(at: fixtureURL) }
+        await bundle.recorder.setFakeURL(fixtureURL)
+        await bundle.recorder.setFakeRecording(AudioRecording(
+            captureSessionID: "cap-A",
+            fileURL: fixtureURL,
+            startedAt: Self.fixedNow,
+            endedAt: Self.fixedNow.addingTimeInterval(3600),
+            durationSeconds: 3600,
+            sizeBytes: 3,
+            mimeType: "audio/mp4",
+            fileExtension: "m4a"
+        ))
+
+        // Session A: start + stop offline. The upload stays pending in
+        // the fake queue (nothing drives it to .succeeded).
+        try await bundle.service.startCapture(
+            workspaceID: Self.workspaceID, projectID: Self.projectID, label: nil
+        )
+        try await bundle.service.stopCapture()
+        guard case .finalizing(let ctxA, let pendingA) = await bundle.service.state else {
+            Issue.record("expected .finalizing(cap-A) after stop, got \(await bundle.service.state)")
+            return
+        }
+        #expect(ctxA.captureSessionID == "cap-A")
+        #expect(!pendingA.isEmpty)
+
+        // Session B: this is the line that used to throw
+        // `alreadyCapturing` and wedge the device. It must succeed.
+        try await bundle.service.startCapture(
+            workspaceID: Self.workspaceID, projectID: Self.projectID, label: nil
+        )
+        guard case .recording(let ctxB) = await bundle.service.state else {
+            Issue.record("expected .recording(cap-B), got \(await bundle.service.state)")
+            return
+        }
+        #expect(ctxB.captureSessionID == "cap-B")
+
+        // Session A's still-pending upload was demoted, never discarded.
+        let calls = await bundle.uploads.calls
+        #expect(!calls.contains(where: { if case .discard = $0 { return true }; return false }))
+    }
+
+    /// Once a demoted session's uploads drain (here: auto-retired out of
+    /// the queue, simulating a reconnect), the background finalizer
+    /// PATCHes it to `.completed` without disturbing the foreground
+    /// recording.
+    @Test("demoted session completes in the background when its uploads drain")
+    func demotedSessionCompletesInBackground() async throws {
+        let bundle = Self.makeBundle()
+        await bundle.api.enqueueCreateResult(.success(Self.captureSession(id: "cap-A")))
+        await bundle.api.enqueueCreateResult(.success(Self.captureSession(id: "cap-B")))
+
+        let fixtureURL = URL(fileURLWithPath: "/tmp/lakeloom-test-\(UUID().uuidString).m4a")
+        try Data([0x09]).write(to: fixtureURL)
+        defer { try? FileManager.default.removeItem(at: fixtureURL) }
+        await bundle.recorder.setFakeURL(fixtureURL)
+        await bundle.recorder.setFakeRecording(AudioRecording(
+            captureSessionID: "cap-A",
+            fileURL: fixtureURL,
+            startedAt: Self.fixedNow,
+            endedAt: Self.fixedNow.addingTimeInterval(60),
+            durationSeconds: 60,
+            sizeBytes: 1,
+            mimeType: "audio/mp4",
+            fileExtension: "m4a"
+        ))
+
+        try await bundle.service.startCapture(
+            workspaceID: Self.workspaceID, projectID: Self.projectID, label: nil
+        )
+        try await bundle.service.stopCapture()
+
+        // Simulate cap-A's upload having succeeded + been auto-retired
+        // out of the queue before the new session starts. The
+        // background finalizer's reconcile sees an empty pending set and
+        // completes immediately.
+        await bundle.uploads.setStoredUploads([])
+
+        try await bundle.service.startCapture(
+            workspaceID: Self.workspaceID, projectID: Self.projectID, label: nil
+        )
+        guard case .recording(let ctxB) = await bundle.service.state else {
+            Issue.record("expected .recording(cap-B), got \(await bundle.service.state)")
+            return
+        }
+        #expect(ctxB.captureSessionID == "cap-B")
+
+        // The demoted cap-A drains to .completed on the background path.
+        let completed = await Self.waitUntil {
+            await bundle.api.updateCalls.contains {
+                $0.captureSessionID == "cap-A" && $0.state == .completed
+            }
+        }
+        #expect(completed)
+
+        // The foreground recording was never patched — it's still live.
+        let bPatched = await bundle.api.updateCalls.contains { $0.captureSessionID == "cap-B" }
+        #expect(!bPatched)
+    }
+
+    /// Poll an async predicate until it's true or the budget elapses.
+    /// Used to await a background Task's effect without reaching into
+    /// the actor's private state.
+    private static func waitUntil(
+        tries: Int = 200,
+        _ predicate: @Sendable () async -> Bool
+    ) async -> Bool {
+        for _ in 0..<tries {
+            if await predicate() { return true }
+            try? await Task.sleep(nanoseconds: 1_000_000) // 1ms
+        }
+        return false
+    }
+
     @Test("startCapture is allowed again after a .completed capture")
     func canStartAfterCompleted() async throws {
         let bundle = Self.makeBundle()
