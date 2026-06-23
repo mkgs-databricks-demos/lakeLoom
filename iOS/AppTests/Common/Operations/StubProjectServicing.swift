@@ -8,7 +8,29 @@ import Foundation
 /// methods `fatalError` — if one is ever called, the test is wrong.
 public actor StubProjectServicing: ProjectServicing {
 
+    /// Records each `submitQueuedCreate` call (projectID, name,
+    /// workspaceID) so the createProject executor tests can assert the
+    /// op was routed correctly.
+    public private(set) var submitQueuedCreateCalls: [(projectID: String, name: String, workspaceID: String)] = []
+    private var submitQueuedCreateError: ProjectAPIError?
+
     public init() {}
+
+    /// Prime the next (and subsequent) `submitQueuedCreate` to throw,
+    /// so the executor's classification can be exercised.
+    public func setSubmitQueuedCreateError(_ error: ProjectAPIError?) {
+        submitQueuedCreateError = error
+    }
+
+    public func submitQueuedCreate(
+        projectID: String,
+        name: String,
+        description: String?,
+        workspaceID: String
+    ) async throws {
+        submitQueuedCreateCalls.append((projectID: projectID, name: name, workspaceID: workspaceID))
+        if let submitQueuedCreateError { throw submitQueuedCreateError }
+    }
 
     public func start() async {}
 

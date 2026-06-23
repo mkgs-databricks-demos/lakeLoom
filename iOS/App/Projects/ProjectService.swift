@@ -24,6 +24,20 @@ public actor ProjectService: ProjectServicing {
     private let listStore: ProjectListStore?
     private let logger: AppLogger
     private let nowProvider: @Sendable () -> Date
+    /// Offline outbox, late-attached at bootstrap via
+    /// ``attachOperationQueue(_:)`` (the queue is built *after* the
+    /// service because the queue's executor depends on the service, so
+    /// it can't be an init dependency without a construction cycle).
+    /// When present + ``offlineCreateEnabled``, ``create`` mints the
+    /// project locally and enqueues a `.createProject` op instead of
+    /// blocking on the network.
+    private var operationQueue: (any OperationQueueing)?
+    /// Gates the queue-first offline-create path. Defaults off: the
+    /// path returns a locally-minted project whose id the caller then
+    /// uses for captures, which is only correct once Genie confirms
+    /// Option-A (server adopts `client_generated_id` as the project's
+    /// row id). Flip to `true` after that confirmation lands.
+    private let offlineCreateEnabled: Bool
 
     // MARK: State
 
@@ -40,6 +54,7 @@ public actor ProjectService: ProjectServicing {
         defaults: any DefaultsStore = LiveDefaultsStore(),
         listStore: ProjectListStore? = nil,
         cacheTTL: TimeInterval = 5 * 60,
+        offlineCreateEnabled: Bool = false,
         logger: AppLogger = AppLogger(category: .projects),
         nowProvider: @Sendable @escaping () -> Date = Date.init
     ) {
@@ -49,8 +64,15 @@ public actor ProjectService: ProjectServicing {
         self.defaults = defaults
         self.listStore = listStore
         self.cache = ProjectCache(ttl: cacheTTL, nowProvider: nowProvider)
+        self.offlineCreateEnabled = offlineCreateEnabled
         self.logger = logger
         self.nowProvider = nowProvider
+    }
+
+    /// Late-attach the offline outbox (see ``operationQueue``). Called
+    /// once at bootstrap after the queue is constructed.
+    public func attachOperationQueue(_ queue: any OperationQueueing) {
+        operationQueue = queue
     }
 
     // MARK: Public surface
@@ -168,6 +190,22 @@ public actor ProjectService: ProjectServicing {
     public func create(name: String, description: String?, workspaceID: String) async throws -> ProjectMetadata {
         let normalizedName = try ProjectValidator.validateName(name)
         let normalizedDescription = try ProjectValidator.validateDescription(description)
+
+        // Queue-first offline path (gated). Mint the project locally,
+        // surface it in the cache/picker immediately, and enqueue a
+        // `.createProject` op the outbox drains on reconnect. The
+        // returned id IS the `client_generated_id` — correct for the
+        // caller to start captures against ONLY under Option-A (server
+        // adopts it as the row id), which is why this is gated.
+        if offlineCreateEnabled, let operationQueue {
+            return try await createOffline(
+                name: normalizedName,
+                description: normalizedDescription,
+                workspaceID: workspaceID,
+                queue: operationQueue
+            )
+        }
+
         let payload = CreateProjectPayload(
             clientGeneratedID: UUIDv7.generate(now: nowProvider()),
             name: normalizedName,
@@ -205,6 +243,115 @@ public actor ProjectService: ProjectServicing {
             ]
         )
         return project
+    }
+
+    /// Queue-first create: mint a local ``ProjectMetadata`` (its id is
+    /// the `client_generated_id`), upsert it so the picker shows it at
+    /// once, enqueue a `.createProject` op, and return immediately
+    /// without touching the network. The op's drain calls
+    /// ``submitQueuedCreate(projectID:name:description:workspaceID:)``,
+    /// which replaces this placeholder with the server's canonical row.
+    private func createOffline(
+        name: String,
+        description: String?,
+        workspaceID: String,
+        queue: any OperationQueueing
+    ) async throws -> ProjectMetadata {
+        let now = nowProvider()
+        let localID = UUIDv7.generate(now: now)
+        // Best-effort local identity for display until the server's
+        // canonical `created_by_*` lands via submitQueuedCreate's upsert.
+        let user = await auth.activeWorkspace?.user
+        let local = ProjectMetadata(
+            id: localID,
+            name: name,
+            description: description,
+            workspaceID: workspaceID,
+            createdByUserID: user?.userID ?? "",
+            createdByUsername: user?.userName ?? (user?.email ?? ""),
+            createdAt: now,
+            updatedAt: now,
+            archived: false
+        )
+
+        let op = PendingOperation(
+            id: UUIDv7.generate(now: now),
+            workspaceID: workspaceID,
+            variant: .createProject(
+                projectID: localID,
+                name: name,
+                description: description
+            ),
+            createdAt: now
+        )
+        do {
+            try await queue.enqueue(op)
+        } catch {
+            // The outbox persists on enqueue; a failure here means the
+            // on-disk store is unhealthy and we can't promise the
+            // project will ever reconcile. Surface it rather than
+            // silently dropping the create.
+            throw ProjectError.unknown(reason: "outbox enqueue: \(error.localizedDescription)")
+        }
+
+        await cache.upsert(local, workspaceID: workspaceID)
+        await mirrorCacheToStore(workspaceID: workspaceID)
+        diagnosticsState.recordCreate(at: now)
+        broadcast(.projectCreated(local))
+        await logger.info(
+            "project.create.queued_offline",
+            metadata: [
+                "project_id": .uuidPrefix(localID),
+                "workspace_id": .uuidPrefix(workspaceID)
+            ]
+        )
+        return local
+    }
+
+    public func submitQueuedCreate(
+        projectID: String,
+        name: String,
+        description: String?,
+        workspaceID: String
+    ) async throws {
+        let payload = CreateProjectPayload(
+            clientGeneratedID: projectID,
+            name: name,
+            description: description,
+            workspaceID: workspaceID
+        )
+        let token = try await auth.currentToken()
+        let endpoint = try await endpointResolver.resolve(
+            workspaceID: workspaceID,
+            workspaceURL: workspaceURL(for: workspaceID, fallbackTo: token)
+        )
+        // Deliberately NOT routed through ProjectErrorMapper / the
+        // `retryAfterForceRefresh` helper (both wrap into `ProjectError`):
+        // the executor needs the raw ProjectAPIError to classify
+        // transient vs permanent. We still give `unauthorized` one
+        // force-refresh retry inline — the outbox token may simply have
+        // expired — but any failure of the retried call surfaces as the
+        // raw ProjectAPIError for the executor to classify.
+        let project: ProjectMetadata
+        do {
+            project = try await api.create(payload, token: token, endpoint: endpoint)
+        } catch ProjectAPIError.unauthorized {
+            let newToken = try await auth.currentToken(forceRefresh: true)
+            project = try await api.create(payload, token: newToken, endpoint: endpoint)
+        }
+        // Replace the local placeholder with the server's canonical row
+        // (corrects created_by_*, timestamps; id is unchanged under
+        // Option-A). Broadcast so any open picker refreshes.
+        await cache.upsert(project, workspaceID: workspaceID)
+        await mirrorCacheToStore(workspaceID: workspaceID)
+        broadcast(.projectUpdated(project))
+        await logger.info(
+            "project.create.queued_reconciled",
+            metadata: [
+                "project_id": .uuidPrefix(project.id),
+                "workspace_id": .uuidPrefix(workspaceID)
+            ]
+        )
     }
 
     public func update(

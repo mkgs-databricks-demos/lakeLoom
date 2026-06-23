@@ -25,7 +25,33 @@ public protocol ProjectServicing: Sendable {
     /// `client_generated_id` so retries are idempotent — re-submitting
     /// the same `(workspaceID, client_generated_id)` returns the
     /// existing project rather than failing.
+    ///
+    /// When an offline outbox is attached (see
+    /// ``ProjectService/attachOperationQueue(_:)``) **and** offline
+    /// create is enabled, this takes a queue-first path: the project is
+    /// minted locally with the `client_generated_id` as its id, shown
+    /// in the picker immediately, and reconciled to the server when the
+    /// queue drains. Otherwise it's a direct online create.
     func create(name: String, description: String?, workspaceID: String) async throws -> ProjectMetadata
+
+    /// Executor entry point: submit a queued offline project-create to
+    /// the server, using the locally-minted `projectID` as the
+    /// `client_generated_id` (idempotent — a re-submit returns the
+    /// existing row). Upserts the server's canonical metadata into the
+    /// cache on success. Throws the raw ``ProjectAPIError`` (unmapped)
+    /// so ``OperationExecutor`` can classify transient vs permanent —
+    /// it is **not** routed through ``ProjectErrorMapper`` like the
+    /// user-facing ``create(name:description:workspaceID:)``.
+    ///
+    /// Depends on Genie confirming Option-A semantics for
+    /// `POST /api/v1/projects` (row id == `client_generated_id`); until
+    /// then the queue-first path in `create` stays gated off.
+    func submitQueuedCreate(
+        projectID: String,
+        name: String,
+        description: String?,
+        workspaceID: String
+    ) async throws
 
     /// Update a project's name and/or description. At least one of
     /// the two must be non-nil; passing both nil throws

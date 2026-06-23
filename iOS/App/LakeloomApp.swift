@@ -114,6 +114,17 @@ struct LakeloomApp: App {
             operationQueue = nil
         }
 
+        // Late-attach the outbox to ProjectService so its (gated)
+        // offline-create path can enqueue a `.createProject` op. The
+        // queue can't be an init dependency of `projects` — the queue's
+        // executor depends on `projects`, which would be a construction
+        // cycle — so we wire it here, after both exist. A Task because
+        // `init()` is synchronous; project create is a later user action
+        // so the attach is in place well before it can fire.
+        if let operationQueue {
+            Task { await projects.attachOperationQueue(operationQueue) }
+        }
+
         // Upload pipeline. Worker loop is started from the App's
         // `.task` modifier below so the queue rehydration happens on
         // every cold launch, not only when bootstrap() runs. The

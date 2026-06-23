@@ -81,12 +81,30 @@ enum OperationExecutor {
                     try throwClassifiedCapture(error: error, kind: .patch)
                 }
 
-            case .createProject, .updateProject:
-                // No production caller enqueues these in Phase 3 — the
-                // offline-project-create / -edit user flow lands in a
-                // separate PR. Park as permanent so a stray enqueue
-                // doesn't loop forever; the user (or a diagnostic
-                // sweep) can discard it from the outbox.
+            case .createProject(let projectID, let name, let description):
+                // Offline project create (gated behind
+                // ProjectService.offlineCreateEnabled until Genie
+                // confirms Option-A). Submits with the locally-minted
+                // id as `client_generated_id`; idempotent on re-drain.
+                // Classified like a capture create — it gates any
+                // captures the user recorded against this project
+                // offline, so bias hard toward transient/revivable.
+                do {
+                    try await projects.submitQueuedCreate(
+                        projectID: projectID,
+                        name: name,
+                        description: description,
+                        workspaceID: op.workspaceID
+                    )
+                } catch let error as ProjectAPIError {
+                    try throwClassifiedProject(error: error)
+                }
+
+            case .updateProject:
+                // No production caller enqueues this yet — the
+                // offline project-edit flow lands separately. Park as
+                // permanent so a stray enqueue doesn't loop forever;
+                // the user (or a diagnostic sweep) can discard it.
                 await logger.error(
                     "operation.executor.unimplemented_variant",
                     metadata: [
@@ -170,6 +188,45 @@ enum OperationExecutor {
             // create-revival brings it back post-re-pair so dependent
             // audio still lands.
             throw OperationPermanentFailure(reason: "auth: \(String(describing: error))")
+        }
+    }
+
+    /// Classify a `ProjectAPIError` from a `.createProject` drain. A
+    /// project create gates every capture the user recorded against it
+    /// offline, so — exactly like `throwClassifiedCapture(kind: .create)`
+    /// — only a payload the server will *never* accept parks the op;
+    /// everything ambiguous stays transient/revivable. Idempotency on
+    /// `client_generated_id` means a re-drain after a transient blip is
+    /// safe (returns the existing row).
+    private static func throwClassifiedProject(error: ProjectAPIError) throws {
+        switch error {
+        case .networkUnavailable,
+             .timeout,
+             .serverUnavailable,
+             .rateLimited,
+             .canceled:
+            // Transport / back-pressure — let the queue back off + retry.
+            throw error
+        case .notFound,
+             .decodeFailed,
+             .unexpectedResponse:
+            // Ambiguous (cold-start edge, proxy hiccup, a 404 before the
+            // workspace is fully resolvable). Retrying is safe under
+            // idempotency and avoids orphaning dependent captures.
+            throw error
+        case .badRequest,
+             .forbidden,
+             .duplicate,
+             .payloadTooLarge:
+            // The server will never accept this payload as-is — park for
+            // the user to inspect/fix from the outbox.
+            throw OperationPermanentFailure(reason: String(describing: error))
+        case .unauthorized:
+            // submitQueuedCreate already retried once after a forced
+            // token refresh; a second 401 means the session is dead and
+            // the user must re-pair. Park (create-revival re-drives it
+            // post-re-pair, same as captures).
+            throw OperationPermanentFailure(reason: "auth: unauthorized")
         }
     }
 }

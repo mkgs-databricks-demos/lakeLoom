@@ -120,4 +120,81 @@ struct OperationExecutorTests {
     func patchUnexpectedPermanent() async {
         #expect(await Self.outcome(op: Self.patchOp(), failingWith: .unexpectedResponse(reason: "x")) == .permanent)
     }
+
+    // MARK: - createProject classification (offline project create)
+    //
+    // A project create gates any captures recorded against it offline,
+    // so it mirrors the createCaptureSession bias: only definitive
+    // client errors park; everything ambiguous stays transient.
+
+    private static func projectCreateOp() -> PendingOperation {
+        PendingOperation(
+            workspaceID: "ws-1",
+            variant: .createProject(
+                projectID: "proj-local-1",
+                name: "Onsite kickoff",
+                description: nil
+            )
+        )
+    }
+
+    private static func projectOutcome(
+        failingWith error: ProjectAPIError?
+    ) async -> (outcome: Outcome, calls: [(projectID: String, name: String, workspaceID: String)]) {
+        let captureAPI = FakeCaptureAPIClient()
+        let projects = StubProjectServicing()
+        await projects.setSubmitQueuedCreateError(error)
+        let exec = OperationExecutor.make(captureAPI: captureAPI, projects: projects)
+        let outcome: Outcome
+        do {
+            try await exec(Self.projectCreateOp())
+            outcome = .noThrow
+        } catch is OperationPermanentFailure {
+            outcome = .permanent
+        } catch {
+            outcome = .transient
+        }
+        let calls = await projects.submitQueuedCreateCalls
+        return (outcome, calls)
+    }
+
+    @Test("createProject success routes the op to submitQueuedCreate with the local id")
+    func projectCreateSuccessRoutes() async {
+        let (outcome, calls) = await Self.projectOutcome(failingWith: nil)
+        #expect(outcome == .noThrow)
+        #expect(calls.count == 1)
+        #expect(calls.first?.projectID == "proj-local-1")
+        #expect(calls.first?.name == "Onsite kickoff")
+        #expect(calls.first?.workspaceID == "ws-1")
+    }
+
+    @Test("createProject + networkUnavailable is transient")
+    func projectCreateNetworkTransient() async {
+        #expect(await Self.projectOutcome(failingWith: .networkUnavailable).outcome == .transient)
+    }
+
+    @Test("createProject + notFound is transient (workspace may not be resolvable yet)")
+    func projectCreateNotFoundTransient() async {
+        #expect(await Self.projectOutcome(failingWith: .notFound(nil)).outcome == .transient)
+    }
+
+    @Test("createProject + decodeFailed is transient")
+    func projectCreateDecodeTransient() async {
+        #expect(await Self.projectOutcome(failingWith: .decodeFailed(reason: "x")).outcome == .transient)
+    }
+
+    @Test("createProject + badRequest parks permanent")
+    func projectCreateBadRequestPermanent() async {
+        #expect(await Self.projectOutcome(failingWith: .badRequest(nil)).outcome == .permanent)
+    }
+
+    @Test("createProject + forbidden parks permanent")
+    func projectCreateForbiddenPermanent() async {
+        #expect(await Self.projectOutcome(failingWith: .forbidden(nil)).outcome == .permanent)
+    }
+
+    @Test("createProject + unauthorized parks permanent (needs re-pair)")
+    func projectCreateUnauthorizedPermanent() async {
+        #expect(await Self.projectOutcome(failingWith: .unauthorized).outcome == .permanent)
+    }
 }
